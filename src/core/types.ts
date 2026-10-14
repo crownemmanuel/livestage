@@ -454,6 +454,13 @@ export type ComponentKind = SceneComponent["kind"];
 
 export type CameraEase = "linear" | "inOut" | "out" | "smooth";
 
+/** Digital framing of the whole picture (zoom into the wall). x, y: centre of the view, 0..1 of the canvas. */
+export interface Framing {
+  zoom: number;
+  x: number;
+  y: number;
+}
+
 export interface CameraPose {
   position: Vec3;
   target: Vec3;
@@ -514,6 +521,8 @@ export type CueAction =
   | { type: "route"; layerId: string; op: "play" | "reset" | "complete"; delay: number }
   /** Ramp a video's playback speed (time-lapse stings, the rewind, the run). */
   | { type: "media.speed"; layerId: string; rate: number; duration: number; delay: number }
+  /** Glide the picture's framing (zoom / reposition), e.g. a slow push-in on a video plate. */
+  | { type: "framing"; zoom: number; x: number; y: number; duration: number; delay: number }
   /** Change one live parameter of an effect (stars turn red, snow gets heavier…). */
   | { type: "effect.param"; effectId: string; key: string; value: number | string | boolean; delay: number };
 
@@ -546,6 +555,8 @@ export interface Scene {
   cameraMotion?: CameraMotion;
   /** Lighting for 3D objects composited over a flat plate (environment "none"). */
   plateLight?: PlateLight;
+  /** Starting framing (zoom + position) the scene goes live with. Set from the preview monitor. */
+  framing?: Framing;
 }
 
 export interface CameraMotion {
@@ -761,6 +772,7 @@ export interface SceneRuntime {
   speed?: Record<string, SpeedRamp>;
   /** One-shot sounds (scene time). */
   sounds?: SoundEvent[];
+  framing?: { from: Framing; to: Framing; at: number; dur: number };
 }
 
 export interface ClipSegment {

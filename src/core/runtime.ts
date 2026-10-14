@@ -1,4 +1,4 @@
-import { ease, evalTween, hermite, lerp, now, retarget, sceneNow, tween } from "./clock";
+import { clamp, ease, evalTween, hermite, lerp, now, retarget, sceneNow, smootherstep, tween } from "./clock";
 import { EFFECT_DEFS, num } from "./effects";
 import { uid } from "./ids";
 import { initialSegments, scheduleClip } from "./clipActor";
@@ -12,6 +12,7 @@ import type {
   CameraShot,
   CueAction,
   EffectParams,
+  Framing,
   LionAction,
   NamesRuntime,
   Scene,
@@ -27,6 +28,10 @@ export type Command =
   | Exclude<CueAction, { type: "takeScene" } | { type: "blackout" } | { type: "send" } | { type: "clock" } | { type: "effect.param" }>
   | { type: "effect.param"; effectId: string; key: string; value: number | string | boolean; delay?: number }
   | { type: "clock"; op: "pause" | "resume" | "toggle"; delay?: number }
+  /** Jump the scene clock to scene time t (ms): scrubbing. */
+  | { type: "seek"; t: number }
+  /** Put a video actor on one clip, `offset` seconds in, right now (scrubbing). */
+  | { type: "clip.seek"; actorId: string; clipId: string; offset: number }
   | { type: "cuePointer"; index: number };
 
 const LONG_AGO = -1e9;
@@ -49,6 +54,30 @@ export function defaultShot(scene: Scene): CameraShot | undefined {
 }
 
 export const FALLBACK_POSE: CameraPose = { position: [0, 1.7, 12], target: [0, 1.4, -20], hfov: 72 };
+
+export const NO_FRAMING: Framing = { zoom: 1, x: 0.5, y: 0.5 };
+
+/** Keep the view inside the picture: zoom 1–6, centre never far enough out to show an edge. */
+export function clampFraming(f: Framing): Framing {
+  const zoom = clamp(Number.isFinite(f.zoom) ? f.zoom : 1, 1, 6);
+  const h = 0.5 / zoom;
+  return { zoom, x: clamp(f.x, h, 1 - h), y: clamp(f.y, h, 1 - h) };
+}
+
+export function evalFraming(fr: SceneRuntime["framing"], t: number): Framing {
+  if (!fr) return NO_FRAMING;
+  if (fr.dur <= 0 || t >= fr.at + fr.dur) return fr.to;
+  if (t <= fr.at) return fr.from;
+  const k = smootherstep((t - fr.at) / fr.dur);
+  // Zoom in log space so a push-in feels constant-speed.
+  const zoom = Math.exp(lerp(Math.log(fr.from.zoom), Math.log(fr.to.zoom), k));
+  return { zoom, x: lerp(fr.from.x, fr.to.x, k), y: lerp(fr.from.y, fr.to.y, k) };
+}
+
+const staticFraming = (f: Framing | undefined) => {
+  const c = clampFraming(f ?? NO_FRAMING);
+  return { from: c, to: c, at: 0, dur: 0 };
+};
 
 export const initialNames = (): NamesRuntime => ({ shown: 0, shownAt: LONG_AGO, burn: tween(0, 0, 0, 0), bloom: tween(0, 0, 0, 0) });
 
@@ -83,6 +112,7 @@ export function createRuntime(scene: Scene, wallNow = now()): SceneRuntime {
     routes: {},
     speed: {},
     sounds: [],
+    framing: staticFraming(scene.framing),
   };
   for (const c of scene.components) {
     if (LAYER_KINDS.has(c.kind)) {
@@ -122,7 +152,9 @@ export function reconcileRuntime(rt: SceneRuntime, scene: Scene): SceneRuntime {
   const background = bgValid
     ? rt.background
     : { current: scene.components.find((c) => c.kind === "background")?.id ?? null, previous: null, changedAt: LONG_AGO, dur: 0 };
-  return { ...rt, scene: runtimeScene(scene), layers, effects, background, clipActors, names, routes };
+  // A new starting framing (set on the preview monitor) applies at once.
+  const framing = JSON.stringify(scene.framing ?? null) !== JSON.stringify(rt.scene.framing ?? null) ? staticFraming(scene.framing) : rt.framing;
+  return { ...rt, scene: runtimeScene(scene), layers, effects, background, clipActors, names, routes, framing };
 }
 
 export function createPoses(scene: Scene): ActorPoses {
@@ -397,6 +429,21 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     }
     case "cuePointer":
       return { rt: { ...rt, cuePointer: Math.max(0, Math.min(cmd.index, scene.cues.length)) }, poses };
+    case "seek": {
+      const target = Math.max(0, cmd.t);
+      const base = (rt.clock.pausedAt ?? wallNow) - target;
+      return { rt: { ...rt, clock: { ...rt.clock, base } }, poses };
+    }
+    case "clip.seek": {
+      const actor = findComponent(scene, cmd.actorId, "clipActor");
+      if (!actor || !actor.clips.some((k) => k.id === cmd.clipId)) return { rt, poses };
+      return { rt: { ...rt, clipActors: { ...rt.clipActors, [actor.id]: { segments: [{ clipId: cmd.clipId, at: t - Math.max(0, cmd.offset) * 1000 }] } } }, poses };
+    }
+    case "framing": {
+      const from = evalFraming(rt.framing, t);
+      const to = clampFraming({ zoom: cmd.zoom, x: cmd.x, y: cmd.y });
+      return { rt: { ...rt, framing: { from, to, at: t, dur: Math.max(0, cmd.duration) * 1000 } }, poses };
+    }
     case "names": {
       const comp = findComponent(scene, cmd.layerId, "names");
       const cur = rt.names?.[cmd.layerId] ?? initialNames();

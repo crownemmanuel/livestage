@@ -216,6 +216,12 @@ function CameraRig() {
     camera.aspect = canvasW / canvasH;
     const hf = (pose.hfov * Math.PI) / 180;
     camera.fov = (2 * Math.atan(Math.tan(hf / 2) / camera.aspect) * 180) / Math.PI;
+    // Framing: render only the zoomed window of the full view, at full resolution.
+    if (frame.frameZoom > 1.0001) {
+      const w = canvasW / frame.frameZoom;
+      const h = canvasH / frame.frameZoom;
+      camera.setViewOffset(canvasW, canvasH, frame.frameX * canvasW - w / 2, frame.frameY * canvasH - h / 2, w, h);
+    } else if (camera.view) camera.clearViewOffset();
     camera.updateProjectionMatrix();
   }, -8);
   return null;
@@ -235,6 +241,12 @@ function Compositor({ back, front, fx, children, background, onCapture, look }: 
 
   useFrame(({ gl, scene, camera }) => {
     gl.autoClear = false;
+    // The flat layers share the framing with the 3D camera.
+    if (ortho.zoom !== frame.frameZoom || ortho.position.x !== (frame.frameX - 0.5) * canvasW || ortho.position.y !== (0.5 - frame.frameY) * canvasH) {
+      ortho.zoom = frame.frameZoom;
+      ortho.position.set((frame.frameX - 0.5) * canvasW, (0.5 - frame.frameY) * canvasH, 0);
+      ortho.updateProjectionMatrix();
+    }
     if (look?.enabled) {
       // HDR path: back + world into a linear float target, then the camera finish to screen.
       gl.getDrawingBufferSize(bufSize);

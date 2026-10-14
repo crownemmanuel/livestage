@@ -68,7 +68,9 @@ export function OperatorApp() {
         const id = proj.selectedSceneId;
         if (id && !show.program.transition) void takeScene(id);
       } else if (e.code === "KeyG" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
-        cueControl.go("program");
+        // Same as the cue list's GO next: the live scene when it is selected, otherwise the preview.
+        const live = show.program.runtime;
+        cueControl.go(live && !show.program.standby && live.scene.id === proj.selectedSceneId ? "program" : "preview");
       } else if (e.code === "KeyB" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.repeat) {
         show.setBlackout(!show.program.blackout?.on);
       } else if (e.code === "Escape") {

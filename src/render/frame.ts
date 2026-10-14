@@ -2,7 +2,7 @@ import { createContext, useContext } from "react";
 import * as THREE from "three";
 import { clamp, lerp, sceneNow, smoothstep } from "@/core/clock";
 import { num, str } from "@/core/effects";
-import { effectLevel, envAt } from "@/core/runtime";
+import { effectLevel, envAt, evalFraming } from "@/core/runtime";
 import type { ActorPoses, Asset, SceneRuntime, TransitionSpec } from "@/core/types";
 
 export type SlotRole = "preview" | "live" | "outgoing";
@@ -76,6 +76,10 @@ export interface FrameState {
   swayX: number;
   swayY: number;
   swayRoll: number;
+  /** Digital framing of the whole picture. */
+  frameZoom: number;
+  frameX: number;
+  frameY: number;
 }
 
 export function makeFrameState(): FrameState {
@@ -111,6 +115,9 @@ export function makeFrameState(): FrameState {
     swayX: 0,
     swayY: 0,
     swayRoll: 0,
+    frameZoom: 1,
+    frameX: 0.5,
+    frameY: 0.5,
   };
 }
 
@@ -228,6 +235,11 @@ export function updateFrame(f: FrameState, rt: SceneRuntime, wall: number) {
     .addScalar(flash * 0.5);
   f.fogColor.copy(f.horizon).lerp(tmp.set("#9aa0a8").multiplyScalar(f.ambient), 0.25 + f.storm * 0.3);
   f.sceneFogDensity = 0.0016 + haze * 0.0045 + fog * 0.012 + f.storm * 0.0035;
+
+  const fr = evalFraming(rt.framing, t);
+  f.frameZoom = fr.zoom;
+  f.frameX = fr.x;
+  f.frameY = fr.y;
 
   // Hand-held drift: three incommensurate sines so it never visibly repeats.
   const cm = rt.scene.cameraMotion;

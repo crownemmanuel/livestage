@@ -7,6 +7,16 @@ import { LION_ACTIONS } from "@/core/types";
 import type { Cue, CueAction, CueActionType, Scene, SceneComponent } from "@/core/types";
 import { EFFECT_DEFS } from "@/core/effects";
 import { runCue } from "@/engine/operator";
+import { sceneNow } from "@/core/clock";
+import { evalFraming } from "@/core/runtime";
+import { useShow } from "@/store/show";
+
+function currentPreviewFraming() {
+  const rt = useShow.getState().preview;
+  const f = rt ? evalFraming(rt.framing, sceneNow(rt)) : { zoom: 1, x: 0.5, y: 0.5 };
+  const r = (n: number) => Math.round(n * 1000) / 1000;
+  return { zoom: r(f.zoom), x: r(f.x), y: r(f.y) };
+}
 import { useProject } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 import { TRANSITIONS } from "../show/ShowMode";
@@ -19,6 +29,7 @@ const ACTION_TYPES: { value: CueActionType; label: string }[] = [
   { value: "effect", label: "Effect" },
   { value: "effect.param", label: "Effect parameter" },
   { value: "camera", label: "Camera move" },
+  { value: "framing", label: "Framing (zoom / reposition)" },
   { value: "names", label: "Family tree / names" },
   { value: "route", label: "Map route" },
   { value: "media.speed", label: "Video speed ramp" },
@@ -78,6 +89,10 @@ function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]): CueA
       return { type, layerId: scene.components.find((c) => c.kind === "route")?.id ?? "", op: "play", delay: 0 };
     case "media.speed":
       return { type, layerId: scene.components.find((c) => c.kind === "video" || (c.kind === "background" && c.source === "media"))?.id ?? "", rate: 4, duration: 2, delay: 0 };
+    case "framing": {
+      const f = currentPreviewFraming();
+      return { type, ...f, duration: 4, delay: 0 };
+    }
     case "effect.param": {
       const fx = scene.components.find((c): c is Extract<SceneComponent, { kind: "effect" }> => c.kind === "effect");
       const spec = fx ? EFFECT_DEFS[fx.effect].params.find((p) => p.type === "range" || p.type === "color" || p.type === "bool") : undefined;
@@ -245,6 +260,24 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
         <>
           {sel(a.layerId, opt(LAYER_KINDS), (v) => onChange({ ...a, layerId: v }), "w-[150px]")}
           {sel(a.op, ["show", "hide", "toggle", "restart"].map((x) => ({ value: x, label: x })), (v) => onChange({ ...a, op: v as typeof a.op }), "w-[90px]")}
+        </>
+      );
+      break;
+    case "framing":
+      body = (
+        <>
+          {lbl("zoom")}
+          <NumberInput className="h-6 w-14" value={a.zoom} min={1} max={6} step={0.05} onChange={(v) => onChange({ ...a, zoom: v })} />
+          {lbl("x")}
+          <NumberInput className="h-6 w-14" value={a.x} min={0} max={1} step={0.01} onChange={(v) => onChange({ ...a, x: v })} />
+          {lbl("y")}
+          <NumberInput className="h-6 w-14" value={a.y} min={0} max={1} step={0.01} onChange={(v) => onChange({ ...a, y: v })} />
+          {lbl("over")}
+          <NumberInput className="h-6 w-14" value={a.duration} min={0} step={0.5} onChange={(v) => onChange({ ...a, duration: v })} />
+          {lbl("s")}
+          <Button size="xs" variant="outline" className="h-6" title="Copy the preview monitor's current framing" onClick={() => onChange({ ...a, ...currentPreviewFraming() })}>
+            From preview
+          </Button>
         </>
       );
       break;

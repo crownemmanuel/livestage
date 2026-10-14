@@ -19,6 +19,7 @@ import { Inspector } from "./Inspector";
 import { SceneSettings } from "./SceneSettings";
 import { CueEditor } from "./CueEditor";
 import { CameraShots } from "./CameraShots";
+import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
 
 export function BuilderMode() {
   const scene = useProject(selectedScene);
@@ -43,7 +44,12 @@ export function BuilderMode() {
           </div>
           <div className="relative mx-auto w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: `${output.canvasWidth} / ${output.canvasHeight}`, maxHeight: "44vh" }}>
             <StageView source="preview" maxDpr={1.5} showSafeArea onCapture={capture} />
+            <FramingOverlay />
           </div>
+          <div className="mt-1.5 flex justify-end">
+            <FramingBar />
+          </div>
+          <VideoScrubber />
         </div>
         {scene ? (
           <Tabs defaultValue="scene" className="flex min-h-0 flex-1 flex-col gap-0">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, CircleStop, Pause, Play, Power, Repeat, RotateCcw, SkipForward, Square } from "lucide-react";
+import { ChevronLeft, ChevronRight, Pause, Play, Power, Repeat, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ import { StageView } from "@/render/StageView";
 import { selectedScene, useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
 import { NumberInput, SelectBox } from "../fields";
+import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
 import { SceneList } from "../SceneList";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 
@@ -72,7 +73,6 @@ function Monitors() {
   const program = useShow((s) => s.program);
   const output = useShow((s) => s.output);
   const capture = useCaptureThumb();
-  const [zoom, setZoom] = useState(1);
   const aspect = `${output.canvasWidth} / ${output.canvasHeight}`;
   const liveName = program.standby ? "Standby" : program.runtime ? `${String(program.runtime.scene.number).padStart(2, "0")} · ${program.runtime.scene.name}` : "—";
 
@@ -84,11 +84,11 @@ function Monitors() {
             <span className="truncate text-foreground">{scene ? `${String(scene.number).padStart(2, "0")} · ${scene.name}` : "—"}</span>
           </MonitorLabel>
           <div className="relative w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: aspect, maxHeight: "34vh" }}>
-            <ZoomBox z={zoom}>
-              <StageView source="preview" maxDpr={1.25} showSafeArea onCapture={capture} />
-            </ZoomBox>
+            <StageView source="preview" maxDpr={1.25} showSafeArea onCapture={capture} />
+            <FramingOverlay />
           </div>
-          <PreviewTransport zoom={zoom} setZoom={setZoom} />
+          <PreviewTransport />
+          <VideoScrubber />
         </div>
         <div className="min-w-0">
           <MonitorLabel kind="program">
@@ -99,7 +99,7 @@ function Monitors() {
           <div className="relative w-full overflow-hidden rounded-sm ring-2 ring-live" style={{ aspectRatio: aspect, maxHeight: "34vh" }}>
             <StageView source="program" maxDpr={1.25} showSafeArea />
           </div>
-          <LiveCueStrip />
+          <LiveNextCue />
         </div>
       </div>
       <TakeBar />
@@ -107,22 +107,31 @@ function Monitors() {
   );
 }
 
-const ZOOMS = [1, 1.5, 2, 3];
-
-function ZoomBox({ z, children }: { z: number; children: React.ReactNode }) {
+/** Read-only: what the live scene's next cue is, even while another scene is in the preview. */
+function LiveNextCue() {
+  const rt = useShow((s) => s.program.runtime);
+  const standby = useShow((s) => s.program.standby);
+  const pend = pendingCount("program");
+  useTick(500);
+  if (!rt || standby) return <div className="mt-1.5 text-[11px] text-muted-foreground">Nothing live</div>;
+  const next = rt.scene.cues[rt.cuePointer];
   return (
-    <div className="absolute inset-0" style={{ transform: `scale(${z})`, transformOrigin: "50% 50%" }}>
-      {children}
+    <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Live next</span>
+      <span className="min-w-0 flex-1 truncate">{next ? `${rt.cuePointer + 1}. ${next.name}` : <span className="text-muted-foreground">end of cue list</span>}</span>
+      {pend > 0 && (
+        <button className="text-armed hover:underline" onClick={() => cancelPending("program")} title="Cancel delayed actions still waiting (Esc)">
+          {pend} pending · cancel
+        </button>
+      )}
     </div>
   );
 }
 
-function PreviewTransport({ zoom, setZoom }: { zoom: number; setZoom: (z: number) => void }) {
+function PreviewTransport() {
   const rt = useShow((s) => s.preview);
   useTick(500);
   const paused = rt?.clock.pausedAt != null;
-  const output = useShow((s) => s.output);
-  const ratio = (output.canvasWidth / output.canvasHeight).toFixed(2);
   const t = rt ? sceneNow(rt) / 1000 : 0;
   const dur = rt?.scene.duration;
   return (
@@ -144,14 +153,8 @@ function PreviewTransport({ zoom, setZoom }: { zoom: number; setZoom: (z: number
         options={[{ value: "__cam__", label: "Camera position…" }, ...(rt?.scene.cameraShots.map((s) => ({ value: s.id, label: s.name })) ?? [])]}
       />
       <div className="ml-auto flex items-center gap-1">
-        {ZOOMS.map((z) => (
-          <Button key={z} size="xs" variant={zoom === z ? "secondary" : "ghost"} className="h-5 px-1.5 text-[10.5px]" onClick={() => setZoom(z)}>
-            {z === 1 ? "Fit" : `${z}×`}
-          </Button>
-        ))}
-        <span className="ml-1 tabular text-muted-foreground" title="Output canvas">
-          {output.canvasWidth}×{output.canvasHeight} · {ratio}:1
-        </span>
+        <FramingBar />
+
       </div>
     </div>
   );
@@ -223,67 +226,6 @@ function TakeBar() {
   );
 }
 
-function LiveCueStrip() {
-  const rt = useShow((s) => s.program.runtime);
-  const standby = useShow((s) => s.program.standby);
-  useTick(400);
-  const disabled = !rt || standby;
-  const cues = rt?.scene.cues ?? [];
-  const nextCue = rt ? cues[rt.cuePointer] : undefined;
-  const paused = rt?.clock.pausedAt != null;
-  const pend = pendingCount("program");
-  return (
-    <div className="mt-1.5 flex items-stretch gap-2">
-      <Button size="sm" disabled={disabled || !nextCue} className="h-[52px] min-w-[84px] bg-live px-4 text-[16px] font-bold tracking-[0.16em] text-white hover:bg-live/85 disabled:bg-muted" onClick={() => cueControl.go("program")} title="Fire the next live cue (G)">
-        GO
-      </Button>
-      <div className="min-w-0 flex-1 rounded-md border border-border bg-card/50 px-2 py-1">
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          <span>Next live cue</span>
-          {pend > 0 && <span className="text-armed">{pend} pending</span>}
-          {paused && <span className="text-armed">FROZEN</span>}
-        </div>
-        {nextCue ? (
-          <>
-            <div className="truncate text-[13px] font-semibold leading-tight">
-              {rt!.cuePointer + 1}. {nextCue.name}
-            </div>
-            <div className="truncate text-[11px] leading-tight text-amber-200/80">{nextCue.notes || nextCue.actions.map(describeAction).join(" · ")}</div>
-          </>
-        ) : (
-          <div className="text-[12px] text-muted-foreground">{rt ? (cues.length ? "End of cue list" : "This scene has no cues") : "Nothing live"}</div>
-        )}
-      </div>
-      <div className="flex flex-col justify-between">
-        <div className="flex gap-0.5">
-          <Button size="icon-xs" variant="ghost" disabled={disabled} onClick={() => cueControl.back("program")} aria-label="Previous cue" title="Step back one cue">
-            <ChevronLeft />
-          </Button>
-          <Button size="icon-xs" variant="ghost" disabled={disabled} onClick={() => cueControl.skip("program")} aria-label="Skip cue" title="Skip the next cue">
-            <SkipForward />
-          </Button>
-          <Button size="icon-xs" variant="ghost" disabled={disabled || !rt?.cuePointer} onClick={() => cueControl.repeat("program")} aria-label="Repeat last cue" title="Fire the last cue again">
-            <Repeat />
-          </Button>
-          <Button size="icon-xs" variant="ghost" disabled={!pend} onClick={() => cancelPending("program")} aria-label="Cancel pending delayed actions" title="Cancel pending delayed actions (Esc)" className={cn(pend && "text-armed")}>
-            <CircleStop />
-          </Button>
-        </div>
-        <Button
-          size="xs"
-          variant={paused ? "secondary" : "ghost"}
-          disabled={disabled}
-          className={cn("h-6", paused && "text-armed")}
-          onClick={() => useShow.getState().dispatch("program", { type: "clock", op: paused ? "resume" : "pause" })}
-          title="Freeze/unfreeze all motion on the live output"
-        >
-          {paused ? <Play /> : <Square />} {paused ? "Resume" : "Freeze"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function CueList() {
   const { target, rt } = useControlTarget();
   useTick(400);
@@ -339,9 +281,15 @@ function CueList() {
 }
 
 function CueButtons({ target }: { target: Target }) {
+  const live = useShow((s) => (s.program.standby ? null : s.program.runtime));
   return (
     <>
-      <Button size="xs" className={target === "program" ? "bg-live text-white hover:bg-live/85" : "bg-preview text-black hover:bg-preview/85"} onClick={() => cueControl.go(target)}>
+      {target === "preview" && live && (
+        <Button size="xs" variant="outline" className="border-live/50 text-live" onClick={() => useProject.getState().selectScene(live.scene.id)} title="Show the live scene's cues">
+          Live: {live.scene.name.slice(0, 22)}
+        </Button>
+      )}
+      <Button size="sm" className={cn("h-9 min-w-[110px] text-[13px] font-bold tracking-wider", target === "program" ? "bg-live text-white hover:bg-live/85" : "bg-preview text-black hover:bg-preview/85")} onClick={() => cueControl.go(target)} title="Fire the next cue (G)">
         GO next
       </Button>
       <Button size="icon-xs" variant="ghost" onClick={() => cueControl.back(target)} aria-label="Back">
@@ -447,5 +395,7 @@ export function describeAction(a: import("@/core/types").CueAction): string {
       return `speed → ${a.rate}× over ${a.duration}s${d}`;
     case "effect.param":
       return `${a.key} = ${String(a.value)}${d}`;
+    case "framing":
+      return `framing ${a.zoom.toFixed(2)}× over ${a.duration}s${d}`;
   }
 }
