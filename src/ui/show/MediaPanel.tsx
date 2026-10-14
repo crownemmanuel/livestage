@@ -54,8 +54,8 @@ const ICON = { video: Film, image: ImageIcon, clip: Clapperboard, audio: Music }
 function Thumb({ item }: { item: Item }) {
   const url = playableUrl(item.asset);
   if (!url) return <div className="grid h-full place-items-center bg-[repeating-conic-gradient(#ffffff0d_0_25%,transparent_0_50%)] bg-[length:16px_16px] text-[10px] text-muted-foreground">No media yet</div>;
-  if (item.asset?.type === "image") return <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" />;
-  if (item.asset?.type === "video") return <video src={`${url}#t=0.6`} preload="metadata" muted playsInline className="h-full w-full object-cover" />;
+  if (item.asset?.type === "image") return <img src={url} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />;
+  if (item.asset?.type === "video") return <video src={`${url}#t=0.6`} preload="metadata" muted playsInline className="absolute inset-0 h-full w-full object-cover" />;
   const I = ICON[item.kind];
   return (
     <div className="grid h-full place-items-center text-muted-foreground">
@@ -76,42 +76,43 @@ export function MediaPanel() {
   const effective = scrubKey && current.some((s) => s.key === scrubKey) ? scrubKey : null;
   if (!list.length) return <p className="px-4 py-8 text-center text-[12px] text-muted-foreground">This scene has no media.</p>;
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-2.5 px-3 pb-3">
+    <ul className="space-y-1.5 px-3 pb-3">
       {list.map((it) => {
         const I = ICON[it.kind];
         const scrubbing = effective === it.scrubKey && !!it.scrubKey;
         return (
-          <button
-            key={it.key}
-            onClick={() => {
-              if (it.backgroundId && !it.active) useShow.getState().dispatch("preview", { type: "background", backgroundId: it.backgroundId, delay: 0 });
-              if (it.scrubKey) selectScrubSource(it.scrubKey);
-            }}
-            title={it.scrubKey ? "Scrub this video in the preview" : it.backgroundId ? "Show this plate in the preview" : it.name}
-            className={cn(
-              "group overflow-hidden rounded-lg border bg-card text-left transition-all hover:border-foreground/30",
-              scrubbing ? "border-preview ring-2 ring-preview/40" : "border-border",
-            )}
-          >
-            <div className="relative aspect-video bg-black">
-              <Thumb item={it} />
+          <li key={it.key}>
+            <button
+              onClick={() => {
+                if (it.backgroundId && !it.active) useShow.getState().dispatch("preview", { type: "background", backgroundId: it.backgroundId, delay: 0 });
+                if (it.scrubKey) selectScrubSource(it.scrubKey);
+              }}
+              title={it.scrubKey ? "Scrub this video in the preview" : it.backgroundId ? "Show this plate in the preview" : it.name}
+              className={cn(
+                "relative flex w-full items-center gap-3 overflow-hidden rounded-lg border p-1.5 pr-3 text-left transition-colors",
+                scrubbing ? "border-preview/70 bg-preview/[0.07]" : "border-border bg-card/60 hover:bg-card",
+              )}
+            >
+              {scrubbing && <span className="absolute inset-y-0 left-0 w-1 bg-preview" />}
+              {/* Fixed box: WebKit ignores aspect-ratio on media inside buttons. */}
+              <div className="relative h-[68px] w-[120px] shrink-0 overflow-hidden rounded-md bg-black">
+                <Thumb item={it} />
+              </div>
+              <I className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[14px] font-semibold leading-tight">{it.name}</div>
+                <div className="truncate text-[12px] text-muted-foreground">{it.sub}</div>
+              </div>
+              {it.duration ? <span className="font-key shrink-0 text-[13px] font-semibold tabular text-muted-foreground">{fmt(it.duration)}</span> : null}
               {it.active && (
-                <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded bg-preview px-1.5 py-px text-[9px] font-bold text-black">
+                <span className="flex shrink-0 items-center gap-1 rounded bg-preview px-1.5 py-0.5 text-[10.5px] font-bold text-black">
                   <Play className="size-2.5 fill-current" /> ON
                 </span>
               )}
-              {it.duration ? <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1 text-[10px] tabular text-white">{fmt(it.duration)}</span> : null}
-            </div>
-            <div className="flex items-center gap-1.5 px-2 py-1.5">
-              <I className="size-3.5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0">
-                <div className="truncate text-[12px] font-medium leading-tight">{it.name}</div>
-                <div className="truncate text-[10.5px] text-muted-foreground">{it.sub}</div>
-              </div>
-            </div>
-          </button>
+            </button>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
