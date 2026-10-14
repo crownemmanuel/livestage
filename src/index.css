@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Control-booth palette: near-black neutrals, one red for PROGRAM/LIVE,
+   one green for PREVIEW, amber for armed/warning states. */
+:root {
+  --radius: 0.375rem;
+  --background: oklch(0.155 0.004 260);
+  --foreground: oklch(0.93 0.005 260);
+  --card: oklch(0.19 0.005 260);
+  --card-foreground: oklch(0.93 0.005 260);
+  --popover: oklch(0.21 0.006 260);
+  --popover-foreground: oklch(0.93 0.005 260);
+  --primary: oklch(0.88 0.01 260);
+  --primary-foreground: oklch(0.18 0.005 260);
+  --secondary: oklch(0.26 0.006 260);
+  --secondary-foreground: oklch(0.93 0.005 260);
+  --muted: oklch(0.24 0.006 260);
+  --muted-foreground: oklch(0.66 0.012 260);
+  --accent: oklch(0.28 0.008 260);
+  --accent-foreground: oklch(0.95 0.005 260);
+  --destructive: oklch(0.6 0.2 25);
+  --border: oklch(0.29 0.006 260);
+  --input: oklch(0.31 0.006 260);
+  --ring: oklch(0.55 0.01 260);
+  --live: oklch(0.62 0.22 27);
+  --preview: oklch(0.7 0.17 150);
+  --armed: oklch(0.8 0.15 80);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-live: var(--live);
+  --color-preview: var(--preview);
+  --color-armed: var(--armed);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 13px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+}
+
+/* Output window: nothing but pixels. */
+body.output-window,
+body.output-window #root {
+  background: #000;
+  cursor: none;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

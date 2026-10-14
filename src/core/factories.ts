@@ -1,0 +1,323 @@
+import { EFFECT_DEFS } from "./effects";
+import { uid } from "./ids";
+import type {
+  ActorComponent,
+  BackgroundComponent,
+  ClipActorComponent,
+  ClipDef,
+  CameraShot,
+  Cue,
+  EffectComponent,
+  EffectType,
+  ImageLayerComponent,
+  MediaLayerCommon,
+  MediaSettings,
+  ModelComponent,
+  OutputSettings,
+  ProceduralComponent,
+  Scene,
+  SceneComponent,
+  TransitionSpec,
+  VideoLayerComponent,
+} from "./types";
+
+export const defaultMedia = (assetId: string | null = null): MediaSettings => ({
+  assetId,
+  loop: true,
+  playbackRate: 1,
+  startTime: 0,
+  endTime: null,
+  muted: true,
+  volume: 1,
+});
+
+const layerCommon = (): MediaLayerCommon => ({
+  placement: "front",
+  screen: { x: 0.5, y: 0.6, width: 0.25, rotation: 0, flipX: false },
+  world: { position: [0, 0, -10], height: 2, rotationY: 0, billboard: true },
+  opacity: 1,
+  crop: { left: 0, right: 0, top: 0, bottom: 0 },
+  mask: { shape: "none", feather: 0.05 },
+  blend: "normal",
+  anim: { enter: "fade", exit: "fade", duration: 1 },
+  walker: {
+    enabled: false,
+    direction: 1,
+    speed: 0.05,
+    fromX: -0.15,
+    toX: 1.15,
+    yJitter: 0.03,
+    scaleJitter: 0.12,
+    delayMin: 1,
+    delayMax: 6,
+    instances: 1,
+    seed: Math.floor(Math.random() * 1e6),
+  },
+});
+
+export function makeBackground(name: string, partial: Partial<BackgroundComponent> = {}): BackgroundComponent {
+  return {
+    id: uid("bg"),
+    kind: "background",
+    name,
+    initiallyVisible: false,
+    source: "environment",
+    env: { timeOfDay: 0, storm: 0 },
+    media: defaultMedia(),
+    fit: "cover",
+    crop: { left: 0, right: 0, top: 0, bottom: 0 },
+    opacity: 1,
+    transitionDuration: 6,
+    ...partial,
+  };
+}
+
+export function makeVideoLayer(name: string, assetId: string | null = null): VideoLayerComponent {
+  return {
+    id: uid("vid"),
+    kind: "video",
+    name,
+    initiallyVisible: false,
+    ...layerCommon(),
+    media: defaultMedia(assetId),
+    chroma: { enabled: false, color: "#00ff00", similarity: 0.35, smoothness: 0.08, spill: 0.3 },
+  };
+}
+
+export function makeImageLayer(name: string, assetId: string | null = null): ImageLayerComponent {
+  return {
+    id: uid("img"),
+    kind: "image",
+    name,
+    initiallyVisible: false,
+    ...layerCommon(),
+    assetId,
+    motion: { type: "none", amount: 0.02, speed: 0.3 },
+  };
+}
+
+export function makeModel(name: string, assetId: string | null = null): ModelComponent {
+  return {
+    id: uid("mdl"),
+    kind: "model",
+    name,
+    initiallyVisible: true,
+    assetId,
+    position: [0, 0, -8],
+    rotation: [0, 0, 0],
+    scale: 1,
+    clip: null,
+    loop: true,
+    castShadow: true,
+    material: { tint: "#ffffff", roughness: null, metalness: null, emissive: 0 },
+  };
+}
+
+export function makeLion(name = "Lion", partial: Partial<ActorComponent> = {}): ActorComponent {
+  return {
+    id: uid("lion"),
+    kind: "actor",
+    actorType: "lion",
+    name,
+    initiallyVisible: false,
+    assetId: null,
+    clipMap: {
+      idle: "Idle",
+      walk: "Walk",
+      run: "Run",
+      turn: "Walk",
+      roar: "Roar",
+      attack: "Attack",
+      hit: "Hit",
+      fall: "Death",
+    },
+    start: { marker: "distance", heading: Math.PI * 0.85 },
+    scale: 1,
+    modelYaw: 0,
+    speeds: { walk: 1.45, run: 6.2, turnRate: 1.9 },
+    stride: { walk: 1.65, run: 4.2 },
+    bounds: { xMin: -14, xMax: 14, zMin: -60, zMax: 7 },
+    ...partial,
+  };
+}
+
+export function makeEffect(effect: EffectType, partial: Partial<EffectComponent> = {}): EffectComponent {
+  return {
+    id: uid("fx"),
+    kind: "effect",
+    name: EFFECT_DEFS[effect].label,
+    initiallyVisible: false,
+    effect,
+    presetId: null,
+    params: { ...EFFECT_DEFS[effect].defaults },
+    ...partial,
+  };
+}
+
+export function makeShot(name: string, partial: Partial<CameraShot> = {}): CameraShot {
+  return {
+    id: uid("cam"),
+    name,
+    pose: { position: [0, 1.7, 12], target: [0, 1.4, -20], hfov: 72 },
+    duration: 4,
+    ease: "inOut",
+    followActorId: null,
+    followOffset: [0, 1.2, 7],
+    ...partial,
+  };
+}
+
+export const defaultTransition = (): TransitionSpec => ({
+  kind: "crossfade",
+  duration: 2,
+  videoAssetId: null,
+  audioAssetId: null,
+  travelDistance: 60,
+});
+
+export function makeScene(number: number, name: string, partial: Partial<Scene> = {}): Scene {
+  const wide = makeShot("Wide");
+  return {
+    id: uid("scene"),
+    number,
+    name,
+    notes: "",
+    duration: null,
+    environment: "none",
+    components: [],
+    cameraShots: [wide],
+    defaultShotId: wide.id,
+    markers: { center: [0, -6] },
+    cues: [],
+    transition: defaultTransition(),
+    thumbnail: null,
+    ...partial,
+  };
+}
+
+export function makeCue(name: string, actions: Cue["actions"] = []): Cue {
+  return { id: uid("cue"), name, notes: "", actions };
+}
+
+export function defaultOutput(): OutputSettings {
+  return {
+    canvasWidth: 3840,
+    canvasHeight: 1080,
+    monitorName: null,
+    fullscreen: true,
+    windowWidth: 1280,
+    windowHeight: 360,
+    scaling: "fit",
+    targetFps: 60,
+    backgroundColor: "#000000",
+    safeArea: { enabled: true, marginPct: 5, showOnOutput: false },
+    testPattern: false,
+    standby: { text: "SALVATION 2026", subtext: "The House of David", assetId: null, color: "#000000" },
+    audioHost: "output",
+  };
+}
+
+/** Deep copy a component with fresh ids (used by duplicate). */
+export function cloneComponent<T extends SceneComponent>(c: T): T {
+  const copy = structuredClone(c);
+  copy.id = uid(c.kind);
+  copy.name = `${c.name} copy`;
+  return copy;
+}
+
+/** Duplicate a scene, remapping component ids inside cues and shots. */
+export function cloneScene(s: Scene, number: number): Scene {
+  const copy = structuredClone(s);
+  const idMap = new Map<string, string>();
+  copy.id = uid("scene");
+  copy.number = number;
+  copy.name = `${s.name} (copy)`;
+  copy.thumbnail = s.thumbnail;
+  for (const c of copy.components) {
+    const nid = uid(c.kind);
+    idMap.set(c.id, nid);
+    c.id = nid;
+  }
+  for (const sh of copy.cameraShots) {
+    const nid = uid("cam");
+    idMap.set(sh.id, nid);
+    sh.id = nid;
+    if (sh.followActorId) sh.followActorId = idMap.get(sh.followActorId) ?? null;
+  }
+  if (copy.defaultShotId) copy.defaultShotId = idMap.get(copy.defaultShotId) ?? null;
+  const remap = (id: string) => idMap.get(id) ?? id;
+  for (const cue of copy.cues) {
+    cue.id = uid("cue");
+    for (const a of cue.actions) {
+      if ("actorId" in a) a.actorId = remap(a.actorId);
+      if ("effectId" in a) a.effectId = remap(a.effectId);
+      if ("layerId" in a) a.layerId = remap(a.layerId);
+      if ("backgroundId" in a) a.backgroundId = remap(a.backgroundId);
+      if ("shotId" in a) a.shotId = remap(a.shotId);
+    }
+  }
+  return copy;
+}
+
+export function makeProcedural(
+  element: ProceduralComponent["element"],
+  partial: Partial<ProceduralComponent> = {},
+): ProceduralComponent {
+  const names = { birds: "Birds", sheep: "Sheep", campfire: "Shepherds' Fire", "town-lights": "Town Lights" };
+  return {
+    id: uid(element.slice(0, 5)),
+    kind: "procedural",
+    name: names[element],
+    initiallyVisible: true,
+    element,
+    count: element === "birds" ? 18 : element === "sheep" ? 28 : 1,
+    center: [0, -40],
+    radius: 20,
+    fade: 2,
+    ...partial,
+  };
+}
+
+export function makeClip(name: string, partial: Partial<ClipDef> = {}): ClipDef {
+  return { id: uid("clip"), name, assetId: null, startPose: "hero", endPose: "hero", duration: 5, loop: false, ...partial };
+}
+
+export function makeClipActor(name = "Video Actor", partial: Partial<ClipActorComponent> = {}): ClipActorComponent {
+  return {
+    id: uid("vact"),
+    kind: "clipActor",
+    name,
+    initiallyVisible: true,
+    clips: [],
+    restPose: "empty",
+    frameAspect: 21 / 9,
+    fit: "cover",
+    muted: false,
+    volume: 1,
+    ...partial,
+  };
+}
+
+export const defaultActorLayout = (): import("./types").ActorLayout => ({
+  scale: 1,
+  x: 0,
+  y: 0,
+  mirror: false,
+  pivotX: 0.5,
+  pivotY: 0.75,
+  depthLink: true,
+  horizonY: 0.25,
+  shadow: 0.5,
+});
+
+export const defaultLook = (): import("./types").LookSettings => ({
+  enabled: true,
+  exposure: 1,
+  bloom: 0.35,
+  bloomThreshold: 0.85,
+  contrast: 1.05,
+  saturation: 1.05,
+  warmth: 0.1,
+  vignette: 0.25,
+  grain: 0.04,
+});
