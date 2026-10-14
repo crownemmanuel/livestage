@@ -14,6 +14,7 @@ import { NumberInput, SelectBox } from "../fields";
 import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
 import { SceneList } from "../SceneList";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
+import { MediaPanel } from "./MediaPanel";
 
 export const TRANSITIONS: { value: TransitionKind; label: string }[] = [
   { value: "cut", label: "Cut" },
@@ -228,6 +229,7 @@ function TakeBar() {
 
 function CueList() {
   const { target, rt } = useControlTarget();
+  const [tab, setTab] = useState<"cues" | "media">("cues");
   useTick(400);
   if (!rt) return null;
   const cues = rt.scene.cues;
@@ -235,14 +237,21 @@ function CueList() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-3 py-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Cues · {rt.scene.name}</h3>
+        <div className="flex rounded-md border border-border p-0.5">
+          {(["cues", "media"] as const).map((k) => (
+            <button key={k} onClick={() => setTab(k)} className={cn("rounded-[5px] px-3 py-1 text-[11px] font-semibold tracking-wider", tab === k ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
+              {k === "cues" ? `CUES (${cues.length})` : "MEDIA"}
+            </button>
+          ))}
+        </div>
+        <span className="truncate text-[11px] text-muted-foreground">{rt.scene.name}</span>
         <span className={cn("rounded-[3px] px-1.5 text-[9.5px] font-bold tracking-wider", live ? "bg-live text-white" : "bg-preview/20 text-preview")}>{live ? "LIVE" : "PREVIEW"}</span>
         <div className="ml-auto flex items-center gap-1">
           <CueButtons target={target} />
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <ol className="space-y-1 px-3 pb-3">
+        {tab === "media" ? <MediaPanel /> : <ol className="space-y-1 px-3 pb-3">
           {cues.map((c, i) => {
             const done = i < rt.cuePointer;
             const next = i === rt.cuePointer;
@@ -274,7 +283,7 @@ function CueList() {
             );
           })}
           {cues.length === 0 && <li className="px-2 py-6 text-center text-muted-foreground">No cues. Create them in Scene Builder.</li>}
-        </ol>
+        </ol>}
       </ScrollArea>
     </div>
   );

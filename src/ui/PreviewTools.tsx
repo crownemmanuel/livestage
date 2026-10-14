@@ -1,6 +1,7 @@
 // Tools under and on top of the preview monitor: framing (zoom + reposition the view,
 // which is what TAKE LIVE starts from) and a scrubber for the videos in the scene.
 import { useEffect, useRef, useState } from "react";
+import { create } from "zustand";
 import { Crosshair, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -161,10 +162,22 @@ export function FramingBar() {
 
 // ---------------------------------------------------------------- video scrubber
 
+/** Which video the scrub bar moves through (picked in the Media tab). */
+export const useScrubSelection = create<{ key: string | null }>(() => ({ key: null }));
+
+/** Pick a video to scrub; a clip that is not playing is put on its first frame. */
+export function selectScrubSource(key: string) {
+  useScrubSelection.setState({ key });
+  const rt = useShow.getState().preview;
+  if (!rt) return;
+  const src = videoSources(rt, useShow.getState().assets).find((s) => s.key === key);
+  if (src && !src.playing) useShow.getState().dispatch("preview", src.seek(0));
+}
+
 const durationCache = new Map<string, number>();
 const probing = new Set<string>();
 
-function useAssetDurations(assets: Asset[], ids: string[]) {
+export function useAssetDurations(assets: Asset[], ids: string[]) {
   const [, force] = useState(0);
   useEffect(() => {
     for (const id of ids) {
@@ -182,16 +195,17 @@ function useAssetDurations(assets: Asset[], ids: string[]) {
   }, [assets, ids.join("|")]);
 }
 
-interface Source {
+export interface Source {
   key: string;
   label: string;
+  playing: boolean;
   duration: number;
   pos: number;
   /** The command that puts this video at v seconds. */
   seek: (v: number) => Command;
 }
 
-function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
+export function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
   const t = sceneNow(rt);
   const out: Source[] = [];
   const isVideo = (id: string | null) => !!id && assets.find((a) => a.id === id)?.type === "video";
@@ -204,7 +218,8 @@ function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
         const active = st.clip?.id === k.id;
         out.push({
           key: `${c.id}:${k.id}`,
-          label: `${c.name} · ${k.name}${active ? "" : " (not playing)"}`,
+          label: `${c.name} · ${k.name}`,
+          playing: active,
           duration: Math.max(0.05, k.duration),
           pos: active ? st.localT : 0,
           seek: (v) => ({ type: "clip.seek", actorId: c.id, clipId: k.id, offset: v }),
@@ -217,7 +232,7 @@ function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
       const rate = c.media.playbackRate || 1;
       const el = mediaElapsed(rt, c.id, startAt, t, rate);
       const iter = c.media.loop ? Math.floor(el / D) : 0;
-      out.push({ key: c.id, label: `${c.name} (background)`, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, startAt + ((iter * D + v) / rate) * 1000) }) });
+      out.push({ key: c.id, label: `${c.name} (background)`, playing: true, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, startAt + ((iter * D + v) / rate) * 1000) }) });
     } else if (c.kind === "video" && rt.layers[c.id]?.visible && isVideo(c.media.assetId)) {
       const D = durationCache.get(c.media.assetId!);
       if (!D) continue;
@@ -225,7 +240,7 @@ function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
       const rate = c.media.playbackRate || 1;
       const el = mediaElapsed(rt, c.id, l.startAt, t, rate);
       const iter = c.media.loop ? Math.floor(el / D) : 0;
-      out.push({ key: c.id, label: c.name, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, l.startAt + ((iter * D + v) / rate) * 1000) }) });
+      out.push({ key: c.id, label: c.name, playing: true, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, l.startAt + ((iter * D + v) / rate) * 1000) }) });
     }
   }
   return out;
@@ -237,7 +252,7 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart
 export function VideoScrubber() {
   const rt = useShow((s) => s.preview);
   const assets = useShow((s) => s.assets);
-  const [sel, setSel] = useState<string | null>(null);
+  const sel = useScrubSelection((s) => s.key);
   const [drag, setDrag] = useState<{ v: number; src: Source; wasPlaying: boolean } | null>(null);
   useTick(150);
   const ids = rt ? rt.scene.components.flatMap((c) => (c.kind === "background" || c.kind === "video" ? (c.media.assetId ? [c.media.assetId] : []) : [])) : [];
@@ -246,7 +261,7 @@ export function VideoScrubber() {
   const sources = videoSources(rt, assets);
   if (!sources.length && !drag) return null;
   // Default: whatever is playing (preferring a clip a cue started over an idle loop), else the first video.
-  const playing = sources.filter((s) => !s.label.endsWith("(not playing)"));
+  const playing = sources.filter((s) => s.playing);
   const src = drag?.src ?? sources.find((s) => s.key === sel) ?? playing.find((s) => !s.label.includes("(loop)")) ?? playing[0] ?? sources[0];
   if (!src) return null;
   const pos = drag ? drag.v : src.pos;
@@ -281,23 +296,9 @@ export function VideoScrubber() {
       />
       <div className="mt-1 flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Scrub</span>
-        <select
-          className="h-6 min-w-0 max-w-[60%] flex-1 truncate rounded-md border border-input bg-background px-1 text-[11px]"
-          value={src.key}
-          title="Which video the scrub bar moves through"
-          onChange={(e) => {
-            setSel(e.target.value);
-            const n = sources.find((s) => s.key === e.target.value);
-            // Picking a clip that is not playing shows its first frame.
-            if (n && n.label.endsWith("(not playing)")) scrub(0, n);
-          }}
-        >
-          {sources.map((s) => (
-            <option key={s.key} value={s.key}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+<span className="min-w-0 truncate text-foreground/80" title="Pick another video in the Media tab">
+          {src.label}
+        </span>
         <span className="ml-auto shrink-0 whitespace-nowrap tabular text-muted-foreground">
           {fmt(pos)} / {fmt(src.duration)}
         </span>
