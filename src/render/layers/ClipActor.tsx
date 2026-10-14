@@ -116,7 +116,8 @@ function ClipQuad({ actor, clip, order }: { actor: ClipActorComponent; clip: Cli
       // Park on frame 0 so the clip can cut in instantly when its turn comes.
       syncVideo(video, { play: false, time: 0, rate: 1, muted: true, volume: 0 }, frame.wall);
     }
-    mesh.visible = active && video.video.readyState >= 2;
+    // While a seek is in flight the texture still holds the last frame: keep showing it.
+    mesh.visible = active && (video.video.readyState >= 2 || (video.video.seeking && video.video.readyState >= 1));
     shadow.visible = mesh.visible && !!actor.matted && (actor.layout?.shadow ?? 0) > 0;
     if (!mesh.visible) return;
 

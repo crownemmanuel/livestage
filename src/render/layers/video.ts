@@ -25,6 +25,13 @@ export function useVideo(url: string | null): VideoHandle | null {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
+    // VideoTexture refreshes on requestVideoFrameCallback, which WebKit does not fire for a
+    // seek on a paused video: scrubbing or parking a paused clip would never reach the screen.
+    const refresh = () => {
+      texture.needsUpdate = true;
+    };
+    v.addEventListener("seeked", refresh);
+    v.addEventListener("loadeddata", refresh);
     return { video: v, texture, lastSeek: 0 };
   }, [url]);
   useEffect(
@@ -82,9 +89,9 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
   const drift = v.currentTime - want.time;
   if (!want.play || want.reverse) {
     if (!v.paused) v.pause();
-    // Paused: park on the wanted frame. Reverse: scrub, at most ~12 seeks a second.
-    const gap = want.reverse ? 80 : 120;
-    if (Math.abs(drift) > (want.reverse ? 0.02 : 0.05) && !v.seeking && wallMs - h.lastSeek > gap) {
+    // Paused: park on the wanted frame (follows a scrub closely). Reverse: at most ~12 seeks a second.
+    const gap = want.reverse ? 80 : 40;
+    if (Math.abs(drift) > (want.reverse ? 0.02 : 0.02) && !v.seeking && wallMs - h.lastSeek > gap) {
       v.currentTime = want.time;
       h.lastSeek = wallMs;
     }
