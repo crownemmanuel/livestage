@@ -7,7 +7,7 @@ Version 1 is a working desktop app (Tauri 2 + React + Three.js). It is not a moc
 - **Scene Builder**: design scenes, import media, layer and configure components, edit cues and camera moves. Edits only touch the preview.
 - **Show Mode**: run the show. Browsing and selecting scenes never changes the wall. Only **TAKE LIVE**, live cues or controls targeting the live scene do.
 
-It ships with the opening of the show (the prologue, built from AI video), two prototype scenes and a compositing template:
+It ships with the opening of the show (the prologue, built from AI video), the **whole rest of the show scaffolded from the script** (every `[LED: …]` cue has a scene with its components, cues and operator notes; see [docs/SHOW_MAP.md](docs/SHOW_MAP.md)), two prototype 3D scenes and a compositing template. The prologue scenes:
 
 | Scene | What it tests |
 | --- | --- |
@@ -58,12 +58,23 @@ Open http://localhost:1430. **Open output** pops up a second browser window that
 | Safe standby visual | **STANDBY** (fades the wall to the title card or image) |
 | Drive the lion | **Arm keyboard** on the lion card, then `W A S D` to move, `Q`/`E` to turn, `Shift` to run, `1`–`7` for actions, `Space` to stop |
 
+## Production hardening
+
+- **Recovery**: the live state is saved on every change; a reload or crash of the operator window comes back on the same scene, same next cue, same blackout, with pending delayed actions re-armed. A crashed output window is reopened automatically. Lost GPU contexts rebuild themselves; every panel has an error boundary. See [docs/RECOVERY.md](docs/RECOVERY.md).
+- **Show control**: MIDI in/out (notes, CC, program change, MIDI Show Control) and OSC over UDP, with a Learn button, a monitor log, built-in `/sls/…` commands, MSC cue-following for the Hog 4, `Send MIDI / OSC` cue actions and **clip time markers** that send a message when playback passes a time. See [docs/SHOW_CONTROL.md](docs/SHOW_CONTROL.md).
+- **Smoother camera**: moves chain without a kink (Hermite blend carrying the current velocity), follow shots keep tracking the lion, a quintic "smooth" ease, hand-held sway, and 2.5D parallax on plates and cut-outs.
+- **New components**: titles (letter/word/typewriter/burn-in reveals), the family tree of names (grow, burn to a stump, blossom, fly as embers), map routes (glowing line over a map with zoom), Ken Burns on plates, reverse and speed-ramped video, snow, starfield, divine light, heat shimmer, window/torch lights, soft wipe and burn transitions, freeze and sound cues, effect-parameter cues.
+- **Show Mode**: a big GO with the next cue and its operator note always in view, a status bar (output health, saving, I/O counters, keys), bigger cue rows, `Shift+B` blackout, `Esc` cancels pending actions, `↑/↓` moves the preview.
+
 The right-hand panel always shows a banner saying what it controls:
 - **CONTROLLING LIVE OUTPUT** (red): the selected scene is on the wall.
 - **REHEARSING IN PREVIEW** (green): nothing you press reaches the audience.
 
 ## Documentation
 
+- [docs/SHOW_MAP.md](docs/SHOW_MAP.md): every LED cue in the script, the scene that serves it, and the media still to generate.
+- [docs/SHOW_CONTROL.md](docs/SHOW_CONTROL.md): MIDI / OSC / Hog 4 set-up, built-in commands, time markers.
+- [docs/RECOVERY.md](docs/RECOVERY.md): what survives a reload, crash or GPU reset, and the pre-show checklist.
 - [docs/PROLOGUE.md](docs/PROLOGUE.md): the prologue's cues, voiceover sync points, media pipeline and how to swap in HQ renders.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how playback stays in sync across windows, the rendering pipeline and the data model.
 - [docs/LION_ASSET.md](docs/LION_ASSET.md): requirements for the real lion model and how to swap it in.

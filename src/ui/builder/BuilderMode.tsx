@@ -1,12 +1,12 @@
-import { useState } from "react";
-import { Box, Clapperboard, Copy, Film, Image as ImageIcon, Layers, Mountain, Plus, Sparkles, Trash2, Upload, ArrowUp, ArrowDown, CloudRain, Bird } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Box, Clapperboard, Copy, Film, Image as ImageIcon, Layers, Mountain, Plus, Sparkles, Trash2, Upload, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { EFFECT_DEFS, EFFECT_TYPES } from "@/core/effects";
-import { makeBackground, makeClipActor, makeEffect, makeImageLayer, makeLion, makeModel, makeProcedural, makeVideoLayer } from "@/core/factories";
+import { makeBackground, makeClipActor, makeEffect, makeImageLayer, makeLion, makeModel, makeNames, makeProcedural, makeRoute, makeText, makeVideoLayer } from "@/core/factories";
 import { importAssets } from "@/core/platform";
 import type { ProceduralElement, SceneComponent } from "@/core/types";
 import { StageView } from "@/render/StageView";
@@ -96,6 +96,9 @@ const KIND_ICON: Record<SceneComponent["kind"], typeof Box> = {
   effect: CloudRain,
   procedural: Bird,
   clipActor: Clapperboard,
+  text: Type,
+  names: TreeDeciduous,
+  route: Route,
 };
 
 function ComponentList() {
@@ -137,6 +140,17 @@ function ComponentList() {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => add(makeModel("3D Model"))}>
                 <Box /> 3D model (GLB/glTF)
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[11px]">Titles &amp; storybook</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => add(makeText("Title"))}>
+                <Type /> Title / caption / verse
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => add(makeNames("Family Tree"))}>
+                <TreeDeciduous /> Family tree / names
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => add(makeRoute("Map Route"))}>
+                <Route /> Map route (glowing line)
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="text-[11px]">Characters</DropdownMenuLabel>
@@ -186,7 +200,7 @@ function ComponentList() {
                 >
                   <Icon className="size-3.5 text-muted-foreground" />
                   <span className="flex-1 truncate">{c.name}</span>
-                  <span className="text-[10px] text-muted-foreground">{c.kind === "effect" ? c.effect : c.kind === "procedural" ? c.element : c.kind === "video" || c.kind === "image" ? c.placement : c.kind === "clipActor" ? "video actor" : c.kind}</span>
+                  <span className="text-[10px] text-muted-foreground">{c.kind === "effect" ? c.effect : c.kind === "procedural" ? c.element : c.kind === "video" || c.kind === "image" ? c.placement : c.kind === "clipActor" ? "video actor" : c.kind === "names" ? c.style : c.kind === "text" ? "title" : c.kind}</span>
                   {c.initiallyVisible && <span className="size-1.5 rounded-full bg-preview" title="Active when scene goes live" />}
                 </button>
               </li>
@@ -202,7 +216,7 @@ function AssetLibrary() {
   const assets = useProject((s) => s.project.assets);
   const [busy, setBusy] = useState(false);
   const scenes = useProject((s) => s.project.scenes);
-  const used = new Set(JSON.stringify(scenes).match(/asset_[a-z0-9]+/g) ?? []);
+  const used = useMemo(() => new Set(JSON.stringify(scenes.map((s) => ({ ...s, thumbnail: null }))).match(/asset_[a-z0-9]+/g) ?? []), [scenes]);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between px-3 py-2">

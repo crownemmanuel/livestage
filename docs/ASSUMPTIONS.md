@@ -12,7 +12,7 @@ The brief stopped partway through **§12B (Video-Based Camera Travel)**, at "Avo
 | Cue system | Cues are lists of timestamped actions with optional delays. Operator gets GO, back, skip, repeat, fire any cue, cancel pending delays, and a freeze for all motion. |
 | Safety | Separate preview and program. TAKE is never automatic. Colour banners show what each control affects. STANDBY fades to a safe title card. The live scene can't be deleted. Closing the operator window closes the output. Autosave uses atomic writes. |
 | Keyboard shortcuts | Ctrl/⌘+Enter takes live; `G` is GO. Lion keys only work while **Arm keyboard** is on, and never while typing in a field. |
-| MIDI, DMX/lighting integration, show automation (mentioned in the vision) | Not in V1. The cue/action model is the hook: a MIDI note or OSC message can call `cueControl.go()` or dispatch any action. |
+| MIDI, DMX/lighting integration, show automation (mentioned in the vision) | Built: MIDI in/out, MSC, OSC in/out, triggers with Learn, time markers on clips, TAKE/GO announcements. See [SHOW_CONTROL.md](SHOW_CONTROL.md). DMX itself stays on the lighting console. |
 
 ## Asset decisions
 
@@ -34,6 +34,6 @@ The brief stopped partway through **§12B (Video-Based Camera Travel)**, at "Avo
 
 1. Choose and license the hero lion. Map its clips and tune stride (about an hour of work once the asset exists).
 2. Generate AI plates for both locations (day/night pairs) and a camera-travel video between them, then A/B them against the procedural worlds on the actual wall.
-3. Add MIDI/OSC cue triggers and a timecode-driven cue mode.
+3. Add a timecode-driven cue mode (MIDI timecode / LTC) if the show moves to a locked audio track; MIDI/OSC triggers are done.
 4. Add an on-canvas transform gizmo in Scene Builder (V1 uses numeric/slider fields).
 5. Add GPU-side single render with an output-window mirror, if the show machine struggles with multiple views.

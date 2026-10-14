@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import { defaultProject, LION_PROOF_ASSETS, PROLOGUE_ASSETS, PROLOGUE_DEMO, prologueScenes, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene, SHEPHERD_PHOTOREAL_DEMO, shepherdPhotorealScene } from "@/core/defaultProject";
-import { cloneComponent, cloneScene, defaultOutput, makeScene } from "@/core/factories";
+import { applyPrologueFeel, defaultProject, LION_PROOF_ASSETS, PROLOGUE_ASSETS, PROLOGUE_DEMO, PROLOGUE_FEEL, prologueScenes, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene, SHEPHERD_PHOTOREAL_DEMO, shepherdPhotorealScene } from "@/core/defaultProject";
+import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
+import { cloneComponent, cloneScene, defaultIo, defaultOutput, makeScene } from "@/core/factories";
 import { loadProjectFile, refreshAssetUrls, saveProjectFile } from "@/core/platform";
 import type { Asset, OutputSettings, Project, Scene, SceneComponent } from "@/core/types";
 
@@ -52,7 +53,11 @@ function migrate(p: Project): Project {
   const out = { ...defaultOutput(), ...p.output };
   out.safeArea = { ...defaultOutput().safeArea, ...p.output?.safeArea };
   out.standby = { ...defaultOutput().standby, ...p.output?.standby };
-  const merged: Project = { ...p, output: out, effectPresets: p.effectPresets ?? [], assets: p.assets ?? [], demoAdditions: p.demoAdditions ?? [] };
+  const io = { ...defaultIo(), ...(p.io ?? {}) };
+  io.midi = { ...defaultIo().midi, ...(p.io?.midi ?? {}) };
+  io.osc = { ...defaultIo().osc, ...(p.io?.osc ?? {}) };
+  io.triggers = p.io?.triggers ?? [];
+  const merged: Project = { ...p, output: out, io, effectPresets: p.effectPresets ?? [], assets: p.assets ?? [], demoAdditions: p.demoAdditions ?? [] };
   // Merge new built-in demo content once; if the user later deletes it, it stays deleted.
   if (!merged.demoAdditions!.includes(LION_PROOF_DEMO)) {
     const have = new Set(merged.assets.map((a) => a.id));
@@ -129,6 +134,19 @@ function migrate(p: Project): Project {
       }
     }
     merged.demoAdditions = [...merged.demoAdditions!, "prologue-tweaks-1"];
+  }
+  // The rest of the show, scaffolded from the script's LED cues, follows the prologue.
+  if (!merged.demoAdditions!.includes(SHOW_SCAFFOLD_DEMO)) {
+    const after = merged.scenes.findIndex((s) => s.components.some((c) => c.kind === "clipActor" && c.clips.some((k) => k.assetId === "asset_pr_goliath_fall")));
+    merged.scenes = [...merged.scenes];
+    merged.scenes.splice(after >= 0 ? after + 1 : merged.scenes.length, 0, ...showScaffoldScenes());
+    renumber(merged);
+    merged.demoAdditions = [...merged.demoAdditions!, SHOW_SCAFFOLD_DEMO];
+  }
+  // Hand-held drift and parallax on P1 and P3.
+  if (!merged.demoAdditions!.includes(PROLOGUE_FEEL)) {
+    applyPrologueFeel(merged.scenes);
+    merged.demoAdditions = [...merged.demoAdditions!, PROLOGUE_FEEL];
   }
   // Built-in assets ship with the app: keep their definitions in step with the code.
   const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS].map((a) => [a.id, a]));
@@ -303,3 +321,15 @@ useProject.subscribe((s, prev) => {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void useProject.getState().save(), 900);
 });
+// Never lose an edit to a reload: flush when the window hides or unloads.
+if (typeof window !== "undefined") {
+  const flush = () => {
+    const s = useProject.getState();
+    if (s.loaded && s.dirty) {
+      if (saveTimer) clearTimeout(saveTimer);
+      void s.save();
+    }
+  };
+  document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && flush());
+  window.addEventListener("beforeunload", flush);
+}

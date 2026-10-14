@@ -4,7 +4,8 @@ import { EFFECT_DEFS, bool, num, str } from "@/core/effects";
 import { uid } from "@/core/ids";
 import { LION_ACTION_INFO } from "@/core/lion";
 import { LION_ACTIONS } from "@/core/types";
-import { defaultActorLayout, makeClip } from "@/core/factories";
+import { defaultActorLayout, defaultKenBurns, makeClip } from "@/core/factories";
+import { MarkersEditor } from "../io/MarkersEditor";
 import { probeDuration } from "@/engine/operator";
 import type {
   ClipActorComponent,
@@ -16,11 +17,17 @@ import type {
   EntranceKind,
   FitMode,
   ImageLayerComponent,
+  KenBurns,
   LayerPlacement,
   MediaSettings,
   ModelComponent,
+  NamesComponent,
   ProceduralComponent,
+  RouteComponent,
   SceneComponent,
+  TextAnim,
+  TextComponent,
+  TextFont,
   VideoLayerComponent,
 } from "@/core/types";
 import { useModelInfo } from "@/store/modelInfo";
@@ -59,7 +66,183 @@ export function Inspector() {
       {comp.kind === "effect" && <EffectForm c={comp} up={up as Updater<EffectComponent>} />}
       {comp.kind === "procedural" && <ProceduralForm c={comp} up={up as Updater<ProceduralComponent>} />}
       {comp.kind === "clipActor" && <ClipActorForm c={comp} up={up as Updater<ClipActorComponent>} />}
+      {comp.kind === "text" && <TextForm c={comp} up={up as Updater<TextComponent>} />}
+      {comp.kind === "names" && <NamesForm c={comp} up={up as Updater<NamesComponent>} />}
+      {comp.kind === "route" && <RouteForm c={comp} up={up as Updater<RouteComponent>} />}
     </div>
+  );
+}
+
+const FONTS: { value: TextFont; label: string }[] = [
+  { value: "serif", label: "Serif (storybook)" },
+  { value: "display", label: "Display capitals" },
+  { value: "sans", label: "Sans (simple white letters)" },
+  { value: "mono", label: "Mono" },
+];
+
+const TEXT_ANIMS: { value: TextAnim; label: string }[] = [
+  { value: "fade", label: "Fade" },
+  { value: "rise", label: "Rise" },
+  { value: "letters", label: "Letter by letter" },
+  { value: "words", label: "Word by word" },
+  { value: "typewriter", label: "Typewriter" },
+  { value: "burn", label: "Burn in (gold fire)" },
+  { value: "cut", label: "Cut" },
+];
+
+function TextForm({ c, up }: { c: TextComponent; up: Updater<TextComponent> }) {
+  return (
+    <>
+      <Section title="Text">
+        <Field label="Text">
+          <textarea
+            className="h-16 w-full resize-none rounded-md border border-input bg-transparent px-2 py-1 text-[12px]"
+            defaultValue={c.text}
+            key={c.id}
+            onBlur={(e) => e.target.value !== c.text && up((x) => (x.text = e.target.value))}
+          />
+        </Field>
+        <SelectField<TextFont> label="Font" value={c.font} onChange={(v) => up((x) => (x.font = v))} options={FONTS} />
+        <SliderField label="Weight" value={c.weight} min={300} max={900} step={100} onChange={(v) => up((x) => (x.weight = v))} />
+        <SwitchField label="Capitals" value={c.uppercase} onChange={(v) => up((x) => (x.uppercase = v))} />
+        <SwitchField label="Italic" value={c.italic} onChange={(v) => up((x) => (x.italic = v))} />
+        <SliderField label="Size" value={c.size} min={0.02} max={0.6} step={0.005} onChange={(v) => up((x) => (x.size = v))} />
+        <SliderField label="Letter spacing" value={c.letterSpacing} min={-0.05} max={0.6} step={0.005} unit="em" onChange={(v) => up((x) => (x.letterSpacing = v))} />
+        <SliderField label="Line height" value={c.lineHeight} min={0.8} max={2} step={0.05} onChange={(v) => up((x) => (x.lineHeight = v))} />
+        <ColorField label="Colour" value={c.color} onChange={(v) => up((x) => (x.color = v))} />
+        <SliderField label="Glow" value={c.glow} min={0} max={2} step={0.01} onChange={(v) => up((x) => (x.glow = v))} />
+        <ColorField label="Glow colour" value={c.glowColor} onChange={(v) => up((x) => (x.glowColor = v))} />
+        <SliderField label="Drop shadow" value={c.shadow} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.shadow = v))} />
+        <SelectField<BlendMode> label="Blend" value={c.blend} onChange={(v) => up((x) => (x.blend = v))} options={[{ value: "normal", label: "Normal" }, { value: "add", label: "Add (light)" }, { value: "screen", label: "Screen" }, { value: "multiply", label: "Multiply" }]} />
+      </Section>
+      <Section title="Placement">
+        <SliderField label="X (centre)" value={c.x} min={0} max={1} step={0.005} onChange={(v) => up((x) => (x.x = v))} />
+        <SliderField label="Y (centre)" value={c.y} min={0} max={1} step={0.005} onChange={(v) => up((x) => (x.y = v))} />
+        <SelectField label="Align" value={c.align} onChange={(v) => up((x) => (x.align = v))} options={[{ value: "center", label: "Centre" }, { value: "left", label: "Left" }, { value: "right", label: "Right" }]} />
+        <SliderField label="Wrap width" value={c.width} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.width = v))} />
+      </Section>
+      <Section title="Animation">
+        <SelectField<TextAnim> label="Entrance" value={c.anim.enter} onChange={(v) => up((x) => (x.anim.enter = v))} options={TEXT_ANIMS} />
+        <SelectField<TextAnim> label="Exit" value={c.anim.exit} onChange={(v) => up((x) => (x.anim.exit = v))} options={TEXT_ANIMS} />
+        <SliderField label="Duration" value={c.anim.duration} min={0} max={10} step={0.1} unit="s" onChange={(v) => up((x) => (x.anim.duration = v))} />
+        <SliderField label="Stagger" value={c.anim.stagger} min={0} max={1.5} step={0.01} unit="s" onChange={(v) => up((x) => (x.anim.stagger = v))} />
+        <p className="text-[10.5px] leading-snug text-muted-foreground">Stagger is the delay between letters or words. Show and hide the title with a Layer cue action (or from the Layers list in Show Mode).</p>
+      </Section>
+    </>
+  );
+}
+
+function NamesForm({ c, up }: { c: NamesComponent; up: Updater<NamesComponent> }) {
+  return (
+    <>
+      <Section title="Names">
+        <Field label="Names">
+          <textarea
+            className="h-28 w-full resize-none rounded-md border border-input bg-transparent px-2 py-1 font-mono text-[11.5px]"
+            defaultValue={c.names.join("\n")}
+            key={c.id + c.names.length}
+            onBlur={(e) => {
+              const names = e.target.value.split(/\n|,/).map((x) => x.trim()).filter(Boolean);
+              if (names.join("|") !== c.names.join("|")) up((x) => (x.names = names));
+            }}
+          />
+        </Field>
+        <p className="-mt-1 text-[10.5px] text-muted-foreground">One per line, in order. Cues reveal the next name (“Family tree / names” action), burn the tree down or make it blossom.</p>
+        <SelectField
+          label="Style"
+          value={c.style}
+          onChange={(v) => up((x) => (x.style = v))}
+          options={[
+            { value: "tree", label: "Tree: gold branches growing up" },
+            { value: "line", label: "Thin shoot, small plain letters" },
+            { value: "roll", label: "One big name at a time" },
+            { value: "fly", label: "Names rise and fly like embers" },
+          ]}
+        />
+        <TextField label="Crown text" value={c.crown} onChange={(v) => up((x) => (x.crown = v))} placeholder="e.g. FOREVER or JESUS" />
+        <SelectField<TextFont> label="Font" value={c.font} onChange={(v) => up((x) => (x.font = v))} options={FONTS} />
+        <SliderField label="Size" value={c.size} min={0.02} max={0.2} step={0.002} onChange={(v) => up((x) => (x.size = v))} />
+        <ColorField label="Gold" value={c.color} onChange={(v) => up((x) => (x.color = v))} />
+        <ColorField label="Branches" value={c.branchColor} onChange={(v) => up((x) => (x.branchColor = v))} />
+        <SliderField label="Glow" value={c.glow} min={0} max={2} step={0.01} onChange={(v) => up((x) => (x.glow = v))} />
+        <SliderField label="Bloom time" value={c.reveal} min={0.2} max={5} step={0.1} unit="s" onChange={(v) => up((x) => (x.reveal = v))} />
+      </Section>
+      <Section title="Layout">
+        <SliderField label="Root X" value={c.x} min={0} max={1} step={0.005} onChange={(v) => up((x) => (x.x = v))} />
+        <SliderField label="Root Y" value={c.y} min={0} max={1.1} step={0.005} onChange={(v) => up((x) => (x.y = v))} />
+        <SliderField label="Height" value={c.height} min={0.1} max={1.2} step={0.01} onChange={(v) => up((x) => (x.height = v))} />
+        <SliderField label="Spread" value={c.spread} min={0} max={0.5} step={0.005} onChange={(v) => up((x) => (x.spread = v))} />
+        <NumberField label="Seed" value={c.seed} step={1} onChange={(v) => up((x) => (x.seed = Math.round(v)))} />
+      </Section>
+    </>
+  );
+}
+
+function RouteForm({ c, up }: { c: RouteComponent; up: Updater<RouteComponent> }) {
+  return (
+    <>
+      <Section title="Map route">
+        <AssetField label="Map image" type="image" value={c.assetId} onChange={(v) => up((x) => (x.assetId = v))} />
+        <SelectField<FitMode> label="Fit" value={c.fit} onChange={(v) => up((x) => (x.fit = v))} options={[{ value: "cover", label: "Cover" }, { value: "contain", label: "Contain" }, { value: "stretch", label: "Stretch" }]} />
+        <SliderField label="Vertical framing" value={c.anchorY ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.anchorY = v))} />
+        <Field label="Points (x y)">
+          <textarea
+            className="h-24 w-full resize-none rounded-md border border-input bg-transparent px-2 py-1 font-mono text-[11.5px]"
+            defaultValue={c.points.map((p) => `${p[0]} ${p[1]}`).join("\n")}
+            key={c.id + c.points.length}
+            onBlur={(e) => {
+              const pts = e.target.value
+                .split("\n")
+                .map((l) => l.trim().split(/[\s,]+/).map(Number))
+                .filter((p) => p.length >= 2 && p.every((n) => Number.isFinite(n)))
+                .map((p) => [p[0], p[1]] as [number, number]);
+              if (JSON.stringify(pts) !== JSON.stringify(c.points)) up((x) => (x.points = pts));
+            }}
+          />
+        </Field>
+        <p className="-mt-1 text-[10.5px] text-muted-foreground">One point per line as fractions of the map image (0 0 top-left, 1 1 bottom-right). The line is smoothed through them.</p>
+        <ColorField label="Line colour" value={c.color} onChange={(v) => up((x) => (x.color = v))} />
+        <SliderField label="Line width" value={c.width} min={0.002} max={0.03} step={0.0005} onChange={(v) => up((x) => (x.width = v))} />
+        <SliderField label="Glow" value={c.glow} min={0} max={2} step={0.01} onChange={(v) => up((x) => (x.glow = v))} />
+        <SliderField label="Draw time" value={c.duration} min={0.5} max={60} step={0.5} unit="s" onChange={(v) => up((x) => (x.duration = v))} />
+        <TextField label="End label" value={c.label} onChange={(v) => up((x) => (x.label = v))} />
+        <ColorField label="Label colour" value={c.labelColor} onChange={(v) => up((x) => (x.labelColor = v))} />
+        <SliderField label="Label size" value={c.labelSize} min={0.02} max={0.2} step={0.002} onChange={(v) => up((x) => (x.labelSize = v))} />
+        <SliderField label="Opacity" value={c.opacity} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.opacity = v))} />
+      </Section>
+      <Section title="Map move while drawing">
+        <KenBurnsFields kb={c.zoom} set={(fn) => up((x) => fn(x.zoom))} />
+      </Section>
+    </>
+  );
+}
+
+function KenBurnsFields({ kb, set }: { kb: KenBurns; set: (fn: (k: KenBurns) => void) => void }) {
+  return (
+    <>
+      <SwitchField label="Pan / zoom" hint="Slow Ken Burns move over the picture" value={kb.enabled} onChange={(v) => set((k) => (k.enabled = v))} />
+      {kb.enabled && (
+        <>
+          <Field label="From (x y scale)">
+            <div className="grid grid-cols-3 gap-1">
+              <NumberInput value={kb.from.x} step={0.01} onChange={(v) => set((k) => (k.from.x = v))} />
+              <NumberInput value={kb.from.y} step={0.01} onChange={(v) => set((k) => (k.from.y = v))} />
+              <NumberInput value={kb.from.scale} min={1} step={0.01} onChange={(v) => set((k) => (k.from.scale = v))} />
+            </div>
+          </Field>
+          <Field label="To (x y scale)">
+            <div className="grid grid-cols-3 gap-1">
+              <NumberInput value={kb.to.x} step={0.01} onChange={(v) => set((k) => (k.to.x = v))} />
+              <NumberInput value={kb.to.y} step={0.01} onChange={(v) => set((k) => (k.to.y = v))} />
+              <NumberInput value={kb.to.scale} min={1} step={0.01} onChange={(v) => set((k) => (k.to.scale = v))} />
+            </div>
+          </Field>
+          <SliderField label="Duration" value={kb.duration} min={1} max={180} step={1} unit="s" onChange={(v) => set((k) => (k.duration = v))} />
+          <SelectField label="Then" value={kb.loop} onChange={(v) => set((k) => (k.loop = v))} options={[{ value: "none", label: "Hold the end" }, { value: "pingpong", label: "Drift back and forth" }, { value: "loop", label: "Jump back and repeat" }]} />
+          <p className="text-[10.5px] leading-snug text-muted-foreground">x/y pan in canvas fractions (0.02 = 2% of the wall), scale ≥ 1 zooms in. Starts when the background is activated.</p>
+        </>
+      )}
+    </>
   );
 }
 
@@ -86,8 +269,12 @@ function MediaFields({ m, set }: { m: MediaSettings; set: (fn: (m: MediaSettings
           <NumberInput value={m.endTime ?? 0} min={0} step={0.1} onChange={(v) => set((x) => (x.endTime = v > 0 ? v : null))} />
         </div>
       </Field>
+      <SwitchField label="Reverse" hint="Plays backwards by scrubbing (about 12 steps a second). For a smooth rewind, import a reversed render of the clip instead." value={!!m.reverse} onChange={(v) => set((x) => (x.reverse = v))} />
       <SwitchField label="Muted" value={m.muted} onChange={(v) => set((x) => (x.muted = v))} />
       {!m.muted && <SliderField label="Volume" value={m.volume} min={0} max={1} step={0.01} onChange={(v) => set((x) => (x.volume = v))} />}
+      <Field label="Time markers">
+        <MarkersEditor markers={m.markers} onChange={(markers) => set((x) => (x.markers = markers))} />
+      </Field>
     </>
   );
 }
@@ -126,7 +313,18 @@ function BackgroundForm({ c, up }: { c: BackgroundComponent; up: Updater<Backgro
           <CropFields crop={c.crop} set={(crop) => up((x) => (x.crop = crop))} />
           <SliderField label="Vertical framing" value={c.anchorY ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.anchorY = v))} />
           <SliderField label="Opacity" value={c.opacity} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.opacity = v))} />
+          <SliderField label="Parallax" value={c.parallax ?? 0} min={0} max={0.08} step={0.001} onChange={(v) => up((x) => (x.parallax = v))} />
+          <p className="-mt-1 pl-[104px] text-[10.5px] text-muted-foreground">2.5D depth with the scene's camera sway: the plate drifts a little, cut-out actors more.</p>
           <MediaFields m={c.media} set={(fn) => up((x) => fn(x.media))} />
+          <KenBurnsFields
+            kb={c.kenBurns ?? defaultKenBurns()}
+            set={(fn) =>
+              up((x) => {
+                x.kenBurns ??= defaultKenBurns();
+                fn(x.kenBurns);
+              })
+            }
+          />
           <p className="text-[10.5px] leading-snug text-muted-foreground">
             Video can't be relit. For night, add a matching night plate as another background (crossfades), or rely on the Day/Night effect's colour grade.
           </p>
@@ -527,6 +725,9 @@ function ClipActorForm({ c, up }: { c: ClipActorComponent; up: Updater<ClipActor
               value={!!k.interrupt}
               onChange={(v) => upClip(k.id, (x) => (x.interrupt = v))}
             />
+            <Field label="Time markers">
+              <MarkersEditor markers={k.markers} onChange={(markers) => upClip(k.id, (x) => (x.markers = markers))} />
+            </Field>
           </div>
         ))}
       </Section>

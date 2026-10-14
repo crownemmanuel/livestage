@@ -1,3 +1,5 @@
+mod io;
+
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 /// Both webviews must share identical WebView2 arguments on Windows, otherwise the
@@ -37,7 +39,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![ensure_output_window])
+        .manage(io::IoState::default())
+        .invoke_handler(tauri::generate_handler![
+            ensure_output_window,
+            io::midi_ports,
+            io::midi_open,
+            io::midi_send,
+            io::osc_listen,
+            io::osc_send
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

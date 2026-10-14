@@ -1,14 +1,17 @@
 import { useEffect, useMemo } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
+import type { PlateLight } from "@/core/types";
 import { useStage } from "../frame";
 
 /**
  * Sun, moon, sky fill and lightning illumination. Also drives scene fog so
- * real 3D geometry gets depth-aware haze/fog.
+ * real 3D geometry gets depth-aware haze/fog. On flat-plate scenes `plate`
+ * replaces the sun with a key light matched to the footage.
  */
-export function Lights({ shadows = true }: { shadows?: boolean }) {
+export function Lights({ shadows = true, plate }: { shadows?: boolean; plate?: PlateLight | null }) {
   const { frame } = useStage();
+  const plateDir = useMemo(() => new THREE.Vector3(), []);
   const scene = useThree((s) => s.scene);
   const { sun, moon, hemi, flash } = useMemo(() => {
     const sun = new THREE.DirectionalLight("#ffffff", 3);
@@ -47,6 +50,26 @@ export function Lights({ shadows = true }: { shadows?: boolean }) {
     // sits below the horizon at zero intensity, so its shadows simply vanish.
     const focus = new THREE.Vector3(0, 0, -14);
     sun.target.position.copy(focus);
+    if (plate) {
+      // Azimuth 0 = light from the audience, 90 = from stage right; elevation above the horizon.
+      const az = (plate.azimuth * Math.PI) / 180;
+      const el = (plate.elevation * Math.PI) / 180;
+      plateDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).normalize();
+      sun.position.copy(focus).addScaledVector(plateDir, 120);
+      sun.color.set(plate.color);
+      sun.intensity = plate.intensity * (1 - 0.6 * frame.storm) + frame.flash * 2;
+      moon.intensity = 0;
+      hemi.color.set(plate.ambient);
+      hemi.groundColor.set(plate.ambient).multiplyScalar(0.45);
+      hemi.intensity = plate.ambientIntensity + frame.flash * 2;
+      flash.intensity = frame.flash * 4;
+      const fogP = scene.fog as THREE.FogExp2 | null;
+      if (fogP) {
+        fogP.color.copy(frame.fogColor);
+        fogP.density = frame.fogLevel * 0.004;
+      }
+      return;
+    }
     sun.position.copy(focus).addScaledVector(frame.sunDir, 120);
     sun.color.copy(frame.sunColor);
     sun.intensity = frame.sunIntensity;

@@ -83,6 +83,28 @@ export interface MediaSettings {
   endTime: number | null;
   muted: boolean;
   volume: number;
+  /** Play backwards (scrubbed by seeking; a pre-reversed clip is smoother). */
+  reverse?: boolean;
+  /** Fire MIDI/OSC when playback passes these times. */
+  markers?: MediaMarker[];
+}
+
+/** A point in a clip's timeline that sends a message to the outside world (console, sound, lights). */
+export interface MediaMarker {
+  id: string;
+  name: string;
+  /** Seconds into the clip. */
+  at: number;
+  message: IoMessage;
+}
+
+/** Slow pan/zoom over a still or plate (storybook art, maps). Offsets are canvas fractions, scale ≥ 1. */
+export interface KenBurns {
+  enabled: boolean;
+  from: { x: number; y: number; scale: number };
+  to: { x: number; y: number; scale: number };
+  duration: number;
+  loop: "none" | "pingpong" | "loop";
 }
 
 /** Screen-space layers use normalized canvas coordinates (0..1, y down). */
@@ -165,6 +187,10 @@ export interface BackgroundComponent extends ComponentBase {
   opacity: number;
   /** Crossfade / relight duration when this background is activated. */
   transitionDuration: number;
+  /** Slow pan/zoom (Ken Burns) starting when the background is activated. */
+  kenBurns?: KenBurns;
+  /** 2.5D depth: how much the plate drifts with the camera sway (0 = locked). Cut-out actors drift 1.6× more. */
+  parallax?: number;
 }
 
 export interface MediaLayerCommon {
@@ -224,7 +250,20 @@ export interface ActorComponent extends ComponentBase {
   bounds: { xMin: number; xMax: number; zMin: number; zMax: number };
 }
 
-export type EffectType = "rain" | "lightning" | "fog" | "haze" | "wind" | "daynight" | "shake" | "projectile";
+export type EffectType =
+  | "rain"
+  | "snow"
+  | "lightning"
+  | "fog"
+  | "haze"
+  | "wind"
+  | "daynight"
+  | "shake"
+  | "projectile"
+  | "stars"
+  | "glow"
+  | "heat"
+  | "lights";
 
 export type EffectParams = Record<string, number | string | boolean>;
 
@@ -268,6 +307,8 @@ export interface ClipDef {
    * end (a hard cut). Use for urgent beats out of gentle idle loops.
    */
   interrupt?: boolean;
+  /** Fire MIDI/OSC when this clip passes these times. */
+  markers?: MediaMarker[];
 }
 
 /**
@@ -310,8 +351,97 @@ export interface ActorLayout {
   shadow: number;
 }
 
+export type TextFont = "serif" | "sans" | "display" | "mono";
+export type TextAnim = "cut" | "fade" | "rise" | "letters" | "words" | "burn" | "typewriter";
+
+/** Titles, captions and verses drawn on the wall ("A FEW WEEKS LATER", FOREVER, Romans 10:13). */
+export interface TextComponent extends ComponentBase {
+  kind: "text";
+  /** Use \n for line breaks. */
+  text: string;
+  font: TextFont;
+  weight: number;
+  italic: boolean;
+  uppercase: boolean;
+  /** Line height as a fraction of canvas height. */
+  size: number;
+  color: string;
+  glow: number;
+  glowColor: string;
+  /** In em. */
+  letterSpacing: number;
+  lineHeight: number;
+  align: "left" | "center" | "right";
+  /** Normalized centre of the text block (0..1, y down). */
+  x: number;
+  y: number;
+  /** Wrap width as a fraction of canvas width (0 = no wrapping). */
+  width: number;
+  shadow: number;
+  blend: BlendMode;
+  /** stagger: seconds between letters/words for the staggered animations. */
+  anim: { enter: TextAnim; exit: TextAnim; duration: number; stagger: number };
+}
+
+export type NamesStyle = "tree" | "line" | "roll" | "fly";
+
+/**
+ * The genealogy: a list of names revealed one GO at a time. "tree" grows gold branches up
+ * from a root (David → Josiah), can burn down to a stump (Babylon) and bloom again (Scene 16);
+ * "line" is the thin shoot with small plain letters; "roll" shows one big name at a time;
+ * "fly" lifts each name up and out like an ember.
+ */
+export interface NamesComponent extends ComponentBase {
+  kind: "names";
+  names: string[];
+  style: NamesStyle;
+  font: TextFont;
+  color: string;
+  glow: number;
+  /** Text size as a fraction of canvas height. */
+  size: number;
+  /** Root position (normalized). */
+  x: number;
+  y: number;
+  /** Vertical extent (fraction of canvas height) and horizontal spread (fraction of width). */
+  height: number;
+  spread: number;
+  /** Seconds a name takes to bloom. */
+  reveal: number;
+  branchColor: string;
+  seed: number;
+  /** Crown/top ornament text for the tree (e.g. "FOREVER" or "JESUS"); empty = none. */
+  crown: string;
+}
+
+/** A glowing line tracing a journey across a map (Bethlehem → Nazareth). */
+export interface RouteComponent extends ComponentBase {
+  kind: "route";
+  /** Map image (optional: the line can be drawn over any background). */
+  assetId: string | null;
+  fit: FitMode;
+  anchorY?: number;
+  /** Normalized over the map frame (0..1, y down). */
+  points: Vec2[];
+  color: string;
+  /** Line width as a fraction of canvas height. */
+  width: number;
+  glow: number;
+  /** Seconds to draw the whole line. */
+  duration: number;
+  label: string;
+  labelColor: string;
+  labelSize: number;
+  /** Ken Burns move on the map during the draw (or on show when there is no line). */
+  zoom: KenBurns;
+  opacity: number;
+}
+
 export type SceneComponent =
   | BackgroundComponent
+  | TextComponent
+  | NamesComponent
+  | RouteComponent
   | ClipActorComponent
   | ProceduralComponent
   | VideoLayerComponent
@@ -321,6 +451,8 @@ export type SceneComponent =
   | EffectComponent;
 
 export type ComponentKind = SceneComponent["kind"];
+
+export type CameraEase = "linear" | "inOut" | "out" | "smooth";
 
 export interface CameraPose {
   position: Vec3;
@@ -334,13 +466,13 @@ export interface CameraShot {
   name: string;
   pose: CameraPose;
   duration: number;
-  ease: "linear" | "inOut" | "out";
-  /** When set, the target (and an offset position) are taken from this actor at trigger time. */
+  ease: CameraEase;
+  /** When set, the camera keeps following this actor (target and an offset position) after the move. */
   followActorId: string | null;
   followOffset: Vec3;
 }
 
-export type TransitionKind = "cut" | "crossfade" | "fadeblack" | "dissolve" | "video" | "travel";
+export type TransitionKind = "cut" | "crossfade" | "fadeblack" | "dissolve" | "video" | "travel" | "wipe" | "burn";
 
 export interface TransitionSpec {
   kind: TransitionKind;
@@ -349,6 +481,10 @@ export interface TransitionSpec {
   audioAssetId: string | null;
   /** For travel: how far the virtual camera flies (metres). */
   travelDistance: number;
+  /** For wipe: where the new picture comes from. */
+  direction?: "left" | "right" | "up" | "down";
+  /** For wipe/burn: edge softness (0..1). */
+  softness?: number;
 }
 
 export type CueAction =
@@ -365,7 +501,21 @@ export type CueAction =
   /** Play a clip on a video actor (queued to the next matching cut point); clipId null clears the actor. */
   | { type: "clip"; actorId: string; clipId: string | null; delay: number }
   /** Fade the whole wall to black (lights out) or back. Acts on the live output. */
-  | { type: "blackout"; on: boolean; fade: number; delay: number };
+  | { type: "blackout"; on: boolean; fade: number; delay: number }
+  /** Freeze / unfreeze every moving thing in the scene. */
+  | { type: "clock"; op: "pause" | "resume" | "toggle"; delay: number }
+  /** Play a sound once (on the audio host). */
+  | { type: "sound"; assetId: string | null; volume: number; delay: number }
+  /** Send MIDI / OSC to a console or another machine. */
+  | { type: "send"; message: IoMessage; delay: number }
+  /** Drive a names component: reveal the next name, burn the tree, bloom it… */
+  | { type: "names"; layerId: string; op: "next" | "prev" | "reset" | "all" | "set" | "burn" | "restore" | "bloom"; value: number; duration: number; delay: number }
+  /** Draw / reset a map route. */
+  | { type: "route"; layerId: string; op: "play" | "reset" | "complete"; delay: number }
+  /** Ramp a video's playback speed (time-lapse stings, the rewind, the run). */
+  | { type: "media.speed"; layerId: string; rate: number; duration: number; delay: number }
+  /** Change one live parameter of an effect (stars turn red, snow gets heavier…). */
+  | { type: "effect.param"; effectId: string; key: string; value: number | string | boolean; delay: number };
 
 export type CueActionType = CueAction["type"];
 
@@ -392,6 +542,29 @@ export interface Scene {
   transition: TransitionSpec;
   thumbnail: string | null;
   look?: LookSettings;
+  /** Subtle hand-held drift of the virtual camera (and 2.5D parallax on plates). */
+  cameraMotion?: CameraMotion;
+  /** Lighting for 3D objects composited over a flat plate (environment "none"). */
+  plateLight?: PlateLight;
+}
+
+export interface CameraMotion {
+  /** 0 = locked off, 1 = noticeable hand-held. */
+  sway: number;
+  /** Cycles per second of the slowest drift. */
+  speed: number;
+}
+
+export interface PlateLight {
+  /** Key light direction: azimuth (degrees, 0 = from the audience, 90 = from the right) and elevation. */
+  azimuth: number;
+  elevation: number;
+  color: string;
+  intensity: number;
+  ambient: string;
+  ambientIntensity: number;
+  /** Contact shadow strength on the invisible ground. */
+  shadow: number;
 }
 
 export interface EffectPreset {
@@ -410,6 +583,78 @@ export interface Project {
   output: OutputSettings;
   /** Built-in demo content already merged into this show file (so deletions stick). */
   demoAdditions?: string[];
+  /** MIDI / OSC integration (lighting console, sound). */
+  io?: IoSettings;
+}
+
+// ---------------------------------------------------------------- show control I/O
+
+export type IoMessage =
+  | { type: "midi.note"; channel: number; note: number; velocity: number; /** ms until note-off; 0 = note-on only */ hold: number }
+  | { type: "midi.cc"; channel: number; cc: number; value: number }
+  | { type: "midi.pc"; channel: number; program: number }
+  /** MIDI Show Control (what lighting consoles listen for). */
+  | { type: "msc"; deviceId: number; command: "go" | "stop" | "resume"; cue: string; list: string }
+  | { type: "osc"; target: string | null; address: string; args: (number | string)[] };
+
+export type IoMatch =
+  | { type: "midi.note"; channel: number | null; note: number }
+  | { type: "midi.cc"; channel: number | null; cc: number; value: number | null }
+  | { type: "midi.pc"; channel: number | null; program: number }
+  | { type: "msc"; cue: string | null; list: string | null }
+  | { type: "osc"; address: string; arg: number | string | null };
+
+/** What an incoming trigger does to the show. */
+export type IoAction =
+  | { type: "go" }
+  | { type: "back" }
+  | { type: "take"; sceneId: string }
+  | { type: "takeNext" }
+  | { type: "fireCue"; sceneId: string; index: number }
+  | { type: "blackout"; on: boolean | "toggle" }
+  | { type: "standby"; on: boolean | "toggle" }
+  | { type: "freeze"; op: "pause" | "resume" | "toggle" }
+  | { type: "select"; sceneId: string }
+  | { type: "selectNext" }
+  | { type: "selectPrev" };
+
+export interface IoTrigger {
+  id: string;
+  name: string;
+  enabled: boolean;
+  match: IoMatch;
+  action: IoAction;
+}
+
+export interface OscTarget {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+}
+
+export interface IoSettings {
+  midi: {
+    enabled: boolean;
+    input: string | null;
+    output: string | null;
+    /** MSC device id this show answers to (0–111, 127 = all). */
+    mscDeviceId: number;
+    /**
+     * Follow MSC GO automatically: cue "12" takes scene 12, cue "12.3" fires cue 3 of scene 12
+     * (taking the scene first if needed).
+     */
+    mscAuto: boolean;
+  };
+  osc: {
+    enabled: boolean;
+    listenPort: number;
+    targets: OscTarget[];
+    /** Send /sls/scene and /sls/cue to this target on every TAKE and GO. */
+    notifyTarget: string | null;
+    notify: boolean;
+  };
+  triggers: IoTrigger[];
 }
 
 // ---------------------------------------------------------------- runtime
@@ -428,6 +673,37 @@ export interface LayerRuntime {
   changedAt: number;
   /** Scene time media playback (re)started. */
   startAt: number;
+}
+
+/** Linear playback-speed ramp; media time is its integral so a ramp never jumps. */
+export interface SpeedRamp {
+  from: number;
+  to: number;
+  /** Scene time ms the ramp started and the media-elapsed seconds at that moment. */
+  at: number;
+  dur: number;
+  elapsedAt: number;
+}
+
+export interface NamesRuntime {
+  /** Names revealed so far; the last one blooms from `shownAt`. */
+  shown: number;
+  shownAt: number;
+  /** 0 = whole, 1 = burned to the stump. */
+  burn: Tween;
+  /** 0 = gold branches, 1 = full blossom (Scene 16). */
+  bloom: Tween;
+}
+
+export interface RouteRuntime {
+  progress: Tween;
+}
+
+export interface SoundEvent {
+  id: string;
+  assetId: string;
+  at: number;
+  volume: number;
 }
 
 export interface EffectRuntime {
@@ -453,7 +729,11 @@ export interface CameraRuntime {
   to: CameraPose;
   at: number;
   dur: number;
-  ease: CameraShot["ease"];
+  ease: CameraEase;
+  /** Velocity at the start of the move (units/s); lets a new move continue smoothly out of the old one. */
+  fromVel?: CameraPose;
+  /** Keep tracking this actor after the move. */
+  follow?: { actorId: string; offset: Vec3 } | null;
 }
 
 /**
@@ -475,6 +755,12 @@ export interface SceneRuntime {
   clipActors: Record<string, ClipActorRuntime>;
   /** One-shot effect events (shake, projectile): scene time they fired. */
   triggers?: { id: string; effectId: string; at: number }[];
+  names?: Record<string, NamesRuntime>;
+  routes?: Record<string, RouteRuntime>;
+  /** Playback speed ramps by media component id. */
+  speed?: Record<string, SpeedRamp>;
+  /** One-shot sounds (scene time). */
+  sounds?: SoundEvent[];
 }
 
 export interface ClipSegment {

@@ -1,8 +1,6 @@
 import { create } from "zustand";
 import { now } from "@/core/clock";
-import { EFFECT_DEFS } from "@/core/effects";
-import { applyCommand, createPoses, createRuntime, type Command } from "@/core/runtime";
-import { initialSegments } from "@/core/clipActor";
+import { applyCommand, createPoses, createRuntime, reconcileRuntime, type Command } from "@/core/runtime";
 import type { OutputStatus } from "@/core/bus";
 import { defaultOutput } from "@/core/factories";
 import type {
@@ -35,6 +33,10 @@ interface ShowStore {
   output: OutputSettings;
   outputStatus: OutputStatus | null;
   outputSeenAt: number;
+  /** Wall-clock ms the output heartbeat was lost unexpectedly (null = fine or closed on purpose). */
+  outputLostAt: number | null;
+  /** Wall-clock ms the program state was restored after a reload (for the "resumed" notice). */
+  restoredAt: number | null;
 
   /** Transition chosen in the operator UI for the next TAKE (null = scene default). */
   nextTransition: TransitionSpec | null;
@@ -50,6 +52,10 @@ interface ShowStore {
   setPoses(target: Target, poses: ActorPoses, at: number): void;
   setNextTransition(t: TransitionSpec | null): void;
   setLionControl(p: Partial<ShowStore["lionControl"]>): void;
+  /** Bring a saved program back after a reload/crash; the scene clock keeps running from where it was. */
+  restoreProgram(program: ProgramState, poses: ActorPoses): void;
+  /** The live scene was edited and saved: push the new definition without restarting it. */
+  refreshProgramScene(scene: Scene): void;
 }
 
 const emptyProgram = (): ProgramState => ({
@@ -59,32 +65,6 @@ const emptyProgram = (): ProgramState => ({
   transition: null,
   takeCount: 0,
 });
-
-/** Keep a running preview in sync with edits to its scene without restarting it. */
-function reconcile(rt: SceneRuntime, scene: Scene): SceneRuntime {
-  const layers = { ...rt.layers };
-  const effects = { ...rt.effects };
-  const ids = new Set(scene.components.map((c) => c.id));
-  for (const c of scene.components) {
-    if ((c.kind === "video" || c.kind === "image" || c.kind === "model" || c.kind === "procedural") && !layers[c.id]) {
-      layers[c.id] = { visible: c.initiallyVisible, changedAt: -1e9, startAt: 0 };
-    }
-    if (c.kind === "effect") {
-      const params = { ...EFFECT_DEFS[c.effect].defaults, ...c.params };
-      effects[c.id] = effects[c.id] ? { ...effects[c.id], params } : { active: c.initiallyVisible, changedAt: -1e9, params };
-    }
-  }
-  const clipActors = { ...(rt.clipActors ?? {}) };
-  for (const c of scene.components) if (c.kind === "clipActor" && !clipActors[c.id]) clipActors[c.id] = initialSegments(c);
-  for (const id of Object.keys(clipActors)) if (!ids.has(id)) delete clipActors[id];
-  for (const id of Object.keys(layers)) if (!ids.has(id)) delete layers[id];
-  for (const id of Object.keys(effects)) if (!ids.has(id)) delete effects[id];
-  const bgValid = rt.background.current && ids.has(rt.background.current);
-  const background = bgValid
-    ? rt.background
-    : { current: scene.components.find((c) => c.kind === "background")?.id ?? null, previous: null, changedAt: -1e9, dur: 0 };
-  return { ...rt, scene: structuredClone(scene), layers, effects, background, clipActors };
-}
 
 export const useShow = create<ShowStore>((set, get) => ({
   program: emptyProgram(),
@@ -98,6 +78,8 @@ export const useShow = create<ShowStore>((set, get) => ({
   output: defaultOutput(),
   outputStatus: null,
   outputSeenAt: 0,
+  outputLostAt: null,
+  restoredAt: null,
   nextTransition: null,
   lionControl: { armed: false, actorId: null, target: "program" },
 
@@ -105,7 +87,7 @@ export const useShow = create<ShowStore>((set, get) => ({
     const cur = get().preview;
     if (!scene) return set({ preview: null, previewPoses: {} });
     if (opts?.keepState && cur && cur.scene.id === scene.id) {
-      const rt = reconcile(cur, scene);
+      const rt = reconcileRuntime(cur, scene);
       const poses = { ...get().previewPoses };
       const fresh = createPoses(scene);
       for (const id of Object.keys(fresh)) if (!poses[id]) poses[id] = fresh[id];
@@ -192,6 +174,17 @@ export const useShow = create<ShowStore>((set, get) => ({
 
   setNextTransition: (t) => set({ nextTransition: t }),
   setLionControl: (p) => set({ lionControl: { ...get().lionControl, ...p } }),
+
+  restoreProgram(program, poses) {
+    // A transition that was running when we went down is over by now.
+    set({ program: { ...program, transition: null }, programPoses: poses, fromPoses: null, posesAt: now(), restoredAt: now() });
+  },
+
+  refreshProgramScene(scene) {
+    const { program } = get();
+    if (!program.runtime || program.runtime.scene.id !== scene.id) return;
+    set({ program: { ...program, runtime: reconcileRuntime(program.runtime, scene) } });
+  },
 }));
 
 export const runtimeFor = (target: Target) => {

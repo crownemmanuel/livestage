@@ -6,6 +6,7 @@ import { startProgramAudio, unlockAudio } from "@/engine/audio";
 import { StageView } from "@/render/StageView";
 import { useShow } from "@/store/show";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
+import { ErrorBoundary, installGlobalErrorLog } from "@/ui/ErrorBoundary";
 
 /**
  * Audience output window: a pure view of the operator's program state.
@@ -18,6 +19,7 @@ export function OutputApp() {
 
   useEffect(() => {
     document.body.classList.add("output-window");
+    installGlobalErrorLog();
     preloadPhotoAssets();
     const off = onBus((msg) => {
       if (msg.type === "project") useShow.setState({ assets: msg.assets, output: msg.output });
@@ -84,7 +86,9 @@ export function OutputApp() {
 
   return (
     <div className="fixed inset-0 bg-black">
-      <StageView source="program" isOutput scaling={scaling} maxDpr={3} showSafeArea={safe} audio={audioHere} />
+      <ErrorBoundary name="output" retryAfter={1000} fallback={null}>
+        <StageView source="program" isOutput scaling={scaling} maxDpr={3} showSafeArea={safe} audio={audioHere} />
+      </ErrorBoundary>
     </div>
   );
 }

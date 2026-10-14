@@ -15,6 +15,12 @@ const LAYERS = [
   { count: 9000, near: 6, far: 22, alpha: 0.3 },
   { count: 20000, near: 22, far: 80, alpha: 0.26 },
 ];
+/** Snow: far fewer, bigger, slower flakes. */
+const SNOW_LAYERS = [
+  { count: 700, near: 1.2, far: 6, alpha: 0.9 },
+  { count: 2600, near: 6, far: 22, alpha: 0.8 },
+  { count: 5000, near: 22, far: 70, alpha: 0.6 },
+];
 
 function dropGeometry(count: number, seed: number) {
   const r = rng(seed);
@@ -91,15 +97,66 @@ void main() {
 }
 `;
 
+// Snow: flakes drift sideways on two slow sines, tumble, and are drawn as soft discs.
+const snowVert = /* glsl */ `
+attribute vec4 aSeed;
+attribute vec2 aCorner;
+uniform float uTime;
+uniform float uSpeed;
+uniform float uWind;
+uniform float uFrac;
+uniform float uNear;
+uniform float uFar;
+uniform float uYaw;
+uniform float uSize;
+uniform vec3 uCam;
+varying float vA;
+varying vec2 vC;
+void main() {
+  float depth = mix(uNear, uFar, aSeed.z);
+  float H = 7.0 + depth * 0.7;
+  float sp = uSpeed * (0.7 + aSeed.w * 0.6);
+  float y = mod(aSeed.y * H - uTime * sp, H) - H * 0.45;
+  float ph = aSeed.x * 40.0;
+  float sway = sin(uTime * (0.6 + aSeed.w) + ph) * (0.25 + depth * 0.04) + sin(uTime * 1.7 + ph * 2.0) * 0.08;
+  float x = (aSeed.x - 0.5) * 2.0 * depth * 1.8 + uWind * (uTime * 0.35 + y * 0.4) + sway;
+  float size = uSize * (0.012 + 0.03 * aSeed.w) * (0.6 + depth * 0.06);
+  vec3 p = vec3(x, y, -depth);
+  p.x += aCorner.x * size;
+  p.y += (aCorner.y - 0.5) * 2.0 * size;
+  float c = cos(uYaw);
+  float s = sin(uYaw);
+  p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z) + uCam;
+  float pick = fract(aSeed.x * 91.7 + aSeed.z * 17.3 + aSeed.y * 3.1);
+  vA = pick < uFrac ? 1.0 : 0.0;
+  vC = vec2(aCorner.x, (aCorner.y - 0.5) * 2.0);
+  gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+}
+`;
+const snowFrag = /* glsl */ `
+uniform vec3 uColor;
+uniform float uOpacity;
+varying float vA;
+varying vec2 vC;
+void main() {
+  if (vA < 0.5) discard;
+  float r = dot(vC, vC);
+  float a = smoothstep(1.0, 0.15, r) * uOpacity;
+  gl_FragColor = vec4(uColor, a);
+  #include <colorspace_fragment>
+}
+`;
+
 export function Rain({ comp, preset }: { comp: EffectComponent; preset: EnvironmentPreset }) {
   const { getRt, frame } = useStage();
+  const snow = comp.effect === "snow";
   const layers = useMemo(
     () =>
-      LAYERS.map((l, i) => {
-        const geo = cached(`rain:${i}`, () => dropGeometry(l.count, 100 + i));
+      (snow ? SNOW_LAYERS : LAYERS).map((l, i) => {
+        const geo = cached(`${snow ? "snow" : "rain"}:${i}`, () => dropGeometry(l.count, (snow ? 300 : 100) + i));
         const mat = new THREE.ShaderMaterial({
-          vertexShader: vert,
-          fragmentShader: frag,
+          vertexShader: snow ? snowVert : vert,
+          fragmentShader: snow ? snowFrag : frag,
           transparent: true,
           depthWrite: false,
           side: THREE.DoubleSide,
@@ -111,6 +168,7 @@ export function Rain({ comp, preset }: { comp: EffectComponent; preset: Environm
             uNear: { value: l.near },
             uFar: { value: l.far },
             uYaw: { value: 0 },
+            uSize: { value: 1 },
             uCam: { value: new THREE.Vector3() },
             uColor: { value: new THREE.Color() },
             uOpacity: { value: 0 },
@@ -142,26 +200,28 @@ export function Rain({ comp, preset }: { comp: EffectComponent; preset: Environm
     const rt = getRt();
     const e = rt?.effects[comp.id];
     const p = e?.params ?? comp.params;
-    const lvl = e ? effectLevel("rain", e.active, e.changedAt, p, frame.t) : 0;
+    const lvl = e ? effectLevel(comp.effect, e.active, e.changedAt, p, frame.t) : 0;
     camera.getWorldDirection(dir);
     const yaw = Math.atan2(-dir.x, -dir.z);
     const intensity = num(p, "intensity", 0.7);
-    const wind = num(p, "wind", 0.25) + (frame.windDir * 2 - 1) * frame.windNow * 0.4;
-    // Rain catches light: brighter against dark skies, flashes with lightning.
-    const lum = 0.6 + 0.4 * frame.ambient + frame.flash * 1.5;
+    const wind = num(p, "wind", snow ? 0.15 : 0.25) + (frame.windDir * 2 - 1) * frame.windNow * (snow ? 0.8 : 0.4);
+    // Rain catches light: brighter against dark skies, flashes with lightning. Snow stays bright.
+    const lum = snow ? 0.75 + 0.25 * frame.ambient + frame.flash : 0.6 + 0.4 * frame.ambient + frame.flash * 1.5;
     for (const l of layers) {
       const u = l.mat.uniforms;
       l.mesh.visible = lvl > 0.001;
       u.uTime.value = frame.ts;
-      u.uSpeed.value = num(p, "speed", 16);
+      u.uSpeed.value = num(p, "speed", snow ? 1.6 : 16);
       u.uWind.value = wind;
       u.uFrac.value = intensity * Math.min(1, lvl * 1.5);
       u.uYaw.value = yaw;
+      u.uSize.value = num(p, "size", 1);
       u.uCam.value.copy(camera.position);
-      u.uColor.value.setRGB(0.62 * lum, 0.66 * lum, 0.74 * lum);
-      u.uOpacity.value = num(p, "opacity", 0.75) * lvl * l.alpha;
+      if (snow) u.uColor.value.setRGB(0.92 * lum, 0.94 * lum, 1.0 * lum);
+      else u.uColor.value.setRGB(0.62 * lum, 0.66 * lum, 0.74 * lum);
+      u.uOpacity.value = num(p, "opacity", snow ? 0.9 : 0.75) * lvl * l.alpha;
     }
-    splash.visible = preset !== "none" && bool(p, "splashes", true) && lvl > 0.01;
+    splash.visible = !snow && preset !== "none" && bool(p, "splashes", true) && lvl > 0.01;
     const su = splashMat.uniforms;
     su.uTime.value = frame.ts;
     su.uFrac.value = intensity * lvl;

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { clamp, now, smoothstep } from "@/core/clock";
 import type { ScalingMode, SceneRuntime } from "@/core/types";
 import { useShow } from "@/store/show";
+import { ErrorBoundary } from "@/ui/ErrorBoundary";
 import { SceneCanvas } from "./SceneCanvas";
 import type { SlotRole, TransitionView } from "./frame";
 
@@ -90,6 +91,7 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
   const capture = useCallback((d: string) => rt && onCapture?.(rt.scene.id, d), [rt, onCapture]);
   if (!rt) return <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">No scene selected</div>;
   return (
+    <ErrorBoundary name="preview canvas" retryAfter={1500} fallback={null}>
     <SceneCanvas
       key={key}
       role="preview"
@@ -107,6 +109,7 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
       background={bg}
       onCapture={onCapture ? capture : undefined}
     />
+    </ErrorBoundary>
   );
 }
 
@@ -161,7 +164,7 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, isOutput, audio }: 
         if (tr) {
           if (kind === "crossfade") o = isIn ? smoothstep(0, 1, p) : 1;
           else if (kind === "fadeblack") o = isIn ? (p >= 0.5 ? 1 : 0) : p < 0.5 ? 1 : 0;
-          else if (kind === "dissolve") o = 1;
+          else if (kind === "dissolve" || kind === "wipe" || kind === "burn") o = 1;
           else if (kind === "travel") o = isIn ? smoothstep(0.38, 0.62, p) : 1;
           else if (kind === "video") o = isIn ? (p > 0.85 ? 1 : 0) : p > 0.9 ? 0 : 1;
           if (isOut && tr.fromStandby) o = 0;
@@ -289,7 +292,9 @@ function ProgramCanvas({ rt, role, W, H, dpr, isOutput, audio }: { rt: SceneRunt
     return { poses: s.fromPoses ?? {}, at: s.posesAt };
   }, [key]);
   const getTransition = useCallback(() => transitionView(key), [key]);
+  // A render error in one scene must never blank the wall: the canvas rebuilds itself.
   return (
+    <ErrorBoundary name={`${role} canvas`} retryAfter={1200} fallback={null}>
     <SceneCanvas
       role={role}
       runtime={rt}
@@ -305,6 +310,7 @@ function ProgramCanvas({ rt, role, W, H, dpr, isOutput, audio }: { rt: SceneRunt
       targetFps={targetFps}
       background={bg}
     />
+    </ErrorBoundary>
   );
 }
 

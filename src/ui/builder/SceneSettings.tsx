@@ -2,8 +2,8 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { EnvironmentPreset, Scene, TransitionKind } from "@/core/types";
 import { useProject } from "@/store/project";
-import { AssetField, Field, NumberField, NumberInput, Section, SelectField, SliderField, SwitchField, TextField } from "../fields";
-import { defaultLook } from "@/core/factories";
+import { AssetField, ColorField, Field, NumberField, NumberInput, Section, SelectField, SliderField, SwitchField, TextField } from "../fields";
+import { defaultCameraMotion, defaultLook, defaultPlateLight } from "@/core/factories";
 import type { LookSettings } from "@/core/types";
 import { TRANSITIONS } from "../show/ShowMode";
 
@@ -47,6 +47,22 @@ export function SceneSettings({ scene }: { scene: Scene }) {
           {scene.transition.kind === "travel" && (
             <SliderField label="Flight distance" value={scene.transition.travelDistance} min={10} max={300} step={5} unit="m" onChange={(v) => up((s) => (s.transition.travelDistance = v))} />
           )}
+          {scene.transition.kind === "wipe" && (
+            <SelectField
+              label="Comes from"
+              value={scene.transition.direction ?? "left"}
+              onChange={(v) => up((s) => (s.transition.direction = v))}
+              options={[
+                { value: "left", label: "Left" },
+                { value: "right", label: "Right" },
+                { value: "up", label: "Top" },
+                { value: "down", label: "Bottom" },
+              ]}
+            />
+          )}
+          {(scene.transition.kind === "wipe" || scene.transition.kind === "burn") && (
+            <SliderField label="Edge softness" value={scene.transition.softness ?? 0.3} min={0} max={1} step={0.01} onChange={(v) => up((s) => (s.transition.softness = v))} />
+          )}
           <AssetField label="Transition audio" type="audio" value={scene.transition.audioAssetId} onChange={(v) => up((s) => (s.transition.audioAssetId = v))} />
           <p className="text-[10.5px] leading-snug text-muted-foreground">
             Video transitions play full-frame; the destination scene loads underneath and is revealed as the video ends, so there is no black frame.
@@ -54,6 +70,8 @@ export function SceneSettings({ scene }: { scene: Scene }) {
         </Section>
       </div>
       <div>
+        <CameraMotionSection scene={scene} up={up} />
+        {scene.environment === "none" && <PlateLightSection scene={scene} up={up} />}
         <LookSection scene={scene} up={up} />
         <Section
           title="Stage markers (x, z metres)"
@@ -99,6 +117,45 @@ function MarkerName({ name, onRename }: { name: string; onRename: (n: string) =>
       key={name}
       onBlur={(e) => e.target.value.trim() !== name && onRename(e.target.value.trim())}
     />
+  );
+}
+
+function CameraMotionSection({ scene, up }: { scene: Scene; up: (fn: (s: Scene) => void) => void }) {
+  const cm = scene.cameraMotion ?? defaultCameraMotion();
+  const set = (fn: (c: NonNullable<Scene["cameraMotion"]>) => void) =>
+    up((s) => {
+      s.cameraMotion ??= defaultCameraMotion();
+      fn(s.cameraMotion);
+    });
+  return (
+    <Section title="Camera feel">
+      <SliderField label="Hand-held sway" value={cm.sway} min={0} max={1} step={0.01} onChange={(v) => set((c) => (c.sway = v))} />
+      <SliderField label="Sway speed" value={cm.speed} min={0.02} max={0.5} step={0.01} unit="Hz" onChange={(v) => set((c) => (c.speed = v))} />
+      <p className="text-[10.5px] leading-snug text-muted-foreground">
+        A little drift keeps a still plate alive. On flat plates it needs a Parallax value on the background (Inspector) to show; cut-out actors then drift more than the plate, which reads as depth.
+      </p>
+    </Section>
+  );
+}
+
+function PlateLightSection({ scene, up }: { scene: Scene; up: (fn: (s: Scene) => void) => void }) {
+  const pl = scene.plateLight ?? defaultPlateLight();
+  const set = (fn: (c: NonNullable<Scene["plateLight"]>) => void) =>
+    up((s) => {
+      s.plateLight ??= defaultPlateLight();
+      fn(s.plateLight);
+    });
+  return (
+    <Section title="3D lighting over the plate">
+      <p className="text-[10.5px] leading-snug text-muted-foreground">Match the key light to the footage so 3D models and the lion sit in the picture. Azimuth 0° lights from the audience, 90° from stage right.</p>
+      <SliderField label="Key azimuth" value={pl.azimuth} min={-180} max={180} step={1} unit="°" onChange={(v) => set((c) => (c.azimuth = v))} />
+      <SliderField label="Key elevation" value={pl.elevation} min={2} max={89} step={1} unit="°" onChange={(v) => set((c) => (c.elevation = v))} />
+      <ColorField label="Key colour" value={pl.color} onChange={(v) => set((c) => (c.color = v))} />
+      <SliderField label="Key intensity" value={pl.intensity} min={0} max={8} step={0.05} onChange={(v) => set((c) => (c.intensity = v))} />
+      <ColorField label="Ambient colour" value={pl.ambient} onChange={(v) => set((c) => (c.ambient = v))} />
+      <SliderField label="Ambient" value={pl.ambientIntensity} min={0} max={3} step={0.05} onChange={(v) => set((c) => (c.ambientIntensity = v))} />
+      <SliderField label="Contact shadow" value={pl.shadow} min={0} max={1} step={0.01} onChange={(v) => set((c) => (c.shadow = v))} />
+    </Section>
   );
 }
 

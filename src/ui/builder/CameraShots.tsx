@@ -21,7 +21,7 @@ export function CameraShots({ scene }: { scene: Scene }) {
   return (
     <div className="space-y-2 p-3">
       <div className="flex items-center gap-2">
-        <p className="flex-1 text-[11px] text-muted-foreground">Saved camera moves. Triggering one glides the virtual camera from wherever it is to this framing.</p>
+        <p className="flex-1 text-[11px] text-muted-foreground">Saved camera moves. Triggering one glides the virtual camera from wherever it is (carrying its current speed, so moves chain without a kink) to this framing. A shot that follows the lion keeps tracking it after the move.</p>
         <Button
           size="xs"
           variant="outline"
@@ -59,7 +59,7 @@ export function CameraShots({ scene }: { scene: Scene }) {
             <Vec3Field label="Look at" value={sh.pose.target} onChange={(v) => upShot(sh.id, (x) => (x.pose.target = v))} />
             <SliderField label="Field of view" value={sh.pose.hfov} min={15} max={120} step={1} unit="°" onChange={(v) => upShot(sh.id, (x) => (x.pose.hfov = v))} />
             <NumberField label="Move time (s)" value={sh.duration} min={0} step={0.5} onChange={(v) => upShot(sh.id, (x) => (x.duration = v))} />
-            <SelectField label="Easing" value={sh.ease} onChange={(v) => upShot(sh.id, (x) => (x.ease = v))} options={[{ value: "inOut", label: "Ease in-out" }, { value: "out", label: "Ease out" }, { value: "linear", label: "Linear" }]} />
+            <SelectField label="Easing" value={sh.ease} onChange={(v) => upShot(sh.id, (x) => (x.ease = v))} options={[{ value: "smooth", label: "Smooth (cinematic)" }, { value: "inOut", label: "Ease in-out" }, { value: "out", label: "Ease out" }, { value: "linear", label: "Linear" }]} />
             <Field label="Follow actor">
               <SelectBox
                 value={sh.followActorId ?? "__none__"}

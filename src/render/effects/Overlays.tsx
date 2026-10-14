@@ -290,27 +290,61 @@ export function LightningOverlay({ comp, flat }: { comp: EffectComponent; flat: 
 
 // ---------------------------------------------------------------- transitions
 
-const dissolveFrag = /* glsl */ `
+const maskFrag = /* glsl */ `
 uniform float uP;
 uniform float uAspect;
+uniform float uKind;   // 0 dissolve, 1 wipe, 2 burn
+uniform vec2 uDir;
+uniform float uSoft;
 varying vec2 vUv;
 ${NOISE_GLSL}
+float field(vec2 uv) {
+  if (uKind > 0.5 && uKind < 1.5) {
+    // directional wipe with a ragged, soft edge
+    float m = dot(uv - 0.5, uDir) + 0.5;
+    return m + (fbm4(vec2(uv.x * uAspect, uv.y) * 5.0) - 0.5) * uSoft * 0.5;
+  }
+  return fbm4(vec2(uv.x * uAspect, uv.y) * 6.0) * 0.7 + hash12(uv * 900.0) * 0.3;
+}
 void main() {
-  float n = fbm4(vec2(vUv.x * uAspect, vUv.y) * 6.0) * 0.7 + hash12(vUv * 900.0) * 0.3;
-  float p = uP * 1.2 - 0.1;
-  float keep = 1.0 - smoothstep(p - 0.08, p + 0.08, n);
+  float n = field(vUv);
+  float soft = uKind > 0.5 && uKind < 1.5 ? 0.02 + uSoft * 0.2 : 0.08;
+  float p = uP * (1.0 + soft * 2.0) - soft;
+  float keep = 1.0 - smoothstep(p - soft, p + soft, n);
   gl_FragColor = vec4(0.0, 0.0, 0.0, keep);
 }
 `;
 
+const burnEdgeFrag = /* glsl */ `
+uniform float uP;
+uniform float uAspect;
+uniform float uTime;
+uniform float uSoft;
+varying vec2 vUv;
+${NOISE_GLSL}
+void main() {
+  float n = fbm4(vec2(vUv.x * uAspect, vUv.y) * 6.0) * 0.7 + hash12(vUv * 900.0) * 0.3;
+  float soft = 0.08;
+  float p = uP * (1.0 + soft * 2.0) - soft;
+  // glowing rim just ahead of the burn front, flickering
+  float edge = smoothstep(p - 0.09 - uSoft * 0.1, p, n) * (1.0 - smoothstep(p, p + 0.02, n));
+  float flick = 0.75 + 0.25 * sin(uTime * 37.0 + n * 90.0);
+  vec3 col = mix(vec3(1.0, 0.25, 0.02), vec3(1.0, 0.85, 0.4), edge) * edge * 2.4 * flick;
+  gl_FragColor = vec4(col, 1.0);
+  #include <colorspace_fragment>
+}
+`;
+
+const DIRS: Record<string, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, 1], down: [0, -1] };
+
 /**
- * Incoming scene during a noise dissolve: punch transparent holes so the
- * outgoing canvas underneath shows through. Multiplies the premultiplied
- * framebuffer (colour and alpha) by the mask.
+ * Incoming scene during a dissolve, wipe or burn: punch transparent holes so the
+ * outgoing canvas underneath shows through. Multiplies the premultiplied framebuffer
+ * (colour and alpha) by the mask; the burn adds a glowing edge on top.
  */
 export function DissolveMask() {
-  const { getTransition, canvasW, canvasH } = useStage();
-  const { mesh, mat } = useQuad(dissolveFrag, { uP: { value: 0 }, uAspect: { value: canvasW / canvasH } }, {
+  const { getTransition, canvasW, canvasH, frame } = useStage();
+  const { mesh, mat } = useQuad(maskFrag, { uP: { value: 0 }, uAspect: { value: canvasW / canvasH }, uKind: { value: 0 }, uDir: { value: new THREE.Vector2(1, 0) }, uSoft: { value: 0.3 } }, {
     blending: THREE.CustomBlending,
     blendEquation: THREE.AddEquation,
     blendSrc: THREE.ZeroFactor,
@@ -318,14 +352,32 @@ export function DissolveMask() {
     blendSrcAlpha: THREE.ZeroFactor,
     blendDstAlpha: THREE.SrcAlphaFactor,
   });
+  const edge = useQuad(burnEdgeFrag, { uP: { value: 0 }, uAspect: { value: canvasW / canvasH }, uTime: { value: 0 }, uSoft: { value: 0.3 } }, { blending: THREE.AdditiveBlending });
   useFrame(() => {
     const tr = getTransition();
-    const on = !!tr && tr.side === "in" && tr.spec.kind === "dissolve" && tr.p < 1;
+    const kind = tr?.spec.kind;
+    const on = !!tr && tr.side === "in" && (kind === "dissolve" || kind === "wipe" || kind === "burn") && tr.p < 1;
     mesh.visible = on;
-    if (on) mat.uniforms.uP.value = clamp(tr!.p, 0, 1);
+    edge.mesh.visible = on && kind === "burn";
+    if (!on) return;
+    const p = clamp(tr!.p, 0, 1);
+    mat.uniforms.uP.value = p;
+    mat.uniforms.uKind.value = kind === "wipe" ? 1 : kind === "burn" ? 2 : 0;
+    const d = DIRS[tr!.spec.direction ?? "left"];
+    mat.uniforms.uDir.value.set(d[0], d[1]);
+    mat.uniforms.uSoft.value = tr!.spec.softness ?? 0.3;
+    edge.mat.uniforms.uP.value = p;
+    edge.mat.uniforms.uTime.value = frame.ts;
+    edge.mat.uniforms.uSoft.value = tr!.spec.softness ?? 0.3;
   });
   mesh.renderOrder = 1000;
-  return <primitive object={mesh} />;
+  edge.mesh.renderOrder = 1001;
+  return (
+    <>
+      <primitive object={mesh} />
+      <primitive object={edge.mesh} />
+    </>
+  );
 }
 
 const travelFrag = /* glsl */ `

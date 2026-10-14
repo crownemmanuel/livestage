@@ -3,6 +3,13 @@ import { uid } from "./ids";
 import type {
   ActorComponent,
   BackgroundComponent,
+  CameraMotion,
+  IoSettings,
+  KenBurns,
+  NamesComponent,
+  PlateLight,
+  RouteComponent,
+  TextComponent,
   ClipActorComponent,
   ClipDef,
   CameraShot,
@@ -309,6 +316,118 @@ export const defaultActorLayout = (): import("./types").ActorLayout => ({
   horizonY: 0.25,
   shadow: 0.5,
 });
+
+export const defaultKenBurns = (): KenBurns => ({
+  enabled: false,
+  from: { x: 0, y: 0, scale: 1 },
+  to: { x: 0.02, y: -0.01, scale: 1.12 },
+  duration: 20,
+  loop: "none",
+});
+
+export const defaultCameraMotion = (): CameraMotion => ({ sway: 0, speed: 0.08 });
+
+export const defaultPlateLight = (): PlateLight => ({
+  azimuth: 35,
+  elevation: 40,
+  color: "#fff1dc",
+  intensity: 2.6,
+  ambient: "#8a9bb8",
+  ambientIntensity: 0.9,
+  shadow: 0.45,
+});
+
+export function makeText(name = "Title", partial: Partial<TextComponent> = {}): TextComponent {
+  return {
+    id: uid("txt"),
+    kind: "text",
+    name,
+    initiallyVisible: false,
+    text: "TITLE",
+    font: "serif",
+    weight: 500,
+    italic: false,
+    uppercase: true,
+    size: 0.14,
+    color: "#f3ead6",
+    glow: 0.4,
+    glowColor: "#ffd27a",
+    letterSpacing: 0.18,
+    lineHeight: 1.25,
+    align: "center",
+    x: 0.5,
+    y: 0.5,
+    width: 0.9,
+    shadow: 0.3,
+    blend: "normal",
+    anim: { enter: "fade", exit: "fade", duration: 1.5, stagger: 0.08 },
+    ...partial,
+  };
+}
+
+/** Matthew 1 genealogy, David → Joseph, as the script splits it. */
+export const GENEALOGY_GOLD = ["DAVID", "SOLOMON", "REHOBOAM", "ABIJAH", "ASA", "JEHOSHAPHAT", "JORAM", "UZZIAH", "JOTHAM", "AHAZ", "HEZEKIAH", "MANASSEH", "AMON", "JOSIAH", "JECONIAH"];
+export const GENEALOGY_PLAIN = ["SHEALTIEL", "ZERUBBABEL", "ABIUD", "ELIAKIM", "AZOR", "ZADOK", "ACHIM", "ELIUD", "ELEAZAR", "MATTHAN", "JACOB"];
+
+export function makeNames(name = "Family Tree", partial: Partial<NamesComponent> = {}): NamesComponent {
+  return {
+    id: uid("names"),
+    kind: "names",
+    name,
+    initiallyVisible: true,
+    names: [...GENEALOGY_GOLD],
+    style: "tree",
+    font: "serif",
+    color: "#ffd27a",
+    glow: 0.8,
+    size: 0.06,
+    x: 0.5,
+    y: 0.97,
+    height: 0.86,
+    spread: 0.28,
+    reveal: 1.4,
+    branchColor: "#c99a3a",
+    seed: 3,
+    crown: "",
+    ...partial,
+  };
+}
+
+export function makeRoute(name = "Map Route", partial: Partial<RouteComponent> = {}): RouteComponent {
+  return {
+    id: uid("route"),
+    kind: "route",
+    name,
+    initiallyVisible: true,
+    assetId: null,
+    fit: "cover",
+    points: [
+      [0.3, 0.72],
+      [0.36, 0.6],
+      [0.42, 0.48],
+      [0.47, 0.35],
+      [0.55, 0.24],
+    ],
+    color: "#ffd27a",
+    width: 0.008,
+    glow: 1,
+    duration: 8,
+    label: "NAZARETH",
+    labelColor: "#f3ead6",
+    labelSize: 0.06,
+    zoom: { ...defaultKenBurns(), enabled: false, duration: 8 },
+    opacity: 1,
+    ...partial,
+  };
+}
+
+export function defaultIo(): IoSettings {
+  return {
+    midi: { enabled: false, input: null, output: null, mscDeviceId: 0, mscAuto: true },
+    osc: { enabled: false, listenPort: 9000, targets: [{ id: "osc_hog", name: "Hog 4", host: "192.168.1.10", port: 7001 }], notifyTarget: "osc_hog", notify: false },
+    triggers: [],
+  };
+}
 
 export const defaultLook = (): import("./types").LookSettings => ({
   enabled: true,

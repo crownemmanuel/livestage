@@ -45,11 +45,18 @@ export function videoDuration(h: VideoHandle | null) {
   return d && Number.isFinite(d) ? d : 0;
 }
 
-/** Media time (s) for a clip that has been playing for `elapsed` seconds. */
-export function mediaTime(m: MediaSettings, elapsed: number, duration: number): number {
+/**
+ * Media time (s) for a clip that has played `mediaSeconds` of material (speed already
+ * applied). Reverse clips run from the out point back to the in point.
+ */
+export function mediaTime(m: MediaSettings, mediaSeconds: number, duration: number): number {
   const end = m.endTime ?? (duration || 1e9);
   const len = Math.max(0.05, end - m.startTime);
-  const e = Math.max(0, elapsed) * m.playbackRate;
+  const e = Math.max(0, mediaSeconds);
+  if (m.reverse) {
+    const back = m.loop ? e % len : Math.min(e, len);
+    return Math.max(m.startTime, end - 0.02 - back);
+  }
   return m.loop ? m.startTime + (e % len) : Math.min(m.startTime + e, end - 0.02);
 }
 
@@ -59,6 +66,8 @@ export interface SyncWant {
   rate: number;
   muted: boolean;
   volume: number;
+  /** Scrub backwards by seeking (browsers cannot play at negative rates). */
+  reverse?: boolean;
 }
 
 /**
@@ -71,23 +80,26 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
   v.volume = clamp(want.volume, 0, 1);
   if (v.readyState < 1) return;
   const drift = v.currentTime - want.time;
-  if (!want.play) {
+  if (!want.play || want.reverse) {
     if (!v.paused) v.pause();
-    if (Math.abs(drift) > 0.05 && !v.seeking && wallMs - h.lastSeek > 120) {
+    // Paused: park on the wanted frame. Reverse: scrub, at most ~12 seeks a second.
+    const gap = want.reverse ? 80 : 120;
+    if (Math.abs(drift) > (want.reverse ? 0.02 : 0.05) && !v.seeking && wallMs - h.lastSeek > gap) {
       v.currentTime = want.time;
       h.lastSeek = wallMs;
     }
     return;
   }
+  const rate = Math.max(0.0625, Math.min(16, want.rate));
   const wrapped = Math.abs(drift) > (v.duration || 1e9) / 2;
   if ((Math.abs(drift) > 0.3 || wrapped) && !v.seeking && wallMs - h.lastSeek > 400) {
     v.currentTime = want.time;
     h.lastSeek = wallMs;
-    v.playbackRate = want.rate;
+    v.playbackRate = rate;
   } else if (Math.abs(drift) > 0.03) {
-    v.playbackRate = Math.max(0.1, want.rate * (1 - clamp(drift, -0.25, 0.25) * 0.6));
-  } else {
-    v.playbackRate = want.rate;
+    v.playbackRate = Math.max(0.1, rate * (1 - clamp(drift, -0.25, 0.25) * 0.6));
+  } else if (Math.abs(v.playbackRate - rate) > 0.001) {
+    v.playbackRate = rate;
   }
   if (v.paused) {
     v.play().catch(() => {

@@ -1,25 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { clamp, easeOut } from "@/core/clock";
+import { clamp, easeOut, lerp, smootherstep } from "@/core/clock";
 import { playableUrl } from "@/core/platform";
 import { hash2 } from "@/core/noise";
-import type { BackgroundComponent, EntranceKind, ImageLayerComponent, VideoLayerComponent } from "@/core/types";
+import { mediaElapsed, mediaRate } from "@/core/runtime";
+import type { BackgroundComponent, EntranceKind, ImageLayerComponent, KenBurns, VideoLayerComponent } from "@/core/types";
 import { useStage } from "../frame";
 import { applyBlend, applyMediaSettings, makeMediaMaterial, missingTexture, setMap } from "./mediaMaterial";
 import { mediaTime, syncVideo, useVideo, videoDuration, type VideoHandle } from "./video";
 
-function useImageTexture(url: string | null) {
+export function useImageTexture(url: string | null) {
   const [tex, setTex] = useState<THREE.Texture | null>(null);
   useEffect(() => {
     if (!url) return setTex(null);
     let alive = true;
-    new THREE.TextureLoader().load(url, (t) => {
-      t.colorSpace = THREE.SRGBColorSpace;
-      t.anisotropy = 8;
-      if (alive) setTex(t);
-      else t.dispose();
-    });
+    new THREE.TextureLoader().load(
+      url,
+      (t) => {
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.anisotropy = 8;
+        if (alive) setTex(t);
+        else t.dispose();
+      },
+      undefined,
+      (e) => console.warn("image failed", url, e),
+    );
     return () => {
       alive = false;
     };
@@ -51,6 +57,19 @@ function entrance(kind: EntranceKind, k: number) {
     case "scale":
       return { opacity: k, dx: 0, dy: 0, scale: 0.6 + 0.4 * e };
   }
+}
+
+/** Ken Burns state at `elapsed` seconds: pan (canvas fractions) and scale. */
+export function kenBurnsAt(kb: KenBurns | undefined, elapsed: number) {
+  if (!kb?.enabled) return { x: 0, y: 0, scale: 1 };
+  let k = kb.duration > 0 ? elapsed / kb.duration : 1;
+  if (kb.loop === "loop") k = k - Math.floor(k);
+  else if (kb.loop === "pingpong") {
+    const c = k - Math.floor(k / 2) * 2;
+    k = c <= 1 ? c : 2 - c;
+  } else k = clamp(k, 0, 1);
+  k = smootherstep(k);
+  return { x: lerp(kb.from.x, kb.to.x, k), y: lerp(kb.from.y, kb.to.y, k), scale: lerp(kb.from.scale, kb.to.scale, k) };
 }
 
 type LayerComp = VideoLayerComponent | ImageLayerComponent;
@@ -158,8 +177,11 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
 
     if (video) {
       const m = (comp as VideoLayerComponent).media;
-      const time = mediaTime(m, inst.elapsed + (comp.walker.enabled ? index * 1.37 : 0), videoDuration(video));
-      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: m.playbackRate, muted: m.muted || !audio, volume: m.volume * presence }, frame.wall);
+      // Walkers stagger their playback; a single layer follows the speed ramps.
+      const mediaSec = comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
+      const time = mediaTime(m, mediaSec, videoDuration(video));
+      const rate = comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
+      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, volume: m.volume * presence, reverse: m.reverse || rate < 0 }, frame.wall);
     }
     if (!show) return;
 
@@ -194,7 +216,9 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
     } else {
       const wpx = comp.screen.width * canvasW * scale;
       mesh.scale.set(wpx, wpx / aspect, 1);
-      mesh.position.set((inst.x + anim.dx - 0.5) * canvasW, (0.5 - inst.y - dy) * canvasH, 0);
+      // Front layers (closest to the audience) drift the most with the camera sway.
+      const par = plateParallax(rt) * (comp.placement === "front" ? 1.6 : 0.6);
+      mesh.position.set((inst.x + anim.dx - 0.5) * canvasW + frame.swayX * par * canvasW, (0.5 - inst.y - dy) * canvasH - frame.swayY * par * canvasH * 0.5, 0);
       mesh.rotation.set(0, 0, (-comp.screen.rotation * Math.PI) / 180 + rot);
     }
   });
@@ -202,9 +226,30 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
   return <primitive object={mesh} />;
 }
 
+/** Parallax amount of the scene's current plate (0 when it has none). */
+export function plateParallax(rt: import("@/core/types").SceneRuntime): number {
+  const bg = rt.scene.components.find((c) => c.id === rt.background.current);
+  return bg?.kind === "background" ? (bg.parallax ?? 0) : 0;
+}
+
+/** Fit a frame of `aspect` into the canvas with the given fit mode and vertical framing. */
+export function fitFrame(fit: "cover" | "contain" | "stretch", aspect: number, canvasW: number, canvasH: number, anchorY = 0.5) {
+  const canvasAspect = canvasW / canvasH;
+  let w = canvasW;
+  let h = canvasH;
+  if (fit === "cover") {
+    if (aspect > canvasAspect) w = canvasH * aspect;
+    else h = canvasW / aspect;
+  } else if (fit === "contain") {
+    if (aspect > canvasAspect) h = canvasW / aspect;
+    else w = canvasH * aspect;
+  }
+  return { w, h, cy: (anchorY - 0.5) * Math.max(0, h - canvasH) };
+}
+
 // ---------------------------------------------------------------- media backgrounds
 
-/** Full-frame media background with fit/crop and crossfade on activation. */
+/** Full-frame media background with fit/crop, crossfade on activation, Ken Burns and parallax. */
 export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
   const { assets, getRt, frame, canvasW, canvasH, isOutput, audio } = useStage();
   const asset = comp.media.assetId ? assets.find((a) => a.id === comp.media.assetId) : undefined;
@@ -228,9 +273,16 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
     const tex = (video?.texture ?? image) || (!isOutput && !asset ? missingTexture() : null);
     mesh.visible = presence > 0 && !!tex;
     mesh.renderOrder = isCur ? 1 : 0;
+    const startAt = isCur && bg.changedAt > -1e8 ? bg.changedAt : 0;
     if (video) {
-      const time = mediaTime(comp.media, (frame.t - (isCur ? bg.changedAt : 0)) / 1000, videoDuration(video));
-      syncVideo(video, { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: comp.media.playbackRate, muted: comp.media.muted || !audio || !isCur, volume: comp.media.volume }, frame.wall);
+      const mediaSec = mediaElapsed(rt, comp.id, startAt, frame.t, comp.media.playbackRate);
+      const rate = mediaRate(rt, comp.id, frame.t, comp.media.playbackRate);
+      const time = mediaTime(comp.media, mediaSec, videoDuration(video));
+      syncVideo(
+        video,
+        { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, volume: comp.media.volume, reverse: comp.media.reverse || rate < 0 },
+        frame.wall,
+      );
     }
     if (!mesh.visible || !tex) return;
     setMap(mat, tex);
@@ -239,18 +291,13 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
     const cw = 1 - comp.crop.left - comp.crop.right;
     const ch = 1 - comp.crop.top - comp.crop.bottom;
     const aspect = (texAspect(tex, (video as VideoHandle | null)?.video ?? null) * cw) / Math.max(0.01, ch);
-    const canvasAspect = canvasW / canvasH;
-    let w = canvasW;
-    let h = canvasH;
-    if (comp.fit === "cover") {
-      if (aspect > canvasAspect) w = canvasH * aspect;
-      else h = canvasW / aspect;
-    } else if (comp.fit === "contain") {
-      if (aspect > canvasAspect) h = canvasW / aspect;
-      else w = canvasH * aspect;
-    }
-    mesh.scale.set(w, h, 1);
-    mesh.position.set(0, ((comp.anchorY ?? 0.5) - 0.5) * Math.max(0, h - canvasH), 0);
+    const { w, h, cy } = fitFrame(comp.fit, aspect, canvasW, canvasH, comp.anchorY ?? 0.5);
+    // Ken Burns pan/zoom, then parallax (overscanned so the edges never show).
+    const kb = kenBurnsAt(comp.kenBurns, (frame.t - startAt) / 1000);
+    const par = comp.parallax ?? 0;
+    const s = kb.scale * (1 + 2 * par);
+    mesh.scale.set(w * s, h * s, 1);
+    mesh.position.set(kb.x * canvasW + frame.swayX * par * canvasW, cy - kb.y * canvasH - frame.swayY * par * canvasH * 0.5, 0);
   });
   return <primitive object={mesh} />;
 }

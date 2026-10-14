@@ -1,9 +1,9 @@
-// Program audio: thunder for lightning strikes. Runs only in the window that
-// is the audio host so sound is never doubled between operator and output.
+// Program audio: thunder for lightning strikes and one-shot sound cues. Runs only in
+// the window that is the audio host so sound is never doubled between operator and output.
 
 import { now } from "@/core/clock";
 import { num, str } from "@/core/effects";
-import type { LightningStrike } from "@/core/types";
+import type { LightningStrike, SoundEvent } from "@/core/types";
 import { useShow } from "@/store/show";
 
 let ctx: AudioContext | null = null;
@@ -55,8 +55,19 @@ function synthThunder(when: number, volume: number, close: boolean) {
 
 const fileCache = new Map<string, Promise<AudioBuffer>>();
 function loadBuffer(url: string) {
-  if (!fileCache.has(url)) fileCache.set(url, fetch(url).then((r) => r.arrayBuffer()).then((b) => audio().decodeAudioData(b)));
+  if (!fileCache.has(url)) {
+    const p = fetch(url)
+      .then((r) => r.arrayBuffer())
+      .then((b) => audio().decodeAudioData(b));
+    p.catch(() => fileCache.delete(url));
+    fileCache.set(url, p);
+  }
   return fileCache.get(url)!;
+}
+
+/** Decode ahead of time so a cue's sound starts on the beat. */
+export function preloadAudio(url: string) {
+  void loadBuffer(url).catch(() => {});
 }
 
 async function playFile(url: string, when: number, volume: number) {
@@ -72,10 +83,12 @@ async function playFile(url: string, when: number, volume: number) {
 
 export function startProgramAudio(isHost: () => boolean): () => void {
   const heard = new Set<string>();
-  // Strikes that existed before this window started are history, not new sounds.
-  for (const s of useShow.getState().program.runtime?.strikes ?? []) heard.add(s.id);
+  // Events that existed before this window started are history, not new sounds.
+  const rt0 = useShow.getState().program.runtime;
+  for (const s of rt0?.strikes ?? []) heard.add(s.id);
+  for (const s of rt0?.sounds ?? []) heard.add(s.id);
 
-  const handle = (strikes: LightningStrike[]) => {
+  const handleStrikes = (strikes: LightningStrike[]) => {
     const s = useShow.getState();
     const rt = s.program.runtime;
     if (!rt) return;
@@ -97,9 +110,28 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     }
   };
 
+  const handleSounds = (sounds: SoundEvent[]) => {
+    const s = useShow.getState();
+    const rt = s.program.runtime;
+    if (!rt) return;
+    for (const ev of sounds) {
+      if (heard.has(ev.id)) continue;
+      heard.add(ev.id);
+      if (!isHost()) continue;
+      const wallAt = rt.clock.base + ev.at;
+      if (now() - wallAt > 1500) continue;
+      const asset = s.assets.find((a) => a.id === ev.assetId);
+      if (!asset) continue;
+      const ac = audio();
+      void playFile(asset.url, ac.currentTime + Math.max(0, (wallAt - now()) / 1000), ev.volume).catch((e) => console.warn("sound failed", e));
+    }
+  };
+
   return useShow.subscribe((s, prev) => {
     const a = s.program.runtime?.strikes;
-    if (a && a !== prev.program.runtime?.strikes) handle(a);
+    if (a && a !== prev.program.runtime?.strikes) handleStrikes(a);
+    const b = s.program.runtime?.sounds;
+    if (b && b !== prev.program.runtime?.sounds) handleSounds(b);
   });
 }
 

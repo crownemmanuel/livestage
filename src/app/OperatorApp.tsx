@@ -1,12 +1,13 @@
 import { useEffect } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { startProgramAudio, unlockAudio } from "@/engine/audio";
-import { cueControl, startOperatorServices, takeScene } from "@/engine/operator";
+import { cancelPending, cueControl, restoreLiveState, startOperatorServices, takeScene } from "@/engine/operator";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
 import { TopBar } from "@/ui/TopBar";
 import { ShowMode } from "@/ui/show/ShowMode";
 import { BuilderMode } from "@/ui/builder/BuilderMode";
+import { ErrorBoundary, installGlobalErrorLog } from "@/ui/ErrorBoundary";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
 
 function syncPreview() {
@@ -17,7 +18,7 @@ function syncPreview() {
 
 function isTyping(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
-  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable || el.getAttribute("role") === "slider");
 }
 
 export function OperatorApp() {
@@ -25,15 +26,21 @@ export function OperatorApp() {
   const mode = useProject((s) => s.mode);
 
   useEffect(() => {
+    installGlobalErrorLog();
     preloadPhotoAssets();
+    // Services first, so the restored program is broadcast and persisted from the first moment.
+    const stopServices = startOperatorServices();
     void useProject
       .getState()
       .load()
-      .then(syncPreview)
       .then(async () => {
+        const resumed = await restoreLiveState();
+        const st = useShow.getState();
+        // Open on the live scene after a reload, otherwise on the first scene.
+        if (resumed && st.program.runtime) useProject.getState().selectScene(st.program.runtime.scene.id);
+        syncPreview();
         if (import.meta.env.DEV && import.meta.env.VITE_SLS_SELFTEST) (await import("@/dev/selftest")).runSelfTest();
       });
-    const stopServices = startOperatorServices();
     const stopAudio = startProgramAudio(() => {
       const s = useShow.getState();
       const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
@@ -54,12 +61,24 @@ export function OperatorApp() {
 
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e)) return;
+      const proj = useProject.getState();
+      const show = useShow.getState();
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
-        const id = useProject.getState().selectedSceneId;
-        if (id && !useShow.getState().program.transition) void takeScene(id);
+        const id = proj.selectedSceneId;
+        if (id && !show.program.transition) void takeScene(id);
       } else if (e.code === "KeyG" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
         cueControl.go("program");
+      } else if (e.code === "KeyB" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.repeat) {
+        show.setBlackout(!show.program.blackout?.on);
+      } else if (e.code === "Escape") {
+        cancelPending("program");
+      } else if ((e.code === "ArrowDown" || e.code === "ArrowUp") && !e.ctrlKey && !e.metaKey && !e.altKey && proj.mode === "show") {
+        e.preventDefault();
+        const scenes = proj.project.scenes;
+        const i = scenes.findIndex((s) => s.id === proj.selectedSceneId);
+        const n = scenes[Math.max(0, Math.min(scenes.length - 1, i + (e.code === "ArrowDown" ? 1 : -1)))];
+        if (n) proj.selectScene(n.id);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -75,8 +94,22 @@ export function OperatorApp() {
   return (
     <TooltipProvider delayDuration={400}>
       <div className="flex h-full flex-col">
-        <TopBar />
-        <div className="min-h-0 flex-1">{!loaded ? <div className="grid h-full place-items-center text-muted-foreground">Loading show…</div> : mode === "show" ? <ShowMode /> : <BuilderMode />}</div>
+        <ErrorBoundary name="top bar">
+          <TopBar />
+        </ErrorBoundary>
+        <div className="min-h-0 flex-1">
+          {!loaded ? (
+            <div className="grid h-full place-items-center text-muted-foreground">Loading show…</div>
+          ) : mode === "show" ? (
+            <ErrorBoundary name="show mode">
+              <ShowMode />
+            </ErrorBoundary>
+          ) : (
+            <ErrorBoundary name="scene builder">
+              <BuilderMode />
+            </ErrorBoundary>
+          )}
+        </div>
       </div>
     </TooltipProvider>
   );

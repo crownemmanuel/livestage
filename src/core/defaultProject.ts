@@ -17,6 +17,7 @@ import {
 import type { Asset, Cue, EffectPreset, Project, Scene } from "./types";
 import { EFFECT_DEFS, num } from "./effects";
 import { uid } from "./ids";
+import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "./showScaffold";
 
 /** Scene 01: David and the Lion — interactive lion on rocky golden hills. */
 function davidAndTheLion(): Scene {
@@ -503,13 +504,28 @@ export function defaultProject(): Project {
       },
     ];
   }
+  const show = showScaffoldScenes();
+  applyPrologueFeel(prologue);
   return {
     version: 1,
     name: "Salvation 2026: The House of David",
-    scenes: [...prologue, s1, proof, s2, photoValley, s3].map((x, i) => ({ ...x, number: i + 1 })),
+    scenes: [...prologue, ...show, s1, proof, s2, photoValley, s3].map((x, i) => ({ ...x, number: i + 1 })),
     assets: [...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS],
-    demoAdditions: [LION_PROOF_DEMO, SHEPHERD_PHOTOREAL_DEMO, PROLOGUE_DEMO, "prologue-tweaks-1"],
+    demoAdditions: [LION_PROOF_DEMO, SHEPHERD_PHOTOREAL_DEMO, PROLOGUE_DEMO, "prologue-tweaks-1", SHOW_SCAFFOLD_DEMO, PROLOGUE_FEEL],
     effectPresets: defaultEffectPresets(),
     output: defaultOutput(),
   };
+}
+
+export const PROLOGUE_FEEL = "prologue-feel-1";
+
+/** A little hand-held drift and 2.5D parallax on the prologue plates that can take it (not Goliath: the stone must still hit the helmet). */
+export function applyPrologueFeel(scenes: Scene[]) {
+  for (const s of scenes) {
+    const isP1 = s.components.some((c) => c.kind === "clipActor" && c.clips.some((k) => k.assetId === "asset_pr_pushin"));
+    const isP3 = s.components.some((c) => c.kind === "clipActor" && c.clips.some((k) => k.assetId === "asset_pr_david_loop"));
+    if (!isP1 && !isP3) continue;
+    s.cameraMotion = { sway: isP1 ? 0.22 : 0.15, speed: 0.06 };
+    for (const c of s.components) if (c.kind === "background" && c.source === "media") c.parallax = isP1 ? 0.012 : 0.008;
+  }
 }

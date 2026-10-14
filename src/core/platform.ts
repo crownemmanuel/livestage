@@ -80,6 +80,7 @@ export async function isOutputOpen(): Promise<boolean> {
 }
 
 export async function openOutputWindow(settings: OutputSettings): Promise<void> {
+  outputClosedByUs = false;
   if (!isTauri) {
     if (!browserOutput || browserOutput.closed) {
       browserOutput = window.open(
@@ -115,7 +116,11 @@ export async function openOutputWindow(settings: OutputSettings): Promise<void> 
   if (settings.fullscreen) await win.setFullscreen(true);
 }
 
+/** Set while the operator closes the output on purpose, so the watchdog does not reopen it. */
+export let outputClosedByUs = false;
+
 export async function closeOutputWindow(): Promise<void> {
+  outputClosedByUs = true;
   if (!isTauri) {
     browserOutput?.close();
     browserOutput = null;
@@ -163,6 +168,41 @@ export async function saveProjectFile(p: Project): Promise<void> {
     localStorage.setItem(LS_KEY, data);
   } catch (e) {
     console.warn("localStorage save failed (project too large?)", e);
+  }
+}
+
+// ---------------------------------------------------------------- live state (crash / reload recovery)
+
+const STATE_FILE = "state.json";
+const LS_STATE = "sls.state.v1";
+
+export async function loadStateFile<T>(): Promise<T | null> {
+  try {
+    if (isTauri) {
+      const fs = await import("@tauri-apps/plugin-fs");
+      if (!(await fs.exists(STATE_FILE, { baseDir: fs.BaseDirectory.AppData }))) return null;
+      return JSON.parse(await fs.readTextFile(STATE_FILE, { baseDir: fs.BaseDirectory.AppData }));
+    }
+    const raw = localStorage.getItem(LS_STATE);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    console.error("Failed to load live state", e);
+    return null;
+  }
+}
+
+export async function saveStateFile(state: unknown): Promise<void> {
+  const data = JSON.stringify(state);
+  if (isTauri) {
+    const fs = await import("@tauri-apps/plugin-fs");
+    await fs.writeTextFile(`${STATE_FILE}.tmp`, data, { baseDir: fs.BaseDirectory.AppData });
+    await fs.rename(`${STATE_FILE}.tmp`, STATE_FILE, { oldPathBaseDir: fs.BaseDirectory.AppData, newPathBaseDir: fs.BaseDirectory.AppData });
+    return;
+  }
+  try {
+    localStorage.setItem(LS_STATE, data);
+  } catch {
+    /* quota: live state is best effort */
   }
 }
 

@@ -72,6 +72,10 @@ export interface FrameState {
   keyDir: THREE.Vector3;
   keyColor: THREE.Color;
   keyIntensity: number;
+  /** Hand-held camera drift this frame (normalized, ±1 at full sway); plates use it for 2.5D parallax. */
+  swayX: number;
+  swayY: number;
+  swayRoll: number;
 }
 
 export function makeFrameState(): FrameState {
@@ -104,6 +108,9 @@ export function makeFrameState(): FrameState {
     keyDir: new THREE.Vector3(0, 1, 0),
     keyColor: new THREE.Color(1, 1, 1),
     keyIntensity: 1,
+    swayX: 0,
+    swayY: 0,
+    swayRoll: 0,
   };
 }
 
@@ -221,4 +228,13 @@ export function updateFrame(f: FrameState, rt: SceneRuntime, wall: number) {
     .addScalar(flash * 0.5);
   f.fogColor.copy(f.horizon).lerp(tmp.set("#9aa0a8").multiplyScalar(f.ambient), 0.25 + f.storm * 0.3);
   f.sceneFogDensity = 0.0016 + haze * 0.0045 + fog * 0.012 + f.storm * 0.0035;
+
+  // Hand-held drift: three incommensurate sines so it never visibly repeats.
+  const cm = rt.scene.cameraMotion;
+  if (cm && cm.sway > 0) {
+    const w = s * Math.max(0.005, cm.speed) * Math.PI * 2;
+    f.swayX = cm.sway * (Math.sin(w) * 0.6 + Math.sin(w * 2.3 + 1.7) * 0.3 + Math.sin(w * 5.1 + 0.4) * 0.1);
+    f.swayY = cm.sway * (Math.sin(w * 1.3 + 2.1) * 0.5 + Math.sin(w * 3.7) * 0.25);
+    f.swayRoll = cm.sway * Math.sin(w * 0.7 + 1) * 0.3;
+  } else f.swayX = f.swayY = f.swayRoll = 0;
 }

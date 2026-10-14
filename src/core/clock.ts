@@ -22,9 +22,22 @@ export const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(
 export const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 export const easeIn = (t: number) => t * t * t;
 
-export function ease(kind: "linear" | "inOut" | "out" | "in", t: number) {
+/** Quintic ease: zero velocity *and* acceleration at both ends (the smoothest camera glide). */
+export const smootherstep = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
+
+export function ease(kind: "linear" | "inOut" | "out" | "in" | "smooth", t: number) {
   t = clamp(t, 0, 1);
-  return kind === "inOut" ? easeInOut(t) : kind === "out" ? easeOut(t) : kind === "in" ? easeIn(t) : t;
+  return kind === "inOut" ? easeInOut(t) : kind === "out" ? easeOut(t) : kind === "in" ? easeIn(t) : kind === "smooth" ? smootherstep(t) : t;
+}
+
+/**
+ * Cubic Hermite from p0 (leaving with velocity v0, per unit of k) to p1 (arriving at rest).
+ * With v0 = 0 this is exactly smoothstep, so moves from rest look the same as before.
+ */
+export function hermite(p0: number, p1: number, v0: number, k: number) {
+  const k2 = k * k;
+  const k3 = k2 * k;
+  return (2 * k3 - 3 * k2 + 1) * p0 + (k3 - 2 * k2 + k) * v0 + (-2 * k3 + 3 * k2) * p1;
 }
 
 export function tween(from: number, to: number, at: number, dur: number): Tween {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clapperboard, FileDown, FileUp, Menu, MonitorPlay, MonitorX, RotateCcw, Save, Settings2 } from "lucide-react";
+import { AlertTriangle, Cable, Clapperboard, FileDown, FileUp, Menu, MonitorPlay, MonitorX, RotateCcw, Save, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,6 +14,10 @@ import { closeOutputWindow, exportProject, importProject, openOutputWindow } fro
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
 import { OutputSettingsDialog } from "./OutputSettings";
+import { IoDialog } from "./io/IoDialog";
+import { useIo } from "@/engine/io";
+import { getErrors, onErrors } from "./ErrorBoundary";
+import { clearLiveState } from "@/engine/persist";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -26,7 +30,16 @@ export function TopBar() {
   const status = useShow((s) => s.outputStatus);
   const seenAt = useShow((s) => s.outputSeenAt);
   const [settings, setSettings] = useState(false);
+  const [io, setIo] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const outputLostAt = useShow((s) => s.outputLostAt);
+  const restoredAt = useShow((s) => s.restoredAt);
+  const midiStatus = useIo((s) => s.midiStatus);
+  const oscStatus = useIo((s) => s.oscStatus);
+  const ioErr = useIo((s) => s.midiStatus === "error" || s.oscStatus === "error");
+  const [errCount, setErrCount] = useState(() => getErrors().length);
+  useEffect(() => onErrors(() => setErrCount(getErrors().length)), []);
+  const ioOn = midiStatus === "open" || oscStatus === "listening";
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const h = setInterval(() => setClock(new Date()), 1000);
@@ -60,6 +73,17 @@ export function TopBar() {
       <div className="mx-auto flex min-w-0 items-center gap-2 text-[12px]">
         <span className={cn("rounded-[3px] px-1.5 py-px text-[10px] font-bold tracking-[0.14em]", live ? "bg-live text-white" : "bg-muted text-muted-foreground")}>{live ? "ON AIR" : "STANDBY"}</span>
         <span className="truncate">{live ? `${String(live.number).padStart(2, "0")} · ${live.name}` : "Audience sees the standby visual"}</span>
+        {program.blackout?.on && <span className="rounded-[3px] bg-armed px-1.5 py-px text-[10px] font-bold tracking-[0.14em] text-black">BLACKOUT</span>}
+        {restoredAt && Date.now() - restoredAt < 60000 && (
+          <span className="rounded-[3px] border border-preview/50 px-1.5 py-px text-[10px] font-semibold tracking-wider text-preview" title="The operator window restarted and picked the show up where it was">
+            RESUMED
+          </span>
+        )}
+        {outputLostAt && (
+          <span className="flex items-center gap-1 rounded-[3px] bg-destructive px-1.5 py-px text-[10px] font-bold tracking-[0.14em] text-white">
+            <AlertTriangle className="size-3" /> OUTPUT LOST · reopening
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -87,6 +111,14 @@ export function TopBar() {
         <Button size="sm" variant="ghost" onClick={() => setSettings(true)}>
           <Settings2 /> Output
         </Button>
+        <Button size="sm" variant="ghost" onClick={() => setIo(true)} title="MIDI / OSC show control" className={cn(ioErr && "text-destructive")}>
+          <Cable className={cn(ioOn && "text-preview")} /> I/O
+        </Button>
+        {errCount > 0 && (
+          <span className="flex items-center gap-1 text-[10.5px] text-armed" title={getErrors().slice(-5).map((e) => e.text).join("\n")}>
+            <AlertTriangle className="size-3.5" /> {errCount}
+          </span>
+        )}
         <span className={cn("w-16 text-right text-[10.5px]", saveError ? "text-destructive" : "text-muted-foreground")} title={saveError ?? (savedAt ? `Saved ${new Date(savedAt).toLocaleTimeString()}` : "")}>
           {saveError ? "save failed" : dirty ? "saving…" : "saved"}
         </span>
@@ -112,6 +144,14 @@ export function TopBar() {
               <FileUp /> Import show file…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                useShow.getState().setStandby(true);
+                clearLiveState();
+              }}
+            >
+              <MonitorX /> Forget live state (fresh start)
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setConfirmReset(true)}>
               <RotateCcw /> Reset to demo show…
             </DropdownMenuItem>
@@ -120,6 +160,7 @@ export function TopBar() {
         <span className="w-[62px] text-right font-mono text-[12px] tabular text-muted-foreground">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
       </div>
       <OutputSettingsDialog open={settings} onOpenChange={setSettings} />
+      <IoDialog open={io} onOpenChange={setIo} />
       <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
         <DialogContent>
           <DialogHeader>

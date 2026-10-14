@@ -8,6 +8,7 @@ import type { ClipActorComponent, ClipDef } from "@/core/types";
 import { QUAD_VERT } from "../glsl";
 import { useStage } from "../frame";
 import { applyMediaSettings, makeMediaMaterial, setMap } from "./mediaMaterial";
+import { plateParallax } from "./MediaLayers";
 import { syncVideo, useVideo, videoDuration } from "./video";
 
 /**
@@ -143,12 +144,16 @@ function ClipQuad({ actor, clip, order }: { actor: ClipActorComponent; clip: Cli
     const s = actor.matted ? Math.max(0.05, L.scale) : 1;
     const targetV = (L.depthLink ? L.horizonY + (L.pivotY - L.horizonY) * s : L.pivotY) + (actor.matted ? L.y : 0);
     const targetU = L.pivotX + (actor.matted ? L.x : 0);
-    const px = (targetU - 0.5) * w;
-    const py = cy + (0.5 - targetV) * h;
+    // 2.5D parallax: full-frame clips move exactly with their plate, cut-outs (nearer) 1.6× as much.
+    const par = plateParallax(rt);
+    const over = actor.matted ? 1 : 1 + 2 * par;
+    const parK = actor.matted ? 1.6 : 1;
+    const px = (targetU - 0.5) * w + frame.swayX * par * parK * canvasW;
+    const py = cy + (0.5 - targetV) * h - frame.swayY * par * parK * canvasH * 0.5;
     const mirror = actor.matted && L.mirror;
     const offU = (mirror ? 0.5 - L.pivotX : L.pivotX - 0.5) * w * s;
     const offV = (0.5 - L.pivotY) * h * s;
-    mesh.scale.set(w * s, h * s, 1);
+    mesh.scale.set(w * s * over, h * s * over, 1);
     mesh.position.set(px - offU, py - offV, 0);
     mat.uniforms.flipX.value = mirror ? 1 : 0;
 

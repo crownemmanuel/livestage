@@ -1,4 +1,4 @@
-import { ease, evalTween, lerp, now, retarget, sceneNow, tween } from "./clock";
+import { ease, evalTween, hermite, lerp, now, retarget, sceneNow, tween } from "./clock";
 import { EFFECT_DEFS, num } from "./effects";
 import { uid } from "./ids";
 import { initialSegments, scheduleClip } from "./clipActor";
@@ -13,21 +13,26 @@ import type {
   CueAction,
   EffectParams,
   LionAction,
+  NamesRuntime,
   Scene,
   SceneComponent,
   SceneRuntime,
+  SpeedRamp,
   Vec2,
   Vec3,
 } from "./types";
 
 /** Immediate operator commands. Cue actions are commands with a delay. */
 export type Command =
-  | Exclude<CueAction, { type: "takeScene" } | { type: "blackout" }>
-  | { type: "effect.param"; effectId: string; key: string; value: number | string | boolean }
-  | { type: "clock"; op: "pause" | "resume" }
+  | Exclude<CueAction, { type: "takeScene" } | { type: "blackout" } | { type: "send" } | { type: "clock" } | { type: "effect.param" }>
+  | { type: "effect.param"; effectId: string; key: string; value: number | string | boolean; delay?: number }
+  | { type: "clock"; op: "pause" | "resume" | "toggle"; delay?: number }
   | { type: "cuePointer"; index: number };
 
 const LONG_AGO = -1e9;
+
+/** Component kinds that have a show/hide layer runtime. */
+export const LAYER_KINDS = new Set<SceneComponent["kind"]>(["video", "image", "model", "procedural", "text", "names", "route"]);
 
 export function findComponent<K extends SceneComponent["kind"]>(
   scene: Scene,
@@ -45,29 +50,45 @@ export function defaultShot(scene: Scene): CameraShot | undefined {
 
 export const FALLBACK_POSE: CameraPose = { position: [0, 1.7, 12], target: [0, 1.4, -20], hfov: 72 };
 
+export const initialNames = (): NamesRuntime => ({ shown: 0, shownAt: LONG_AGO, burn: tween(0, 0, 0, 0), bloom: tween(0, 0, 0, 0) });
+
+/** A copy of the scene for the runtime: thumbnails are never needed to render and bloat every broadcast. */
+function runtimeScene(scene: Scene): Scene {
+  const s = structuredClone(scene);
+  s.thumbnail = null;
+  return s;
+}
+
 export function createRuntime(scene: Scene, wallNow = now()): SceneRuntime {
   const bgs = scene.components.filter((c) => c.kind === "background");
   const bg = bgs.find((b) => b.initiallyVisible) ?? bgs[0];
   const tod = bg?.kind === "background" && bg.source === "environment" ? bg.env.timeOfDay : 0;
   const storm = bg?.kind === "background" && bg.source === "environment" ? bg.env.storm : 0;
-  const pose = defaultShot(scene)?.pose ?? FALLBACK_POSE;
+  const shot = defaultShot(scene);
+  const pose = shot?.pose ?? FALLBACK_POSE;
 
   const rt: SceneRuntime = {
     key: uid("rt"),
-    scene: structuredClone(scene),
+    scene: runtimeScene(scene),
     clock: { base: wallNow, pausedAt: null },
     background: { current: bg?.id ?? null, previous: null, changedAt: LONG_AGO, dur: 0 },
     env: { timeOfDay: tween(tod, tod, 0, 0), storm: tween(storm, storm, 0, 0) },
     layers: {},
     effects: {},
     strikes: [],
-    camera: { from: pose, to: pose, at: 0, dur: 0, ease: "inOut" },
+    camera: { from: pose, to: pose, at: 0, dur: 0, ease: "inOut", follow: shot?.followActorId ? { actorId: shot.followActorId, offset: shot.followOffset } : null },
     cuePointer: 0,
     clipActors: {},
+    names: {},
+    routes: {},
+    speed: {},
+    sounds: [],
   };
   for (const c of scene.components) {
-    if (c.kind === "video" || c.kind === "image" || c.kind === "model" || c.kind === "procedural") {
+    if (LAYER_KINDS.has(c.kind)) {
       rt.layers[c.id] = { visible: c.initiallyVisible, changedAt: LONG_AGO, startAt: 0 };
+      if (c.kind === "names") rt.names![c.id] = initialNames();
+      if (c.kind === "route") rt.routes![c.id] = { progress: tween(0, 0, 0, 0) };
     } else if (c.kind === "clipActor") {
       rt.clipActors[c.id] = initialSegments(c);
     } else if (c.kind === "effect") {
@@ -76,6 +97,32 @@ export function createRuntime(scene: Scene, wallNow = now()): SceneRuntime {
     }
   }
   return rt;
+}
+
+/** Keep a running runtime in step with edits to its scene without restarting it. */
+export function reconcileRuntime(rt: SceneRuntime, scene: Scene): SceneRuntime {
+  const layers = { ...rt.layers };
+  const effects = { ...rt.effects };
+  const names = { ...(rt.names ?? {}) };
+  const routes = { ...(rt.routes ?? {}) };
+  const ids = new Set(scene.components.map((c) => c.id));
+  for (const c of scene.components) {
+    if (LAYER_KINDS.has(c.kind) && !layers[c.id]) layers[c.id] = { visible: c.initiallyVisible, changedAt: LONG_AGO, startAt: 0 };
+    if (c.kind === "names" && !names[c.id]) names[c.id] = initialNames();
+    if (c.kind === "route" && !routes[c.id]) routes[c.id] = { progress: tween(0, 0, 0, 0) };
+    if (c.kind === "effect") {
+      const params = { ...EFFECT_DEFS[c.effect].defaults, ...c.params };
+      effects[c.id] = effects[c.id] ? { ...effects[c.id], params } : { active: c.initiallyVisible, changedAt: LONG_AGO, params };
+    }
+  }
+  const clipActors = { ...(rt.clipActors ?? {}) };
+  for (const c of scene.components) if (c.kind === "clipActor" && !clipActors[c.id]) clipActors[c.id] = initialSegments(c);
+  for (const m of [clipActors, layers, effects, names, routes]) for (const id of Object.keys(m)) if (!ids.has(id)) delete m[id];
+  const bgValid = rt.background.current && ids.has(rt.background.current);
+  const background = bgValid
+    ? rt.background
+    : { current: scene.components.find((c) => c.kind === "background")?.id ?? null, previous: null, changedAt: LONG_AGO, dur: 0 };
+  return { ...rt, scene: runtimeScene(scene), layers, effects, background, clipActors, names, routes };
 }
 
 export function createPoses(scene: Scene): ActorPoses {
@@ -106,12 +153,55 @@ function initialActor(c: ActorComponent, scene: Scene): ActorState {
   };
 }
 
-export function evalCamera(cam: CameraRuntime, t: number): CameraPose {
-  if (cam.dur <= 0 || t >= cam.at + cam.dur) return cam.to;
-  const k = ease(cam.ease, (t - cam.at) / cam.dur);
-  const l3 = (a: Vec3, b: Vec3): Vec3 => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
-  return { position: l3(cam.from.position, cam.to.position), target: l3(cam.from.target, cam.to.target), hfov: lerp(cam.from.hfov, cam.to.hfov, k) };
+// ---------------------------------------------------------------- camera
+
+const l3 = (a: Vec3, b: Vec3, k: number): Vec3 => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
+const h3 = (a: Vec3, b: Vec3, v: Vec3, k: number): Vec3 => [hermite(a[0], b[0], v[0], k), hermite(a[1], b[1], v[1], k), hermite(a[2], b[2], v[2], k)];
+
+/**
+ * Camera pose at scene time t. A move that starts while another is still running
+ * carries that move's velocity into the new curve (Hermite), so the picture never
+ * kinks; a move from rest eases exactly as before.
+ */
+export function evalCamera(cam: CameraRuntime, t: number, to: CameraPose = cam.to): CameraPose {
+  if (cam.dur <= 0 || t >= cam.at + cam.dur) return to;
+  if (t <= cam.at) return cam.from;
+  const u = (t - cam.at) / cam.dur;
+  const v = cam.fromVel;
+  if (v && (v.position.some((x) => x !== 0) || v.target.some((x) => x !== 0) || v.hfov !== 0)) {
+    // Velocity is per second; the Hermite tangent is per unit of u.
+    const s = cam.dur / 1000;
+    return {
+      position: h3(cam.from.position, to.position, v.position.map((x) => x * s) as Vec3, u),
+      target: h3(cam.from.target, to.target, v.target.map((x) => x * s) as Vec3, u),
+      hfov: hermite(cam.from.hfov, to.hfov, v.hfov * s, u),
+    };
+  }
+  const k = ease(cam.ease, u);
+  return { position: l3(cam.from.position, to.position, k), target: l3(cam.from.target, to.target, k), hfov: lerp(cam.from.hfov, to.hfov, k) };
 }
+
+/** Instantaneous camera velocity (units per second) by finite difference. */
+export function cameraVelocity(cam: CameraRuntime, t: number): CameraPose {
+  if (cam.dur <= 0 || t >= cam.at + cam.dur || t <= cam.at) return { position: [0, 0, 0], target: [0, 0, 0], hfov: 0 };
+  const h = 8;
+  const a = evalCamera(cam, Math.max(cam.at, t - h));
+  const b = evalCamera(cam, Math.min(cam.at + cam.dur, t + h));
+  const dt = Math.max(1, Math.min(cam.at + cam.dur, t + h) - Math.max(cam.at, t - h)) / 1000;
+  const d = (x: number, y: number) => (y - x) / dt;
+  return {
+    position: [d(a.position[0], b.position[0]), d(a.position[1], b.position[1]), d(a.position[2], b.position[2])],
+    target: [d(a.target[0], b.target[0]), d(a.target[1], b.target[1]), d(a.target[2], b.target[2])],
+    hfov: d(a.hfov, b.hfov),
+  };
+}
+
+/** Where a follow shot frames an actor standing at (x, z). */
+export function followPose(actorPos: Vec2, offset: Vec3, hfov: number): CameraPose {
+  return { position: [actorPos[0] + offset[0], offset[1], actorPos[1] + offset[2]], target: [actorPos[0], 0.9, actorPos[1]], hfov };
+}
+
+// ---------------------------------------------------------------- actors
 
 /** Begin a new action on an actor, remembering the previous one for blending. */
 export function setActorAction(a: ActorState, action: LionAction, t: number): ActorState {
@@ -140,6 +230,29 @@ function lionCommand(a: ActorState, action: LionAction, t: number): ActorState {
   }
 }
 
+// ---------------------------------------------------------------- media speed
+
+/** Media-elapsed seconds for a component playing since `startAt`, honouring a speed ramp. */
+export function mediaElapsed(rt: SceneRuntime, id: string, startAt: number, t: number, baseRate: number): number {
+  const ramp = rt.speed?.[id];
+  const raw = Math.max(0, (t - startAt) / 1000);
+  if (!ramp || t < ramp.at) return raw * baseRate;
+  const tau = (t - ramp.at) / 1000;
+  const d = ramp.dur / 1000;
+  const integral = d <= 0 || tau >= d ? (d > 0 ? ((ramp.from + ramp.to) / 2) * d : 0) + ramp.to * Math.max(0, tau - d) : ramp.from * tau + ((ramp.to - ramp.from) * tau * tau) / (2 * d);
+  return ramp.elapsedAt + integral;
+}
+
+/** Current playback rate of a component (for the <video> element's own rate). */
+export function mediaRate(rt: SceneRuntime, id: string, t: number, baseRate: number): number {
+  const ramp = rt.speed?.[id];
+  if (!ramp || t < ramp.at) return baseRate;
+  if (ramp.dur <= 0 || t >= ramp.at + ramp.dur) return ramp.to;
+  return lerp(ramp.from, ramp.to, (t - ramp.at) / ramp.dur);
+}
+
+// ---------------------------------------------------------------- reducer
+
 export interface ApplyResult {
   rt: SceneRuntime;
   poses: ActorPoses;
@@ -161,6 +274,11 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
         const d = bg.transitionDuration * 1000;
         next.env = { timeOfDay: retarget(rt.env.timeOfDay, bg.env.timeOfDay, t, d), storm: retarget(rt.env.storm, bg.env.storm, t, d) };
         next.effects = syncDayNight(next.effects, scene, bg.env.timeOfDay, t);
+      }
+      // A fresh plate starts its own speed history.
+      if (next.speed?.[bg.id]) {
+        next.speed = { ...next.speed };
+        delete next.speed[bg.id];
       }
       return { rt: next, poses };
     }
@@ -213,19 +331,25 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
         startAt = t;
       } else if (visible && !cur.visible) startAt = t;
       if (visible === cur.visible && startAt === cur.startAt) return { rt, poses };
-      return { rt: { ...rt, layers: { ...rt.layers, [cmd.layerId]: { visible, startAt, changedAt: visible === cur.visible ? cur.changedAt : t } } }, poses };
+      const next: SceneRuntime = { ...rt, layers: { ...rt.layers, [cmd.layerId]: { visible, startAt, changedAt: visible === cur.visible ? cur.changedAt : t } } };
+      if (startAt !== cur.startAt && next.speed?.[cmd.layerId]) {
+        next.speed = { ...next.speed };
+        delete next.speed[cmd.layerId];
+      }
+      // Re-showing a route restarts its line; a names tree keeps its progress.
+      if (visible && !cur.visible && next.routes?.[cmd.layerId]) next.routes = { ...next.routes, [cmd.layerId]: { progress: tween(0, 0, 0, 0) } };
+      return { rt: next, poses };
     }
     case "camera": {
       const shot = scene.cameraShots.find((s) => s.id === cmd.shotId);
       if (!shot) return { rt, poses };
-      const from = evalCamera(rt.camera, t);
+      const liveTo = rt.camera.follow && poses[rt.camera.follow.actorId] ? followPose(poses[rt.camera.follow.actorId].pos, rt.camera.follow.offset, rt.camera.to.hfov) : rt.camera.to;
+      const from = evalCamera(rt.camera, t, liveTo);
+      const fromVel = cameraVelocity(rt.camera, t);
       let to = shot.pose;
-      if (shot.followActorId && poses[shot.followActorId]) {
-        const a = poses[shot.followActorId];
-        const o = shot.followOffset;
-        to = { position: [a.pos[0] + o[0], o[1], a.pos[1] + o[2]], target: [a.pos[0], 0.9, a.pos[1]], hfov: shot.pose.hfov };
-      }
-      return { rt: { ...rt, camera: { from, to, at: t, dur: shot.duration * 1000, ease: shot.ease } }, poses };
+      const follow = shot.followActorId && poses[shot.followActorId] ? { actorId: shot.followActorId, offset: shot.followOffset } : null;
+      if (follow) to = followPose(poses[follow.actorId].pos, follow.offset, shot.pose.hfov);
+      return { rt: { ...rt, camera: { from, to, at: t, dur: shot.duration * 1000, ease: shot.ease, fromVel, follow } }, poses };
     }
     case "actor.visible": {
       const a = poses[cmd.actorId];
@@ -257,9 +381,11 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
       };
     }
     case "clock": {
-      if (cmd.op === "pause" && rt.clock.pausedAt === null) return { rt: { ...rt, clock: { ...rt.clock, pausedAt: wallNow } }, poses };
-      if (cmd.op === "resume" && rt.clock.pausedAt !== null) {
-        return { rt: { ...rt, clock: { base: rt.clock.base + (wallNow - rt.clock.pausedAt), pausedAt: null } }, poses };
+      const paused = rt.clock.pausedAt !== null;
+      const op = cmd.op === "toggle" ? (paused ? "resume" : "pause") : cmd.op;
+      if (op === "pause" && !paused) return { rt: { ...rt, clock: { ...rt.clock, pausedAt: wallNow } }, poses };
+      if (op === "resume" && paused) {
+        return { rt: { ...rt, clock: { base: rt.clock.base + (wallNow - rt.clock.pausedAt!), pausedAt: null } }, poses };
       }
       return { rt, poses };
     }
@@ -271,6 +397,66 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     }
     case "cuePointer":
       return { rt: { ...rt, cuePointer: Math.max(0, Math.min(cmd.index, scene.cues.length)) }, poses };
+    case "names": {
+      const comp = findComponent(scene, cmd.layerId, "names");
+      const cur = rt.names?.[cmd.layerId] ?? initialNames();
+      if (!comp) return { rt, poses };
+      const total = comp.names.length;
+      let n: NamesRuntime = cur;
+      const dur = (cmd.duration > 0 ? cmd.duration : 6) * 1000;
+      switch (cmd.op) {
+        case "next":
+          if (cur.shown < total) n = { ...cur, shown: cur.shown + 1, shownAt: t };
+          break;
+        case "prev":
+          n = { ...cur, shown: Math.max(0, cur.shown - 1), shownAt: t - 1e6 };
+          break;
+        case "reset":
+          n = initialNames();
+          break;
+        case "all":
+          n = { ...cur, shown: total, shownAt: t };
+          break;
+        case "set":
+          n = { ...cur, shown: Math.max(0, Math.min(total, Math.round(cmd.value))), shownAt: t };
+          break;
+        case "burn":
+          n = { ...cur, burn: retarget(cur.burn, 1, t, dur) };
+          break;
+        case "restore":
+          n = { ...cur, burn: retarget(cur.burn, 0, t, dur) };
+          break;
+        case "bloom":
+          n = { ...cur, shown: total, shownAt: cur.shown === total ? cur.shownAt : t, burn: retarget(cur.burn, 0, t, dur * 0.5), bloom: retarget(cur.bloom, 1, t, dur) };
+          break;
+      }
+      // Make the layer visible when driven.
+      const layers = rt.layers[cmd.layerId] && !rt.layers[cmd.layerId].visible ? { ...rt.layers, [cmd.layerId]: { visible: true, changedAt: t, startAt: t } } : rt.layers;
+      return { rt: { ...rt, layers, names: { ...(rt.names ?? {}), [cmd.layerId]: n } }, poses };
+    }
+    case "route": {
+      const comp = findComponent(scene, cmd.layerId, "route");
+      if (!comp) return { rt, poses };
+      const cur = rt.routes?.[cmd.layerId] ?? { progress: tween(0, 0, 0, 0) };
+      const progress =
+        cmd.op === "reset" ? tween(0, 0, 0, 0) : cmd.op === "complete" ? tween(1, 1, 0, 0) : retarget(cur.progress, 1, t, Math.max(50, comp.duration * 1000) * (1 - evalTween(cur.progress, t)));
+      const layers = rt.layers[cmd.layerId] && !rt.layers[cmd.layerId].visible && cmd.op !== "reset" ? { ...rt.layers, [cmd.layerId]: { visible: true, changedAt: t, startAt: t } } : rt.layers;
+      return { rt: { ...rt, layers, routes: { ...(rt.routes ?? {}), [cmd.layerId]: { progress } } }, poses };
+    }
+    case "media.speed": {
+      const comp = scene.components.find((c) => c.id === cmd.layerId);
+      if (!comp) return { rt, poses };
+      const base = comp.kind === "background" || comp.kind === "video" ? comp.media.playbackRate : 1;
+      const startAt = comp.kind === "background" ? (rt.background.current === comp.id ? rt.background.changedAt : 0) : (rt.layers[comp.id]?.startAt ?? 0);
+      const elapsedAt = mediaElapsed(rt, comp.id, Math.max(0, startAt), t, base);
+      const from = mediaRate(rt, comp.id, t, base);
+      const ramp: SpeedRamp = { from, to: cmd.rate, at: t, dur: Math.max(0, cmd.duration) * 1000, elapsedAt };
+      return { rt: { ...rt, speed: { ...(rt.speed ?? {}), [comp.id]: ramp } }, poses };
+    }
+    case "sound": {
+      if (!cmd.assetId) return { rt, poses };
+      return { rt: { ...rt, sounds: [...(rt.sounds ?? []).slice(-15), { id: uid("snd"), assetId: cmd.assetId, at: t, volume: cmd.volume }] }, poses };
+    }
   }
 }
 
@@ -297,7 +483,7 @@ function makeStrike(params: EffectParams, t: number) {
 }
 
 export function fadeDuration(effect: string, params: EffectParams, active: boolean): number {
-  if (effect === "rain" || effect === "fog") return num(params, active ? "fadeIn" : "fadeOut", 4);
+  if (effect === "rain" || effect === "fog" || effect === "snow") return num(params, active ? "fadeIn" : "fadeOut", 4);
   return num(params, "fade", 3);
 }
 

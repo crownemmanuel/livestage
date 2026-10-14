@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Keyboard, RotateCcw, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Flame, Keyboard, RotateCcw, Route, Sparkles, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
-import { clamp } from "@/core/clock";
+import { clamp, evalTween } from "@/core/clock";
 import { EFFECT_DEFS, num } from "@/core/effects";
+import { initialNames } from "@/core/runtime";
 import { LION_ACTION_INFO } from "@/core/lion";
 import { effectLevel, evalCamera } from "@/core/runtime";
 import { sceneNow } from "@/core/clock";
-import type { ActorComponent, ClipActorComponent, EffectComponent, LionAction, SceneComponent, SceneRuntime } from "@/core/types";
+import type { ActorComponent, ClipActorComponent, EffectComponent, LionAction, NamesComponent, RouteComponent, SceneComponent, SceneRuntime } from "@/core/types";
 import { clipFits, clipStateAt } from "@/core/clipActor";
 import { useShow, type Target } from "@/store/show";
 import { useModelInfo } from "@/store/modelInfo";
@@ -55,7 +56,9 @@ export function ControlPanel() {
   const actors = comps.filter((c): c is ActorComponent => c.kind === "actor");
   const videoActors = comps.filter((c): c is ClipActorComponent => c.kind === "clipActor");
   const elements = comps.filter((c) => c.kind === "procedural");
-  const layers = comps.filter((c) => c.kind === "video" || c.kind === "image" || c.kind === "model");
+  const layers = comps.filter((c) => c.kind === "video" || c.kind === "image" || c.kind === "model" || c.kind === "text");
+  const names = comps.filter((c): c is NamesComponent => c.kind === "names");
+  const routes = comps.filter((c): c is RouteComponent => c.kind === "route");
   const effects = comps.filter((c): c is EffectComponent => c.kind === "effect");
   const dispatch = (cmd: Parameters<ReturnType<typeof useShow.getState>["dispatch"]>[1]) => useShow.getState().dispatch(target, cmd);
   const t = sceneNow(rt);
@@ -79,6 +82,17 @@ export function ControlPanel() {
                 );
               })}
             </div>
+          </Section>
+        )}
+
+        {(names.length > 0 || routes.length > 0) && (
+          <Section title="Storybook">
+            {names.map((n) => (
+              <NamesControls key={n.id} comp={n} rt={rt} target={target} />
+            ))}
+            {routes.map((r) => (
+              <RouteControls key={r.id} comp={r} rt={rt} target={target} />
+            ))}
           </Section>
         )}
 
@@ -110,7 +124,7 @@ export function ControlPanel() {
         )}
 
         {layers.length > 0 && (
-          <Section title="Layers">
+          <Section title="Layers & titles">
             {layers.map((l) => (
               <LayerRow
                 key={l.id}
@@ -163,6 +177,82 @@ function LayerRow({ comp, rt, onToggle, onRestart }: { comp: SceneComponent; rt:
         {on ? <Eye /> : <EyeOff />}
         {on ? "Hide" : "Show"}
       </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- storybook
+
+function NamesControls({ comp, rt, target }: { comp: NamesComponent; rt: SceneRuntime; target: Target }) {
+  const st = rt.names?.[comp.id] ?? initialNames();
+  const t = sceneNow(rt);
+  const burn = evalTween(st.burn, t);
+  const bloom = evalTween(st.bloom, t);
+  const go = (op: "next" | "prev" | "reset" | "all" | "burn" | "restore" | "bloom", duration = 6) => useShow.getState().dispatch(target, { type: "names", layerId: comp.id, op, value: 0, duration, delay: 0 });
+  const nextName = comp.names[st.shown];
+  return (
+    <div className="rounded-md border border-border bg-card/60">
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        <span className={cn("size-1.5 rounded-full", st.shown > 0 ? "bg-preview" : "bg-muted-foreground/40")} />
+        <span className="text-[12px] font-semibold">{comp.name}</span>
+        <span className="ml-auto text-[10.5px] tabular text-muted-foreground">
+          {st.shown} / {comp.names.length}
+          {burn > 0.01 && <span className="text-armed"> · burned {Math.round(burn * 100)}%</span>}
+          {bloom > 0.01 && <span className="text-preview"> · bloom {Math.round(bloom * 100)}%</span>}
+        </span>
+      </div>
+      <div className="flex items-center gap-1 px-2 pb-2">
+        <Button size="sm" className={cn("h-8 flex-1 justify-between font-semibold", target === "program" ? "bg-live text-white hover:bg-live/85" : "")} disabled={st.shown >= comp.names.length} onClick={() => go("next")}>
+          <span>Next name</span>
+          <span className="truncate text-[10.5px] font-normal opacity-80">{nextName ?? "— all shown —"}</span>
+        </Button>
+        <Button size="xs" variant="outline" disabled={st.shown === 0} onClick={() => go("prev")} title="Hide the last name">
+          Back
+        </Button>
+        <Button size="xs" variant="outline" onClick={() => go("all")} title="Reveal every name">
+          All
+        </Button>
+        <Button size="xs" variant="ghost" onClick={() => go("reset")} title="Back to the empty root">
+          <RotateCcw />
+        </Button>
+      </div>
+      {comp.style === "tree" && (
+        <div className="flex items-center gap-1 border-t border-border px-2 py-1.5">
+          <Button size="xs" variant={burn > 0.5 ? "secondary" : "outline"} className="flex-1" onClick={() => go(burn > 0.5 ? "restore" : "burn", 7)} title="Babylon: the tree burns down to a stump (and back)">
+            <Flame /> {burn > 0.5 ? "Un-burn" : "Burn to stump"}
+          </Button>
+          <Button size="xs" variant={bloom > 0.5 ? "secondary" : "outline"} className="flex-1" onClick={() => go("bloom", 8)} title="Scene 16: the whole tree blossoms, every name lit">
+            <Sparkles /> Blossom
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RouteControls({ comp, rt, target }: { comp: RouteComponent; rt: SceneRuntime; target: Target }) {
+  const p = evalTween(rt.routes?.[comp.id]?.progress ?? { from: 0, to: 0, at: 0, dur: 0 }, sceneNow(rt));
+  const go = (op: "play" | "reset" | "complete") => useShow.getState().dispatch(target, { type: "route", layerId: comp.id, op, delay: 0 });
+  return (
+    <div className="rounded-md border border-border bg-card/60">
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        <Route className="size-3.5 text-muted-foreground" />
+        <span className="text-[12px] font-semibold">{comp.name}</span>
+        <div className="ml-auto h-1 w-16 overflow-hidden rounded-full bg-muted">
+          <div className="h-full bg-armed" style={{ width: `${p * 100}%` }} />
+        </div>
+      </div>
+      <div className="flex items-center gap-1 px-2 pb-2">
+        <Button size="sm" className={cn("h-8 flex-1 font-semibold", target === "program" ? "bg-live text-white hover:bg-live/85" : "")} disabled={p >= 1} onClick={() => go("play")}>
+          Draw the route
+        </Button>
+        <Button size="xs" variant="outline" onClick={() => go("complete")}>
+          Jump to end
+        </Button>
+        <Button size="xs" variant="ghost" onClick={() => go("reset")}>
+          <RotateCcw />
+        </Button>
+      </div>
     </div>
   );
 }
