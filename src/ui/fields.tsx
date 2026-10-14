@@ -4,6 +4,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { InfoTip } from "./kit";
 import type { AssetType, Vec3 } from "@/core/types";
 import { useProject } from "@/store/project";
 
@@ -16,12 +17,14 @@ export function Field({ label, children, className, hint }: { label: string; chi
   );
 }
 
-export function Section({ title, children, right }: { title: string; children: ReactNode; right?: ReactNode }) {
+export function Section({ title, children, right, icon, info }: { title: string; children: ReactNode; right?: ReactNode; icon?: ReactNode; info?: ReactNode }) {
   return (
-    <section className="border-b border-border px-3 py-2.5">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{title}</h3>
-        {right}
+    <section className="border-b border-border px-3 py-3">
+      <div className="mb-2 flex items-center gap-1.5">
+        {icon && <span className="text-muted-foreground [&_svg]:size-3.5">{icon}</span>}
+        <h3 className="text-[12.5px] font-semibold text-foreground/90">{title}</h3>
+        {info && <InfoTip>{info}</InfoTip>}
+        <div className="ml-auto">{right}</div>
       </div>
       <div className="space-y-2">{children}</div>
     </section>

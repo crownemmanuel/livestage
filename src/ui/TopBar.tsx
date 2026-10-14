@@ -1,23 +1,37 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Cable, Clapperboard, FileDown, FileUp, Menu, MonitorPlay, MonitorX, RotateCcw, Save, Settings2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  AlertTriangle,
+  Cable,
+  Check,
+  Clapperboard,
+  FileDown,
+  FileUp,
+  History,
+  Loader2,
+  MonitorCog,
+  MonitorPlay,
+  MonitorX,
+  Moon,
+  MoreHorizontal,
+  PencilRuler,
+  Power,
+  RotateCcw,
+  Save,
+  TvMinimalPlay,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { closeOutputWindow, exportProject, importProject, openOutputWindow } from "@/core/platform";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
+import { useIo } from "@/engine/io";
+import { clearLiveState } from "@/engine/persist";
 import { OutputSettingsDialog } from "./OutputSettings";
 import { IoDialog } from "./io/IoDialog";
-import { useIo } from "@/engine/io";
 import { getErrors, onErrors } from "./ErrorBoundary";
-import { clearLiveState } from "@/engine/persist";
+import { RoundToggle, Tip, ToolbarButton } from "./kit";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -29,17 +43,16 @@ export function TopBar() {
   const program = useShow((s) => s.program);
   const status = useShow((s) => s.outputStatus);
   const seenAt = useShow((s) => s.outputSeenAt);
-  const [settings, setSettings] = useState(false);
-  const [io, setIo] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
   const outputLostAt = useShow((s) => s.outputLostAt);
   const restoredAt = useShow((s) => s.restoredAt);
   const midiStatus = useIo((s) => s.midiStatus);
   const oscStatus = useIo((s) => s.oscStatus);
   const ioErr = useIo((s) => s.midiStatus === "error" || s.oscStatus === "error");
+  const [settings, setSettings] = useState(false);
+  const [io, setIo] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [errCount, setErrCount] = useState(() => getErrors().length);
   useEffect(() => onErrors(() => setErrCount(getErrors().length)), []);
-  const ioOn = midiStatus === "open" || oscStatus === "listening";
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const h = setInterval(() => setClock(new Date()), 1000);
@@ -47,86 +60,72 @@ export function TopBar() {
   }, []);
   const connected = !!status && Date.now() - seenAt < 3500;
   const live = program.standby ? null : program.runtime?.scene;
+  const ioOn = midiStatus === "open" || oscStatus === "listening";
+  const blackout = !!program.blackout?.on;
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
-      <div className="flex items-center gap-2">
-        <Clapperboard className="size-4 text-armed" />
-        <div className="leading-none">
-          <div className="text-[11px] font-bold tracking-[0.2em]">SALVATION LIVE STUDIO</div>
-          <div className="mt-0.5 max-w-[220px] truncate text-[10.5px] text-muted-foreground">{name}</div>
+    <header className="flex h-[60px] shrink-0 items-center gap-2 border-b border-border bg-card px-2">
+      <div className="flex items-center gap-2 pl-1 pr-2">
+        <span className="grid size-8 place-items-center rounded-md bg-armed/15 text-armed">
+          <Clapperboard className="size-4" />
+        </span>
+        <div className="hidden leading-tight xl:block">
+          <div className="font-key text-[14px] font-bold">Salvation Live</div>
+          <div className="max-w-[180px] truncate text-[11px] text-muted-foreground">{name}</div>
         </div>
       </div>
 
-      <div className="ml-2 flex rounded-md border border-border p-0.5">
-        {(["show", "builder"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => useProject.getState().setMode(m)}
-            className={cn("rounded-[5px] px-3 py-1 text-[11px] font-semibold tracking-wider", mode === m ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}
-          >
-            {m === "show" ? "SHOW MODE" : "SCENE BUILDER"}
-          </button>
-        ))}
+      <div className="flex items-center gap-0.5 border-l border-border pl-2">
+        <ToolbarButton icon={<TvMinimalPlay />} label="Show" active={mode === "show"} onClick={() => useProject.getState().setMode("show")} tip="Run the show: preview, take live, fire cues" />
+        <ToolbarButton icon={<PencilRuler />} label="Build" active={mode === "builder"} onClick={() => useProject.getState().setMode("builder")} tip="Build scenes: components, cues, camera. Edits only touch the preview." />
       </div>
 
-      <div className="mx-auto flex min-w-0 items-center gap-2 text-[12px]">
-        <span className={cn("rounded-[3px] px-1.5 py-px text-[10px] font-bold tracking-[0.14em]", live ? "bg-live text-white" : "bg-muted text-muted-foreground")}>{live ? "ON AIR" : "STANDBY"}</span>
-        <span className="truncate">{live ? `${String(live.number).padStart(2, "0")} · ${live.name}` : "Audience sees the standby visual"}</span>
-        {program.blackout?.on && <span className="rounded-[3px] bg-armed px-1.5 py-px text-[10px] font-bold tracking-[0.14em] text-black">BLACKOUT</span>}
+      {/* On-air tally: what the audience is looking at right now. */}
+      <div className="mx-auto flex min-w-0 items-center gap-2">
+        <div className={cn("flex min-w-0 items-center gap-2 rounded-full border px-3 py-1.5", live ? "border-live/50 bg-live/10" : "border-border bg-well")}>
+          <span className={cn("size-2.5 shrink-0 rounded-full", live ? "tally-pulse bg-live" : "bg-muted-foreground/50")} />
+          <span className={cn("font-key text-[13px] font-bold", live ? "text-live" : "text-muted-foreground")}>{live ? "On air" : "Standby"}</span>
+          {live && (
+            <span className="min-w-0 truncate text-[13px]">
+              <span className="font-key font-semibold text-muted-foreground">{String(live.number).padStart(2, "0")}</span> {live.name}
+            </span>
+          )}
+        </div>
+        {blackout && (
+          <Tip label="The wall is blacked out" side="bottom">
+            <span className="grid size-7 place-items-center rounded-full bg-armed text-black">
+              <Moon className="size-3.5" />
+            </span>
+          </Tip>
+        )}
         {restoredAt && Date.now() - restoredAt < 60000 && (
-          <span className="rounded-[3px] border border-preview/50 px-1.5 py-px text-[10px] font-semibold tracking-wider text-preview" title="The operator window restarted and picked the show up where it was">
-            RESUMED
-          </span>
+          <Tip label="The app restarted and picked the show up where it was" side="bottom">
+            <span className="grid size-7 place-items-center rounded-full border border-preview/50 text-preview">
+              <History className="size-3.5" />
+            </span>
+          </Tip>
         )}
         {outputLostAt && (
-          <span className="flex items-center gap-1 rounded-[3px] bg-destructive px-1.5 py-px text-[10px] font-bold tracking-[0.14em] text-white">
-            <AlertTriangle className="size-3" /> OUTPUT LOST · reopening
+          <span className="flex items-center gap-1.5 rounded-full bg-destructive px-2.5 py-1 text-[12px] font-semibold text-white">
+            <AlertTriangle className="size-3.5" /> Output lost, reopening
           </span>
         )}
       </div>
 
-      <div className="flex items-center gap-2">
-        <div className={cn("flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] tabular", connected ? "border-preview/40 text-preview" : "border-border text-muted-foreground")}>
-          <span className={cn("size-1.5 rounded-full", connected ? "bg-preview" : "bg-muted-foreground/50")} />
-          {connected ? `Output ${status!.width}×${status!.height} · ${status!.fps} fps` : "Output closed"}
-        </div>
-        {connected ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={async () => {
-              await closeOutputWindow();
-              // A closed webview may not get to send its goodbye; clear status right away.
-              useShow.setState({ outputStatus: null, outputSeenAt: 0 });
-            }}
-          >
-            <MonitorX /> Close output
-          </Button>
-        ) : (
-          <Button size="sm" variant="outline" onClick={() => void openOutputWindow(output)}>
-            <MonitorPlay /> Open output
-          </Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={() => setSettings(true)}>
-          <Settings2 /> Output
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => setIo(true)} title="MIDI / OSC show control" className={cn(ioErr && "text-destructive")}>
-          <Cable className={cn(ioOn && "text-preview")} /> I/O
-        </Button>
-        {errCount > 0 && (
-          <span className="flex items-center gap-1 text-[10.5px] text-armed" title={getErrors().slice(-5).map((e) => e.text).join("\n")}>
-            <AlertTriangle className="size-3.5" /> {errCount}
-          </span>
-        )}
-        <span className={cn("w-16 text-right text-[10.5px]", saveError ? "text-destructive" : "text-muted-foreground")} title={saveError ?? (savedAt ? `Saved ${new Date(savedAt).toLocaleTimeString()}` : "")}>
-          {saveError ? "save failed" : dirty ? "saving…" : "saved"}
-        </span>
+      <div className="flex items-center gap-0.5">
+        <ToolbarButton icon={<MonitorCog />} label="Screens" onClick={() => setSettings(true)} tip="Wall size, output display, standby picture, safe area" />
+        <ToolbarButton
+          icon={<Cable className={cn(ioErr ? "text-destructive" : ioOn && "text-preview")} />}
+          label="Control"
+          onClick={() => setIo(true)}
+          tip={`MIDI / OSC show control (lighting console, sound)${ioOn ? `: ${[midiStatus === "open" && "MIDI", oscStatus === "listening" && "OSC"].filter(Boolean).join(" + ")} on` : ""}`}
+        />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="icon-sm" variant="ghost" aria-label="Show file menu">
-              <Menu />
-            </Button>
+            <button type="button" className="flex h-12 min-w-[50px] flex-col items-center justify-center gap-0.5 rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-[18px]">
+              <MoreHorizontal />
+              <span className="leading-none">More</span>
+            </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={() => void useProject.getState().save()}>
@@ -157,15 +156,49 @@ export function TopBar() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <span className="w-[62px] text-right font-mono text-[12px] tabular text-muted-foreground">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
       </div>
+
+      <div className="flex items-center gap-1.5 border-l border-border pl-2.5">
+        <RoundToggle
+          on={connected}
+          tone="preview"
+          label="Output"
+          icon={<MonitorPlay />}
+          tip={connected ? `Audience output open: ${status!.width}×${status!.height}, ${status!.fps} fps. Click to close it.` : "Open the audience output on the LED wall's display"}
+          onClick={async () => {
+            if (connected) {
+              await closeOutputWindow();
+              useShow.setState({ outputStatus: null, outputSeenAt: 0 });
+            } else void openOutputWindow(output);
+          }}
+        />
+        <RoundToggle on={blackout} tone="armed" label="Blackout" icon={<Moon />} tip="Fade the whole wall to black, and back (Shift+B)" onClick={() => useShow.getState().setBlackout(!blackout)} />
+        <RoundToggle on={program.standby} tone="armed" label="Standby" icon={<Power />} tip="Fade the wall to the safe standby picture, and back" onClick={() => useShow.getState().setStandby(!program.standby)} />
+      </div>
+
+      <div className="flex items-center gap-2 border-l border-border pl-2.5 pr-1">
+        {errCount > 0 && (
+          <Tip label={getErrors().slice(-5).map((e) => e.text).join("\n") || "Errors"} side="bottom">
+            <span className="flex items-center gap-1 text-[12px] text-armed">
+              <AlertTriangle className="size-4" /> {errCount}
+            </span>
+          </Tip>
+        )}
+        <Tip label={saveError ? `Save failed: ${saveError}` : dirty ? "Saving…" : savedAt ? `Saved ${new Date(savedAt).toLocaleTimeString()}` : "Saved"} side="bottom">
+          <span className={cn("grid size-6 place-items-center", saveError ? "text-destructive" : "text-muted-foreground")}>
+            {saveError ? <AlertTriangle className="size-4" /> : dirty ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+          </span>
+        </Tip>
+        <span className="font-key w-[70px] text-right text-[15px] font-semibold tabular text-foreground/80">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
+      </div>
+
       <OutputSettingsDialog open={settings} onOpenChange={setSettings} />
       <IoDialog open={io} onOpenChange={setIo} />
       <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Replace the show with the demo?</DialogTitle>
-            <DialogDescription>All current scenes and cues are replaced by the two prototype scenes. Export the show file first if you want to keep it.</DialogDescription>
+            <DialogDescription>All current scenes and cues are replaced by the built-in show. Export the show file first if you want to keep it.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmReset(false)}>

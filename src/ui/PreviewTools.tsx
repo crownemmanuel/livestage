@@ -2,7 +2,7 @@
 // which is what TAKE LIVE starts from) and a scrubber for the videos in the scene.
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { Crosshair, Send } from "lucide-react";
+import { Crosshair, Film, Scan, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
@@ -68,7 +68,11 @@ export function FramingOverlay() {
       className={cn("absolute inset-0 z-10 select-none", zoomed ? (dragging ? "cursor-grabbing" : "cursor-grab") : "cursor-zoom-in")}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        try {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          /* synthetic or already-released pointer */
+        }
         drag.current = { x: e.clientX, y: e.clientY, f: previewFraming(), moved: false };
         setDragging(true);
       }}
@@ -139,7 +143,7 @@ export function FramingBar() {
   const zoomTo = (z: number) => commitFraming(z === 1 ? NO_FRAMING : { zoom: z, x: f.x, y: f.y });
   return (
     <div className="flex items-center gap-1" title="Framing: drag the preview to reposition, scroll to zoom, double-click to centre. TAKE LIVE starts from this framing.">
-      <span className="mr-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">Framing</span>
+      <Scan className="mr-0.5 size-3.5 text-muted-foreground" />
       {ZOOMS.map((z) => (
         <Button key={z} size="xs" variant={Math.abs(f.zoom - z) < 0.01 ? "secondary" : "ghost"} className="h-5 px-1.5 text-[10.5px]" onClick={() => zoomTo(z)}>
           {z === 1 ? "Fit" : `${z}×`}
@@ -295,7 +299,7 @@ export function VideoScrubber() {
         }}
       />
       <div className="mt-1 flex items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Scrub</span>
+        <Film className="size-3.5 shrink-0 text-muted-foreground" />
 <span className="min-w-0 truncate text-foreground/80" title="Pick another video in the Media tab">
           {src.label}
         </span>

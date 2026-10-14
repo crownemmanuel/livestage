@@ -1,32 +1,41 @@
 @import "tailwindcss";
+@import "@fontsource/barlow/400.css";
+@import "@fontsource/barlow/500.css";
+@import "@fontsource/barlow/600.css";
+@import "@fontsource/barlow/700.css";
+@import "@fontsource/barlow-semi-condensed/500.css";
+@import "@fontsource/barlow-semi-condensed/600.css";
+@import "@fontsource/barlow-semi-condensed/700.css";
 
 @custom-variant dark (&:is(.dark *));
 
 /* Control-booth palette: near-black neutrals, one red for PROGRAM/LIVE,
    one green for PREVIEW, amber for armed/warning states. */
 :root {
-  --radius: 0.375rem;
-  --background: oklch(0.155 0.004 260);
-  --foreground: oklch(0.93 0.005 260);
-  --card: oklch(0.19 0.005 260);
-  --card-foreground: oklch(0.93 0.005 260);
-  --popover: oklch(0.21 0.006 260);
-  --popover-foreground: oklch(0.93 0.005 260);
-  --primary: oklch(0.88 0.01 260);
-  --primary-foreground: oklch(0.18 0.005 260);
-  --secondary: oklch(0.26 0.006 260);
-  --secondary-foreground: oklch(0.93 0.005 260);
-  --muted: oklch(0.24 0.006 260);
-  --muted-foreground: oklch(0.66 0.012 260);
-  --accent: oklch(0.28 0.008 260);
-  --accent-foreground: oklch(0.95 0.005 260);
-  --destructive: oklch(0.6 0.2 25);
-  --border: oklch(0.29 0.006 260);
-  --input: oklch(0.31 0.006 260);
-  --ring: oklch(0.55 0.01 260);
-  --live: oklch(0.62 0.22 27);
-  --preview: oklch(0.7 0.17 150);
-  --armed: oklch(0.8 0.15 80);
+  /* Booth palette: graphite surfaces, and the three tally colours of a broadcast desk. */
+  --radius: 0.5rem;
+  --background: #15171b;
+  --foreground: #eceae4;
+  --card: #1d2026;
+  --card-foreground: #eceae4;
+  --popover: #22262d;
+  --popover-foreground: #eceae4;
+  --primary: #eceae4;
+  --primary-foreground: #15171b;
+  --secondary: #2a2f37;
+  --secondary-foreground: #eceae4;
+  --muted: #252a31;
+  --muted-foreground: #8d929c;
+  --accent: #2a2f37;
+  --accent-foreground: #f4f2ec;
+  --destructive: #e5483b;
+  --border: #2c313a;
+  --input: #343a44;
+  --ring: #6b7280;
+  --live: #e5483b;
+  --preview: #3fbf6f;
+  --armed: #f2b544;
+  --well: #101215;
 }
 
 @theme inline {
@@ -55,7 +64,9 @@
   --color-live: var(--live);
   --color-preview: var(--preview);
   --color-armed: var(--armed);
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-well: var(--well);
+  --font-key: "Barlow Semi Condensed", "Barlow", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Barlow", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
 }
 
@@ -72,7 +83,7 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-size: 13px;
+    font-size: 13.5px;
     user-select: none;
     -webkit-user-select: none;
   }
@@ -92,4 +103,39 @@ body.output-window #root {
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Drag handles between the resizable columns. */
+.splitter {
+  position: relative;
+  width: 6px;
+  margin: 0 -3px;
+  z-index: 20;
+  cursor: col-resize;
+}
+.splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0 2.5px;
+  background: transparent;
+  transition: background 120ms;
+}
+.splitter:hover::after,
+.splitter[data-active="true"]::after {
+  background: var(--armed);
+}
+
+/* The program monitor is an on-air light. */
+.on-air-frame {
+  box-shadow: 0 0 0 2px var(--live), 0 0 24px -4px color-mix(in oklab, var(--live) 55%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tally-pulse {
+    animation: tally 1.6s ease-in-out infinite;
+  }
+}
+@keyframes tally {
+  50% {
+    opacity: 0.45;
+  }
 }

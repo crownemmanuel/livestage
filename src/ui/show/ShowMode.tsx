@@ -1,10 +1,50 @@
-import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Pause, Play, Power, Repeat, RotateCcw } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  ArrowRightLeft,
+  ChevronLeft,
+  ChevronRight,
+  CircleDot,
+  Clapperboard,
+  Crosshair,
+  Eye,
+  Footprints,
+  Gauge,
+  Images,
+  Keyboard,
+  Layers,
+  ListOrdered,
+  Loader2,
+  MapPin,
+  Moon,
+  Mountain,
+  Pause,
+  PawPrint,
+  Play,
+  Repeat,
+  RotateCcw,
+  Route,
+  Scan,
+  Send,
+  SkipForward,
+  SlidersHorizontal,
+  Snowflake,
+  Sparkles,
+  SunMoon,
+  TreeDeciduous,
+  Video,
+  Volume2,
+  X,
+  Zap,
+  Cable,
+  Check,
+  MonitorPlay,
+  AlertTriangle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
-import type { TransitionKind, TransitionSpec } from "@/core/types";
+import type { CueAction, TransitionKind, TransitionSpec } from "@/core/types";
 import { describeMessage, useIo } from "@/engine/io";
 import { cancelPending, cueControl, pendingCount, takeScene } from "@/engine/operator";
 import { StageView } from "@/render/StageView";
@@ -13,6 +53,7 @@ import { useShow, type Target } from "@/store/show";
 import { NumberInput, SelectBox } from "../fields";
 import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
 import { SceneList } from "../SceneList";
+import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 import { MediaPanel } from "./MediaPanel";
 
@@ -27,18 +68,23 @@ export const TRANSITIONS: { value: TransitionKind; label: string }[] = [
   { value: "video", label: "Video transition" },
 ];
 
+const PANE_DEFAULTS = [290, 360];
+
 export function ShowMode() {
+  const [w, setW, reset] = usePaneWidths("show", PANE_DEFAULTS);
   return (
     <div className="grid h-full min-h-0 grid-rows-[1fr_auto]">
-      <div className="grid min-h-0 grid-cols-[264px_1fr_372px]">
-        <aside className="min-h-0 border-r border-border">
+      <div className="flex min-h-0">
+        <aside className="min-h-0 shrink-0 border-r border-border" style={{ width: w[0] }}>
           <SceneList />
         </aside>
-        <main className="flex min-h-0 min-w-0 flex-col">
+        <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Monitors />
           <CueList />
         </main>
-        <aside className="min-h-0 border-l border-border">
+        <Splitter value={w[1]} onChange={(v) => setW(1, v)} min={280} max={560} dir={-1} onReset={reset} />
+        <aside className="min-h-0 shrink-0 border-l border-border" style={{ width: w[1] }}>
           <ControlPanel />
         </aside>
       </div>
@@ -60,12 +106,27 @@ function useTick(ms: number) {
   }, [ms]);
 }
 
-function MonitorLabel({ kind, children }: { kind: "preview" | "program"; children: React.ReactNode }) {
+/** Tally chip over a monitor: a coloured dot, the bus name, then what is on it. */
+function MonitorHeader({ kind, children, info }: { kind: "preview" | "program"; children: ReactNode; info: ReactNode }) {
+  const live = kind === "program";
   return (
-    <div className="flex h-7 items-center gap-2 px-1 text-[11px]">
-      <span className={cn("rounded-[3px] px-1.5 py-px text-[10px] font-bold tracking-[0.14em]", kind === "program" ? "bg-live text-white" : "bg-preview text-black")}>{kind === "program" ? "PROGRAM" : "PREVIEW"}</span>
-      <div className="flex min-w-0 flex-1 items-center gap-2 truncate text-muted-foreground">{children}</div>
+    <div className="flex h-8 items-center gap-2 px-0.5">
+      <span className={cn("flex items-center gap-1.5 rounded-full px-2 py-0.5 font-key text-[12.5px] font-bold", live ? "bg-live text-white" : "bg-preview/15 text-preview")}>
+        <span className={cn("size-2 rounded-full", live ? "bg-white" : "bg-preview")} />
+        {live ? "Program" : "Preview"}
+      </span>
+      <div className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">{children}</div>
+      <InfoTip side="bottom">{info}</InfoTip>
     </div>
+  );
+}
+
+function SceneTitle({ scene }: { scene: { number: number; name: string } | null | undefined }) {
+  if (!scene) return <span className="text-muted-foreground">Nothing selected</span>;
+  return (
+    <span className="min-w-0 truncate">
+      <span className="font-key font-semibold text-muted-foreground">{String(scene.number).padStart(2, "0")}</span> {scene.name}
+    </span>
   );
 }
 
@@ -75,16 +136,15 @@ function Monitors() {
   const output = useShow((s) => s.output);
   const capture = useCaptureThumb();
   const aspect = `${output.canvasWidth} / ${output.canvasHeight}`;
-  const liveName = program.standby ? "Standby" : program.runtime ? `${String(program.runtime.scene.number).padStart(2, "0")} · ${program.runtime.scene.name}` : "—";
 
   return (
-    <div className="border-b border-border p-3">
-      <div className="grid grid-cols-2 gap-3">
+    <div className="border-b border-border px-3 pb-3 pt-2">
+      <div className="grid grid-cols-2 gap-4">
         <div className="min-w-0">
-          <MonitorLabel kind="preview">
-            <span className="truncate text-foreground">{scene ? `${String(scene.number).padStart(2, "0")} · ${scene.name}` : "—"}</span>
-          </MonitorLabel>
-          <div className="relative w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: aspect, maxHeight: "34vh" }}>
+          <MonitorHeader kind="preview" info="Rehearse here: selecting a scene, firing its cues, zooming and scrubbing never reach the audience until you take it live.">
+            <SceneTitle scene={scene} />
+          </MonitorHeader>
+          <div className="relative w-full overflow-hidden rounded-md ring-1 ring-preview/60" style={{ aspectRatio: aspect, maxHeight: "36vh" }}>
             <StageView source="preview" maxDpr={1.25} showSafeArea onCapture={capture} />
             <FramingOverlay />
           </div>
@@ -92,12 +152,20 @@ function Monitors() {
           <VideoScrubber />
         </div>
         <div className="min-w-0">
-          <MonitorLabel kind="program">
-            <span className="truncate text-foreground">{liveName}</span>
-            {program.transition && <span className="animate-pulse text-armed">transition…</span>}
-            {program.blackout?.on && <span className="font-bold text-armed">BLACKOUT</span>}
-          </MonitorLabel>
-          <div className="relative w-full overflow-hidden rounded-sm ring-2 ring-live" style={{ aspectRatio: aspect, maxHeight: "34vh" }}>
+          <MonitorHeader kind="program" info="Exactly what the LED wall shows right now.">
+            {program.standby ? <span className="text-muted-foreground">Standby picture</span> : <SceneTitle scene={program.runtime?.scene} />}
+            {program.transition && (
+              <span className="flex items-center gap-1 text-[12px] text-armed">
+                <Loader2 className="size-3.5 animate-spin" /> Transition
+              </span>
+            )}
+            {program.blackout?.on && (
+              <span className="flex items-center gap-1 text-[12px] font-semibold text-armed">
+                <Moon className="size-3.5" /> Blackout
+              </span>
+            )}
+          </MonitorHeader>
+          <div className="on-air-frame relative w-full overflow-hidden rounded-md" style={{ aspectRatio: aspect, maxHeight: "36vh" }}>
             <StageView source="program" maxDpr={1.25} showSafeArea />
           </div>
           <LiveNextCue />
@@ -108,22 +176,34 @@ function Monitors() {
   );
 }
 
-/** Read-only: what the live scene's next cue is, even while another scene is in the preview. */
+/** Read-only: the live scene's next cue, even while another scene is in the preview. */
 function LiveNextCue() {
   const rt = useShow((s) => s.program.runtime);
   const standby = useShow((s) => s.program.standby);
   const pend = pendingCount("program");
   useTick(500);
-  if (!rt || standby) return <div className="mt-1.5 text-[11px] text-muted-foreground">Nothing live</div>;
+  if (!rt || standby) return <div className="mt-2 text-[12px] text-muted-foreground">Nothing live</div>;
   const next = rt.scene.cues[rt.cuePointer];
   return (
-    <div className="mt-1.5 flex items-center gap-2 text-[11px]">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Live next</span>
-      <span className="min-w-0 flex-1 truncate">{next ? `${rt.cuePointer + 1}. ${next.name}` : <span className="text-muted-foreground">end of cue list</span>}</span>
+    <div className="mt-2 flex items-center gap-2 text-[12.5px]">
+      <Tip label="The live scene's next cue">
+        <SkipForward className="size-3.5 shrink-0 text-live" />
+      </Tip>
+      <span className="min-w-0 flex-1 truncate">
+        {next ? (
+          <>
+            <span className="font-key font-semibold text-muted-foreground">{rt.cuePointer + 1}</span> {next.name}
+          </>
+        ) : (
+          <span className="text-muted-foreground">End of the cue list</span>
+        )}
+      </span>
       {pend > 0 && (
-        <button className="text-armed hover:underline" onClick={() => cancelPending("program")} title="Cancel delayed actions still waiting (Esc)">
-          {pend} pending · cancel
-        </button>
+        <Tip label="Delayed actions still waiting to fire. Click (or Esc) to cancel them.">
+          <button className="flex items-center gap-1 rounded-full bg-armed/15 px-2 py-0.5 text-[11.5px] font-semibold text-armed" onClick={() => cancelPending("program")}>
+            <Loader2 className="size-3 animate-spin" /> {pend} <X className="size-3" />
+          </button>
+        </Tip>
       )}
     </div>
   );
@@ -135,27 +215,38 @@ function PreviewTransport() {
   const paused = rt?.clock.pausedAt != null;
   const t = rt ? sceneNow(rt) / 1000 : 0;
   const dur = rt?.scene.duration;
+  const shots = rt?.scene.cameraShots ?? [];
   return (
-    <div className="mt-1.5 flex items-center gap-1 text-[11px]">
-      <Button size="icon-xs" variant="ghost" aria-label={paused ? "Play preview" : "Pause preview"} disabled={!rt} onClick={() => useShow.getState().dispatch("preview", { type: "clock", op: paused ? "resume" : "pause" })}>
-        {paused ? <Play /> : <Pause />}
-      </Button>
-      <Button size="icon-xs" variant="ghost" aria-label="Restart preview" disabled={!rt} onClick={() => useShow.getState().restartPreview()}>
-        <RotateCcw />
-      </Button>
-      <span className="w-[78px] tabular text-muted-foreground">
+    <div className="mt-2 flex items-center gap-1 text-[12px]">
+      <Tip label={paused ? "Play the preview" : "Pause the preview"}>
+        <Button size="icon-sm" variant="ghost" className="size-8" disabled={!rt} onClick={() => useShow.getState().dispatch("preview", { type: "clock", op: paused ? "resume" : "pause" })}>
+          {paused ? <Play /> : <Pause />}
+        </Button>
+      </Tip>
+      <Tip label="Restart the preview from the top">
+        <Button size="icon-sm" variant="ghost" className="size-8" disabled={!rt} onClick={() => useShow.getState().restartPreview()}>
+          <RotateCcw />
+        </Button>
+      </Tip>
+      <span className="font-key w-[72px] text-[13px] font-semibold tabular text-muted-foreground">
         {fmt(t)}
-        {dur ? ` / ${fmt(dur)}` : ""}
+        {dur ? <span className="font-normal"> / {fmt(dur)}</span> : ""}
       </span>
-      <SelectBox
-        className="h-6 w-[140px]"
-        value="__cam__"
-        onChange={(id) => id !== "__cam__" && useShow.getState().dispatch("preview", { type: "camera", shotId: id, delay: 0 })}
-        options={[{ value: "__cam__", label: "Camera position…" }, ...(rt?.scene.cameraShots.map((s) => ({ value: s.id, label: s.name })) ?? [])]}
-      />
-      <div className="ml-auto flex items-center gap-1">
+      {shots.length > 1 && (
+        <Tip label="Move the preview's 3D camera to a saved shot">
+          <span className="flex items-center gap-1">
+            <Video className="size-3.5 text-muted-foreground" />
+            <SelectBox
+              className="h-7 w-[132px]"
+              value="__cam__"
+              onChange={(id) => id !== "__cam__" && useShow.getState().dispatch("preview", { type: "camera", shotId: id, delay: 0 })}
+              options={[{ value: "__cam__", label: "Camera shot" }, ...shots.map((s) => ({ value: s.id, label: s.name }))]}
+            />
+          </span>
+        </Tip>
+      )}
+      <div className="ml-auto">
         <FramingBar />
-
       </div>
     </div>
   );
@@ -178,52 +269,89 @@ function TakeBar() {
   const busy = !!program.transition;
 
   return (
-    <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-card/60 px-2 py-2">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Transition</span>
-      <SelectBox className="w-[140px]" value={spec?.kind ?? "crossfade"} onChange={(kind) => setSpec({ kind })} options={TRANSITIONS} />
+    <div className="mt-3 flex items-center gap-2 rounded-lg border border-border bg-well p-2">
+      <Tip label="How the wall changes to the preview scene when you take it live">
+        <ArrowRightLeft className="ml-1 size-4 shrink-0 text-muted-foreground" />
+      </Tip>
+      <SelectBox className="h-9 w-[150px]" value={spec?.kind ?? "crossfade"} onChange={(kind) => setSpec({ kind })} options={TRANSITIONS} />
       {spec && spec.kind !== "cut" && spec.kind !== "video" && (
-        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-          <NumberInput className="h-7 w-16" value={spec.duration} min={0} max={60} step={0.5} onChange={(duration) => setSpec({ duration })} />s
+        <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
+          <NumberInput className="h-9 w-16" value={spec.duration} min={0} max={60} step={0.5} onChange={(duration) => setSpec({ duration })} />s
         </div>
       )}
       {spec?.kind === "wipe" && (
-        <SelectBox className="w-[90px]" value={spec.direction ?? "left"} onChange={(direction) => setSpec({ direction })} options={[{ value: "left", label: "from L" }, { value: "right", label: "from R" }, { value: "up", label: "from top" }, { value: "down", label: "from bottom" }]} />
+        <SelectBox className="h-9 w-[100px]" value={spec.direction ?? "left"} onChange={(direction) => setSpec({ direction })} options={[{ value: "left", label: "From left" }, { value: "right", label: "From right" }, { value: "up", label: "From top" }, { value: "down", label: "From bottom" }]} />
       )}
       {spec?.kind === "video" && (
         <SelectBox
-          className="w-[180px]"
+          className="h-9 w-[180px]"
           value={spec.videoAssetId ?? "__none__"}
           onChange={(v) => setSpec({ videoAssetId: v === "__none__" ? null : v })}
-          options={[{ value: "__none__", label: videos.length ? "Choose video…" : "No videos imported" }, ...videos.map((v) => ({ value: v.id, label: v.name }))]}
+          options={[{ value: "__none__", label: videos.length ? "Choose video" : "No videos imported" }, ...videos.map((v) => ({ value: v.id, label: v.name }))]}
         />
       )}
       {next && (
-        <Button size="xs" variant="ghost" onClick={() => useShow.getState().setNextTransition(null)} title="Use the scene's default transition">
-          reset
-        </Button>
+        <Tip label="Back to the scene's own transition">
+          <Button size="icon-sm" variant="ghost" className="size-8" onClick={() => useShow.getState().setNextTransition(null)}>
+            <RotateCcw />
+          </Button>
+        </Tip>
       )}
-      <div className="ml-auto flex items-center gap-2">
-        <Button
-          variant={program.blackout?.on ? "secondary" : "outline"}
-          className={cn("h-11 min-w-[112px] font-semibold", program.blackout?.on && "border border-armed bg-armed/20 text-armed")}
-          onClick={() => useShow.getState().setBlackout(!program.blackout?.on)}
-          title="Shift+B · Lights out: fade the whole wall to black (and back)"
-        >
-          {program.blackout?.on ? "LIGHTS UP" : "BLACKOUT"}
-        </Button>
-        <Button variant={program.standby ? "secondary" : "outline"} className={cn("h-11 gap-2 font-semibold", program.standby && "border border-armed text-armed")} onClick={() => useShow.getState().setStandby(!program.standby)} title="Fade the audience output to the safe standby visual">
-          <Power /> {program.standby ? "IN STANDBY" : "STANDBY"}
-        </Button>
-        <Button
-          disabled={!scene || busy}
-          onClick={() => scene && void takeScene(scene.id)}
-          className="h-11 min-w-[190px] bg-live text-[15px] font-bold tracking-[0.14em] text-white shadow-[0_0_0_1px] shadow-live/40 hover:bg-live/85 disabled:bg-muted"
-          title="Ctrl/⌘ + Enter"
-        >
-          {busy ? "TRANSITIONING…" : isLiveAlready ? "RE-TAKE LIVE" : "TAKE LIVE"}
-        </Button>
-      </div>
+      <Button
+        disabled={!scene || busy}
+        onClick={() => scene && void takeScene(scene.id)}
+        className="ml-auto h-11 min-w-[200px] gap-2 rounded-lg bg-live font-key text-[17px] font-bold tracking-wide text-white shadow-[0_0_20px_-6px] shadow-live hover:bg-live/85 disabled:bg-muted disabled:shadow-none"
+        title="Ctrl/⌘ + Enter"
+      >
+        {busy ? <Loader2 className="size-5 animate-spin" /> : <CircleDot className="size-5" />}
+        {busy ? "Transitioning" : isLiveAlready ? "Re-take live" : "Take live"}
+      </Button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- cues
+
+const ACTION_ICON: Record<CueAction["type"], typeof Play> = {
+  lion: PawPrint,
+  "lion.moveTo": Footprints,
+  "lion.place": MapPin,
+  "actor.visible": Eye,
+  effect: Sparkles,
+  "effect.param": SlidersHorizontal,
+  background: Mountain,
+  layer: Layers,
+  camera: Video,
+  framing: Scan,
+  timeOfDay: SunMoon,
+  takeScene: ArrowRightLeft,
+  clip: Clapperboard,
+  blackout: Moon,
+  clock: Snowflake,
+  sound: Volume2,
+  send: Send,
+  names: TreeDeciduous,
+  route: Route,
+  "media.speed": Gauge,
+};
+
+/** One small icon per action, each explaining itself on hover. */
+function ActionIcons({ actions }: { actions: CueAction[] }) {
+  if (!actions.length) return <span className="text-[11.5px] text-muted-foreground">No actions</span>;
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {actions.map((a, i) => {
+        const I = ACTION_ICON[a.type];
+        return (
+          <Tip key={i} label={describeAction(a)}>
+            <span className="relative grid size-6 place-items-center rounded bg-accent/70 text-muted-foreground">
+              <I className="size-3.5" />
+              {a.delay > 0 && <span className="absolute -right-1 -top-1 rounded-sm bg-armed px-0.5 font-key text-[9px] font-bold leading-[11px] text-black">+{+a.delay.toFixed(1)}</span>}
+            </span>
+          </Tip>
+        );
+      })}
+    </span>
   );
 }
 
@@ -237,53 +365,73 @@ function CueList() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-3 py-2">
-        <div className="flex rounded-md border border-border p-0.5">
+        <div className="flex rounded-lg bg-well p-0.5">
           {(["cues", "media"] as const).map((k) => (
-            <button key={k} onClick={() => setTab(k)} className={cn("rounded-[5px] px-3 py-1 text-[11px] font-semibold tracking-wider", tab === k ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
-              {k === "cues" ? `CUES (${cues.length})` : "MEDIA"}
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold", tab === k ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}
+            >
+              {k === "cues" ? <ListOrdered className="size-3.5" /> : <Images className="size-3.5" />}
+              {k === "cues" ? "Cues" : "Media"}
+              {k === "cues" && <span className="text-muted-foreground">{cues.length}</span>}
             </button>
           ))}
         </div>
-        <span className="truncate text-[11px] text-muted-foreground">{rt.scene.name}</span>
-        <span className={cn("rounded-[3px] px-1.5 text-[9.5px] font-bold tracking-wider", live ? "bg-live text-white" : "bg-preview/20 text-preview")}>{live ? "LIVE" : "PREVIEW"}</span>
+        <Tip label={live ? "These cues fire on the live wall" : "These cues fire in the preview only"}>
+          <span className={cn("size-2.5 shrink-0 rounded-full", live ? "bg-live" : "bg-preview")} />
+        </Tip>
+        <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">{rt.scene.name}</span>
         <div className="ml-auto flex items-center gap-1">
           <CueButtons target={target} />
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        {tab === "media" ? <MediaPanel /> : <ol className="space-y-1 px-3 pb-3">
-          {cues.map((c, i) => {
-            const done = i < rt.cuePointer;
-            const next = i === rt.cuePointer;
-            return (
-              <li
-                key={c.id}
-                className={cn(
-                  "flex items-center gap-3 rounded-md border px-2.5 py-2",
-                  next ? (live ? "border-live bg-live/10 shadow-[inset_3px_0_0] shadow-live" : "border-preview bg-preview/10 shadow-[inset_3px_0_0] shadow-preview") : "border-border bg-card/40",
-                  done && "opacity-50",
-                )}
-                onDoubleClick={() => cueControl.set(target, i)}
-                title="Double-click: make this the next cue"
-              >
-                <span className={cn("w-7 text-right text-[14px] font-bold tabular", next ? (live ? "text-live" : "text-preview") : "text-muted-foreground")}>{i + 1}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13.5px] font-medium leading-tight">{c.name}</div>
-                  <div className="truncate text-[10.5px] text-muted-foreground">{c.actions.map(describeAction).join(" · ") || "no actions"}</div>
-                  {c.notes && <div className="mt-0.5 text-[11.5px] leading-snug text-amber-200/80">{c.notes}</div>}
-                </div>
-                {next && <span className={cn("text-[10px] font-bold tracking-wider", live ? "text-live" : "text-preview")}>NEXT</span>}
-                <Button size="xs" variant="outline" className="h-7" onClick={() => cueControl.set(target, i)} title="Make this the next cue (without firing it)">
-                  Standby
-                </Button>
-                <Button size="xs" className={cn("h-7 min-w-[52px] font-semibold", live ? "bg-live text-white hover:bg-live/85" : "")} onClick={() => cueControl.fire(target, i)}>
-                  Fire
-                </Button>
-              </li>
-            );
-          })}
-          {cues.length === 0 && <li className="px-2 py-6 text-center text-muted-foreground">No cues. Create them in Scene Builder.</li>}
-        </ol>}
+        {tab === "media" ? (
+          <MediaPanel />
+        ) : (
+          <ol className="space-y-1.5 px-3 pb-3">
+            {cues.map((c, i) => {
+              const done = i < rt.cuePointer;
+              const next = i === rt.cuePointer;
+              return (
+                <li
+                  key={c.id}
+                  className={cn(
+                    "group relative flex items-center gap-3 overflow-hidden rounded-lg border py-2 pl-3 pr-2 transition-colors",
+                    next ? (live ? "border-live/60 bg-live/[0.08]" : "border-preview/60 bg-preview/[0.07]") : "border-border bg-card/60 hover:bg-card",
+                    done && "opacity-45",
+                  )}
+                  onDoubleClick={() => cueControl.set(target, i)}
+                >
+                  {next && <span className={cn("absolute inset-y-0 left-0 w-1", live ? "bg-live" : "bg-preview")} />}
+                  <span className={cn("w-7 shrink-0 text-right font-key text-[20px] font-bold leading-none tabular", next ? (live ? "text-live" : "text-preview") : "text-muted-foreground/70")}>{i + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[14px] font-semibold leading-tight">{c.name}</span>
+                      {next && <ChevronRight className={cn("size-4 shrink-0", live ? "text-live" : "text-preview")} />}
+                    </div>
+                    {c.notes && <div className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-armed/85">{c.notes}</div>}
+                    <div className="mt-1">
+                      <ActionIcons actions={c.actions} />
+                    </div>
+                  </div>
+                  <Tip label="Make this the next cue (without firing it)">
+                    <Button size="icon-sm" variant="ghost" className={cn("size-9 text-muted-foreground", next && "invisible")} onClick={() => cueControl.set(target, i)}>
+                      <Crosshair />
+                    </Button>
+                  </Tip>
+                  <Tip label={live ? "Fire this cue on the live wall" : "Fire this cue in the preview"}>
+                    <Button size="icon-sm" className={cn("size-9 rounded-lg", live ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70")} onClick={() => cueControl.fire(target, i)}>
+                      <Zap />
+                    </Button>
+                  </Tip>
+                </li>
+              );
+            })}
+            {cues.length === 0 && <li className="px-2 py-8 text-center text-[13px] text-muted-foreground">No cues yet. Add them in Build.</li>}
+          </ol>
+        )}
       </ScrollArea>
     </div>
   );
@@ -294,27 +442,44 @@ function CueButtons({ target }: { target: Target }) {
   return (
     <>
       {target === "preview" && live && (
-        <Button size="xs" variant="outline" className="border-live/50 text-live" onClick={() => useProject.getState().selectScene(live.scene.id)} title="Show the live scene's cues">
-          Live: {live.scene.name.slice(0, 22)}
-        </Button>
+        <Tip label="Show the live scene's cues">
+          <Button size="sm" variant="outline" className="h-9 max-w-[200px] gap-1.5 border-live/50 text-live hover:text-live" onClick={() => useProject.getState().selectScene(live.scene.id)}>
+            <span className="size-2 shrink-0 rounded-full bg-live" />
+            <span className="truncate">{live.scene.name}</span>
+          </Button>
+        </Tip>
       )}
-      <Button size="sm" className={cn("h-9 min-w-[110px] text-[13px] font-bold tracking-wider", target === "program" ? "bg-live text-white hover:bg-live/85" : "bg-preview text-black hover:bg-preview/85")} onClick={() => cueControl.go(target)} title="Fire the next cue (G)">
-        GO next
-      </Button>
-      <Button size="icon-xs" variant="ghost" onClick={() => cueControl.back(target)} aria-label="Back">
-        <ChevronLeft />
-      </Button>
-      <Button size="icon-xs" variant="ghost" onClick={() => cueControl.skip(target)} aria-label="Skip">
-        <ChevronRight />
-      </Button>
-      <Button size="icon-xs" variant="ghost" onClick={() => cueControl.repeat(target)} aria-label="Repeat">
-        <Repeat />
-      </Button>
+      <Tip label="Step the next cue back">
+        <Button size="icon-sm" variant="ghost" className="size-9" onClick={() => cueControl.back(target)}>
+          <ChevronLeft />
+        </Button>
+      </Tip>
+      <Tip label="Skip the next cue">
+        <Button size="icon-sm" variant="ghost" className="size-9" onClick={() => cueControl.skip(target)}>
+          <ChevronRight />
+        </Button>
+      </Tip>
+      <Tip label="Fire the last cue again">
+        <Button size="icon-sm" variant="ghost" className="size-9" onClick={() => cueControl.repeat(target)}>
+          <Repeat />
+        </Button>
+      </Tip>
+      <Tip label={target === "program" ? "Fire the next cue on the live wall (G)" : "Fire the next cue in the preview (G)"}>
+        <Button
+          className={cn(
+            "h-10 min-w-[120px] gap-2 rounded-lg font-key text-[17px] font-bold tracking-wide",
+            target === "program" ? "bg-live text-white shadow-[0_0_18px_-6px] shadow-live hover:bg-live/85" : "bg-preview text-black hover:bg-preview/85",
+          )}
+          onClick={() => cueControl.go(target)}
+        >
+          <Play className="size-4 fill-current" /> GO
+        </Button>
+      </Tip>
     </>
   );
 }
 
-/** One line of health across the bottom: output, saving, I/O, keys. */
+/** One line of health across the bottom. */
 function StatusBar() {
   const status = useShow((s) => s.outputStatus);
   const seenAt = useShow((s) => s.outputSeenAt);
@@ -328,37 +493,42 @@ function StatusBar() {
   useTick(1000);
   const connected = !!status && Date.now() - seenAt < 3500;
   const slow = connected && status!.frameMs > 60;
+  const ioOn = midi === "open" || osc === "listening";
   return (
-    <div className="flex h-7 items-center gap-4 border-t border-border bg-card px-3 text-[10.5px] text-muted-foreground">
-      <span className={cn("flex items-center gap-1.5", lost ? "text-destructive" : connected ? (slow ? "text-armed" : "text-preview") : "")}>
-        <span className={cn("size-1.5 rounded-full", lost ? "bg-destructive" : connected ? (slow ? "bg-armed" : "bg-preview") : "bg-muted-foreground/50")} />
-        {lost ? "Output lost — reopening" : connected ? `Output ${status!.fps} fps · worst frame ${status!.frameMs} ms` : "Output closed"}
+    <div className="flex h-7 items-center gap-4 border-t border-border bg-card px-3 text-[11.5px] text-muted-foreground">
+      <Tip label={connected ? `Audience output ${status!.width}×${status!.height}. Slowest frame in the last second: ${status!.frameMs} ms.` : "The audience output window is closed"}>
+        <span className={cn("flex items-center gap-1.5", lost ? "text-destructive" : connected ? (slow ? "text-armed" : "text-preview") : "")}>
+          {lost ? <AlertTriangle className="size-3.5" /> : <MonitorPlay className="size-3.5" />}
+          {lost ? "Output lost" : connected ? `${status!.fps} fps` : "Output closed"}
+        </span>
+      </Tip>
+      <span className={cn("flex items-center gap-1.5", saveError && "text-destructive")}>
+        {saveError ? <AlertTriangle className="size-3.5" /> : dirty ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+        {saveError ? "Save failed" : dirty ? "Saving" : "Saved"}
       </span>
-      <span className={cn(saveError && "text-destructive")}>{saveError ? "Save failed" : dirty ? "Saving…" : "Show file saved"}</span>
-      <span className={cn((midi === "open" || osc === "listening") && "text-foreground/80")}>
-        I/O {midi === "open" ? "MIDI" : ""}
-        {midi === "open" && osc === "listening" ? " + " : ""}
-        {osc === "listening" ? "OSC" : ""}
-        {midi !== "open" && osc !== "listening" ? "off" : ""} · in {counters.in} · out {counters.out}
-      </span>
+      <Tip label="MIDI / OSC messages received and sent">
+        <span className={cn("flex items-center gap-1.5", ioOn && "text-foreground/80")}>
+          <Cable className="size-3.5" />
+          {ioOn ? `↓${counters.in} ↑${counters.out}` : "Off"}
+        </span>
+      </Tip>
       {lastLog && <span className="min-w-0 truncate">{lastLog.text}</span>}
-      <span className="ml-auto flex gap-3 tabular">
-        <span>
-          <kbd className="rounded border border-border px-1">G</kbd> GO
+      <Tip
+        side="top"
+        label={
+          <span className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+            <b>G</b> <span>GO next cue</span>
+            <b>⌘ ↵</b> <span>Take the preview live</span>
+            <b>⇧ B</b> <span>Blackout on / off</span>
+            <b>Esc</b> <span>Cancel waiting delayed actions</span>
+            <b>↑ ↓</b> <span>Previous / next scene in the preview</span>
+          </span>
+        }
+      >
+        <span className="ml-auto flex items-center gap-1.5">
+          <Keyboard className="size-3.5" /> Shortcuts
         </span>
-        <span>
-          <kbd className="rounded border border-border px-1">⌘↵</kbd> TAKE
-        </span>
-        <span>
-          <kbd className="rounded border border-border px-1">⇧B</kbd> blackout
-        </span>
-        <span>
-          <kbd className="rounded border border-border px-1">Esc</kbd> cancel pending
-        </span>
-        <span>
-          <kbd className="rounded border border-border px-1">↑↓</kbd> preview scene
-        </span>
-      </span>
+      </Tip>
     </div>
   );
 }

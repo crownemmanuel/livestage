@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Flame, Keyboard, RotateCcw, Route, Sparkles, Zap } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Clapperboard, Eye, EyeOff, Flame, Keyboard, Layers, Mountain, PawPrint, RotateCcw, Route, Sparkles, Video, Zap } from "lucide-react";
+import { InfoTip } from "../kit";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
@@ -36,13 +37,12 @@ export function useControlTarget(): { target: Target; rt: SceneRuntime | null } 
 }
 
 export function TargetBanner({ target }: { target: Target }) {
-  return target === "program" ? (
-    <div className="flex items-center gap-2 bg-live/90 px-3 py-1.5 text-[11px] font-bold tracking-[0.12em] text-white">
-      <span className="size-2 animate-pulse rounded-full bg-white" /> CONTROLLING LIVE OUTPUT
-    </div>
-  ) : (
-    <div className="flex items-center gap-2 bg-preview/15 px-3 py-1.5 text-[11px] font-semibold tracking-[0.12em] text-preview">
-      <span className="size-2 rounded-full bg-preview" /> REHEARSING IN PREVIEW — AUDIENCE UNAFFECTED
+  const live = target === "program";
+  return (
+    <div className={cn("flex items-center gap-2 border-b px-3 py-2", live ? "border-live/40 bg-live/10" : "border-border bg-card/60")}>
+      <span className={cn("size-2.5 rounded-full", live ? "tally-pulse bg-live" : "bg-preview")} />
+      <span className={cn("font-key text-[14px] font-bold", live ? "text-live" : "text-preview")}>{live ? "Controlling the live wall" : "Rehearsing in preview"}</span>
+      <InfoTip side="left">{live ? "The selected scene is on the wall: every control here changes what the audience sees." : "The selected scene is not live: these controls only change the preview. The audience is unaffected."}</InfoTip>
     </div>
   );
 }
@@ -68,7 +68,7 @@ export function ControlPanel() {
       <TargetBanner target={target} />
       <ScrollArea className="min-h-0 flex-1">
         {bgs.length > 0 && (
-          <Section title="Backgrounds">
+          <Section title="Backgrounds" icon={<Mountain />} info="Switch the background plate or 3D look. Changes crossfade over the background change time.">
             <div className="grid grid-cols-2 gap-1.5">
               {bgs.map((b) => {
                 const active = rt.background.current === b.id;
@@ -86,7 +86,7 @@ export function ControlPanel() {
         )}
 
         {(names.length > 0 || routes.length > 0) && (
-          <Section title="Storybook">
+          <Section title="Storybook" icon={<BookOpen />} info="The family tree of names and map routes: reveal names one at a time, burn the tree, blossom it, draw a journey.">
             {names.map((n) => (
               <NamesControls key={n.id} comp={n} rt={rt} target={target} />
             ))}
@@ -97,7 +97,7 @@ export function ControlPanel() {
         )}
 
         {videoActors.length > 0 && (
-          <Section title="Video actors">
+          <Section title="Video actors" icon={<Clapperboard />} info="AI video characters made of clips. A clip waits for the current one to end so the cut lands on a matching frame; amber clips start on a different pose (a visible jump).">
             {videoActors.map((a) => (
               <VideoActorControls key={a.id} comp={a} rt={rt} target={target} />
             ))}
@@ -105,7 +105,7 @@ export function ControlPanel() {
         )}
 
         {(actors.length > 0 || elements.length > 0) && (
-          <Section title="Characters">
+          <Section title="Characters" icon={<PawPrint />} info="The 3D lion and built-in elements (sheep, birds, fire, town lights).">
             {actors.map((a) => (
               <LionControls key={a.id} comp={a} target={target} rt={rt} />
             ))}
@@ -116,7 +116,7 @@ export function ControlPanel() {
         )}
 
         {effects.length > 0 && (
-          <Section title="Environmental effects">
+          <Section title="Effects" icon={<Sparkles />} info="Weather and light over the scene. Open a row to adjust it live.">
             {effects.map((e) => (
               <EffectControl key={e.id} comp={e} rt={rt} target={target} />
             ))}
@@ -124,7 +124,7 @@ export function ControlPanel() {
         )}
 
         {layers.length > 0 && (
-          <Section title="Layers & titles">
+          <Section title="Layers & titles" icon={<Layers />} info="Show or hide video and image layers, models and titles.">
             {layers.map((l) => (
               <LayerRow
                 key={l.id}
@@ -138,7 +138,7 @@ export function ControlPanel() {
         )}
 
         {rt.scene.cameraShots.length > 0 && (
-          <Section title="Camera">
+          <Section title="Camera" icon={<Video />} info="Saved camera moves. A move glides from wherever the camera is, carrying its speed into the next move.">
             <div className="grid grid-cols-2 gap-1.5">
               {rt.scene.cameraShots.map((s) => {
                 const cam = rt.camera;
@@ -167,7 +167,7 @@ function LayerRow({ comp, rt, onToggle, onRestart }: { comp: SceneComponent; rt:
     <div className="flex items-center gap-2 rounded-md border border-border bg-card/50 px-2 py-1">
       <span className={cn("size-1.5 rounded-full", on ? "bg-preview" : "bg-muted-foreground/40")} />
       <span className="flex-1 truncate text-[12px]">{comp.name}</span>
-      <span className="text-[10px] uppercase text-muted-foreground">{comp.kind === "procedural" ? comp.element : comp.kind}</span>
+      <span className="text-[11px] text-muted-foreground">{comp.kind === "procedural" ? comp.element : comp.kind}</span>
       {onRestart && (
         <Button variant="ghost" size="icon-xs" onClick={onRestart} aria-label="Restart">
           <RotateCcw />
@@ -348,7 +348,7 @@ function LionControls({ comp, target, rt }: { comp: ActorComponent; target: Targ
             {info.missing.length} CLIPS MISSING
           </span>
         ) : null}
-        <span className="ml-auto text-[10.5px] uppercase text-muted-foreground tabular">{pose ? `${pose.action}${pose.target ? " →" : ""}` : "—"}</span>
+        <span className="ml-auto text-[11px] text-muted-foreground tabular">{pose ? `${pose.action}${pose.target ? " →" : ""}` : "—"}</span>
         <Button size="xs" variant={pose?.visible ? "secondary" : "outline"} onClick={() => dispatch({ type: "actor.visible", actorId: comp.id, visible: !pose?.visible, delay: 0 })}>
           {pose?.visible ? "Hide" : "Show"}
         </Button>
@@ -366,7 +366,7 @@ function LionControls({ comp, target, rt }: { comp: ActorComponent; target: Targ
       </div>
       {markers.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
-          <span className="mr-1 text-[10px] uppercase tracking-wider text-muted-foreground">Walk to</span>
+          <span className="mr-1 text-[11px] text-muted-foreground">Walk to</span>
           {markers.map((m) => (
             <Button key={m} size="xs" variant="ghost" className="h-5 border border-border px-1.5 text-[10.5px]" onClick={() => dispatch({ type: "lion.moveTo", actorId: comp.id, marker: m, gait: "walk", delay: 0 })}>
               {m}

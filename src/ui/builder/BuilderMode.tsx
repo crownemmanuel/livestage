@@ -20,15 +20,17 @@ import { SceneSettings } from "./SceneSettings";
 import { CueEditor } from "./CueEditor";
 import { CameraShots } from "./CameraShots";
 import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
+import { Splitter, usePaneWidths } from "../kit";
 
 export function BuilderMode() {
   const scene = useProject(selectedScene);
   const capture = useCaptureThumb();
   const output = useShow((s) => s.output);
   const [rightTab, setRightTab] = useState("inspect");
+  const [w, setW, reset] = usePaneWidths("build", [290, 400]);
   return (
-    <div className="grid h-full min-h-0 grid-cols-[264px_1fr_380px]">
-      <aside className="flex min-h-0 flex-col border-r border-border">
+    <div className="flex h-full min-h-0">
+      <aside className="flex min-h-0 shrink-0 flex-col border-r border-border" style={{ width: w[0] }}>
         <div className="min-h-0 flex-[3]">
           <SceneList />
         </div>
@@ -36,10 +38,11 @@ export function BuilderMode() {
           <AssetLibrary />
         </div>
       </aside>
-      <main className="flex min-h-0 min-w-0 flex-col">
+      <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="border-b border-border p-3">
           <div className="mb-1.5 flex items-center gap-2 text-[11px]">
-            <span className="rounded-[3px] bg-preview px-1.5 py-px text-[10px] font-bold tracking-[0.14em] text-black">PREVIEW</span>
+            <span className="flex items-center gap-1.5 rounded-full bg-preview/15 px-2 py-0.5 font-key text-[12.5px] font-bold text-preview"><span className="size-2 rounded-full bg-preview" />Preview</span>
             <span className="text-muted-foreground">Edits apply to the preview only. TAKE LIVE in Show Mode to put them on the wall.</span>
           </div>
           <div className="relative mx-auto w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: `${output.canvasWidth} / ${output.canvasHeight}`, maxHeight: "44vh" }}>
@@ -74,7 +77,8 @@ export function BuilderMode() {
           <div className="grid flex-1 place-items-center text-muted-foreground">Select or add a scene.</div>
         )}
       </main>
-      <aside className="flex min-h-0 flex-col border-l border-border">
+      <Splitter value={w[1]} onChange={(v) => setW(1, v)} min={300} max={620} dir={-1} onReset={reset} />
+      <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: w[1] }}>
         <Tabs value={rightTab} onValueChange={setRightTab} className="flex min-h-0 flex-1 flex-col gap-0">
           <TabsList className="mx-3 mt-2 h-8">
             <TabsTrigger value="inspect" className="text-[12px]">Components</TabsTrigger>

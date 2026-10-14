@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowDown, ArrowUp, Copy, Mountain, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, ListOrdered, Mountain, Plus, Search, Timer, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,13 +22,17 @@ export function SceneList() {
   const liveSceneId = useShow((s) => s.program.runtime?.scene.id ?? null);
   const standby = useShow((s) => s.program.standby);
   const [confirm, setConfirm] = useState<Scene | null>(null);
+  const [query, setQuery] = useState("");
   const sel = scenes.find((s) => s.id === selectedId);
+  const q = query.trim().toLowerCase();
+  const shown = q ? scenes.filter((s) => s.name.toLowerCase().includes(q) || String(s.number) === q) : scenes;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <h2 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Scenes</h2>
-        <div className="flex gap-0.5">
+    <div className="flex h-full min-h-0 flex-col bg-card/40">
+      <div className="flex items-center gap-1 px-2.5 pb-1.5 pt-2.5">
+        <h2 className="font-key text-[14px] font-bold">Scenes</h2>
+        <span className="text-[12px] text-muted-foreground">{scenes.length}</span>
+        <div className="ml-auto flex gap-0.5">
           <IconBtn label="Add scene" onClick={() => addScene()}>
             <Plus />
           </IconBtn>
@@ -41,14 +45,25 @@ export function SceneList() {
           <IconBtn label="Move down" disabled={!sel || sel.number === scenes.length} onClick={() => sel && moveScene(sel.id, 1)}>
             <ArrowDown />
           </IconBtn>
-          <IconBtn label={sel?.id === liveSceneId ? "Cannot delete the live scene" : "Delete scene"} disabled={!sel || sel.id === liveSceneId} onClick={() => sel && setConfirm(sel)}>
+          <IconBtn label={sel?.id === liveSceneId ? "The live scene can't be deleted" : "Delete scene"} disabled={!sel || sel.id === liveSceneId} onClick={() => sel && setConfirm(sel)}>
             <Trash2 />
           </IconBtn>
         </div>
       </div>
+      <div className="px-2.5 pb-2">
+        <label className="flex h-8 items-center gap-2 rounded-md border border-border bg-well px-2 text-muted-foreground focus-within:border-ring">
+          <Search className="size-3.5 shrink-0" />
+          <input className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/70" placeholder="Find a scene" value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
+              <X className="size-3.5" />
+            </button>
+          )}
+        </label>
+      </div>
       <ScrollArea className="min-h-0 flex-1">
-        <ul className="space-y-1 p-2">
-          {scenes.map((s) => {
+        <ul className="space-y-1 px-2 pb-2">
+          {shown.map((s) => {
             const live = s.id === liveSceneId && !standby;
             const selected = s.id === selectedId;
             return (
@@ -56,34 +71,40 @@ export function SceneList() {
                 <button
                   onClick={() => selectScene(s.id)}
                   className={cn(
-                    "group relative flex w-full gap-2.5 rounded-md border p-1.5 text-left transition-colors",
-                    selected ? "border-preview bg-accent" : "border-transparent hover:bg-accent/60",
-                    live && "ring-2 ring-live ring-offset-1 ring-offset-background",
+                    "group flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors",
+                    selected ? "bg-accent ring-1 ring-preview/70" : "hover:bg-accent/50",
                   )}
                 >
-                  <div className="relative aspect-video w-[92px] shrink-0 overflow-hidden rounded-sm bg-black">
+                  <div className={cn("relative aspect-video w-[104px] shrink-0 overflow-hidden rounded-md bg-black", live && "on-air-frame")}>
                     {s.thumbnail ? (
                       <img src={s.thumbnail} alt="" className="h-full w-full object-cover" />
                     ) : (
-                      <div className="grid h-full place-items-center text-muted-foreground">
+                      <div className="grid h-full place-items-center text-muted-foreground/60">
                         <Mountain className="size-4" />
                       </div>
                     )}
-                    {live && <span className="absolute left-1 top-1 rounded-[3px] bg-live px-1 text-[9px] font-bold tracking-wider text-white">LIVE</span>}
+                    <span className="font-key absolute bottom-1 left-1 rounded bg-black/75 px-1 text-[11px] font-bold leading-[15px] text-white">{s.number}</span>
+                    {live && <span className="font-key absolute right-1 top-1 rounded bg-live px-1 text-[10px] font-bold leading-[14px] text-white">LIVE</span>}
+                    {selected && !live && <span className="absolute right-1 top-1 size-2 rounded-full bg-preview" />}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[10px] font-semibold tracking-wider text-muted-foreground">SCENE {String(s.number).padStart(2, "0")}</div>
-                    <div className="truncate text-[12.5px] font-medium leading-tight">{s.name}</div>
-                    <div className="mt-1 flex gap-2 text-[10.5px] text-muted-foreground tabular">
-                      <span>{s.cues.length} cues</span>
-                      {fmtDur(s.duration) && <span>{fmtDur(s.duration)}</span>}
-                      {selected && !live && <span className="text-preview">preview</span>}
+                    <div className="line-clamp-2 text-[13px] font-medium leading-snug">{s.name}</div>
+                    <div className="mt-0.5 flex items-center gap-2.5 text-[11.5px] text-muted-foreground tabular">
+                      <span className="flex items-center gap-1" title="Cues">
+                        <ListOrdered className="size-3" /> {s.cues.length}
+                      </span>
+                      {fmtDur(s.duration) && (
+                        <span className="flex items-center gap-1" title="Planned length">
+                          <Timer className="size-3" /> {fmtDur(s.duration)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </button>
               </li>
             );
           })}
+          {shown.length === 0 && <li className="px-2 py-6 text-center text-[12px] text-muted-foreground">No scene matches “{query}”.</li>}
         </ul>
       </ScrollArea>
       <Dialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
@@ -116,7 +137,7 @@ export function IconBtn({ label, children, onClick, disabled, active, className 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-xs" onClick={onClick} disabled={disabled} aria-label={label} className={cn(active && "bg-accent text-foreground", className)}>
+        <Button variant="ghost" size="icon-xs" onClick={onClick} disabled={disabled} aria-label={label} className={cn("size-7", active && "bg-accent text-foreground", className)}>
           {children}
         </Button>
       </TooltipTrigger>
