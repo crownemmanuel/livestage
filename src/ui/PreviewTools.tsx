@@ -254,37 +254,15 @@ export function VideoScrubber() {
   const scrub = (v: number, s: Source) => dispatch("preview", s.seek(v));
 
   return (
-    <div className="mt-1 flex items-center gap-2 text-[11px]">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Scrub</span>
-      {sources.length > 1 ? (
-        <select
-          className="h-6 max-w-[220px] truncate rounded-md border border-input bg-background px-1 text-[11px]"
-          value={src.key}
-          onChange={(e) => {
-            setSel(e.target.value);
-            const n = sources.find((s) => s.key === e.target.value);
-            // Picking a clip that is not playing shows its first frame.
-            if (n && n.label.endsWith("(not playing)")) scrub(0, n);
-          }}
-        >
-          {sources.map((s) => (
-            <option key={s.key} value={s.key}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <span className="max-w-[180px] truncate text-muted-foreground" title={src.label}>
-          {src.label}
-        </span>
-      )}
+    <div className="mt-1.5 text-[11px]">
+      {/* Full width, so a few pixels of travel are a small step in time. */}
       <input
         type="range"
         min={0}
         max={src.duration}
         step={0.01}
         value={Math.min(pos, src.duration)}
-        className="h-1.5 flex-1 cursor-pointer accent-[var(--preview)]"
+        className="block h-2 w-full cursor-pointer accent-[var(--preview)]"
         onPointerDown={() => {
           const live = useShow.getState().preview;
           const wasPlaying = !!live && live.clock.pausedAt === null;
@@ -301,9 +279,29 @@ export function VideoScrubber() {
           setDrag(null);
         }}
       />
-      <span className="w-[104px] shrink-0 whitespace-nowrap text-right tabular text-muted-foreground">
-        {fmt(pos)} / {fmt(src.duration)}
-      </span>
+      <div className="mt-1 flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Scrub</span>
+        <select
+          className="h-6 min-w-0 max-w-[60%] flex-1 truncate rounded-md border border-input bg-background px-1 text-[11px]"
+          value={src.key}
+          title="Which video the scrub bar moves through"
+          onChange={(e) => {
+            setSel(e.target.value);
+            const n = sources.find((s) => s.key === e.target.value);
+            // Picking a clip that is not playing shows its first frame.
+            if (n && n.label.endsWith("(not playing)")) scrub(0, n);
+          }}
+        >
+          {sources.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <span className="ml-auto shrink-0 whitespace-nowrap tabular text-muted-foreground">
+          {fmt(pos)} / {fmt(src.duration)}
+        </span>
+      </div>
     </div>
   );
 }
