@@ -45,7 +45,20 @@ Markers only fire from the live (PROGRAM) show, never from previews, and never t
 
 **Hog → app (OSC):** Setup → Network → Open Sound Control: enable OSC In/Out, set the app's computer as the OSC target with the app's listen port (default 9000). The Hog sends LED/status messages such as `/hog/status/led/go/1 1` when a master's GO is pressed; map those under Incoming triggers with **Learn** (press Learn, then press GO on the console).
 
-**App → Hog (OSC):** add the console as an OSC target (its IP, port 7001 by default). Then a cue action `Send MIDI / OSC` → OSC `/hog/playback/go/0` presses GO on master 0; `/hog/playback/release/0` releases it; `/hog/hardkey/go/1 1` presses the hard key. Use the **Test** button on any message to try it.
+**App → Hog (OSC):** add the console as an OSC target: its HogNet IP (172.31.0.1 on this rig) and the OSC In port shown in its Settings → Open Sound Control (7001). Only OSC In needs to be on. The Mac's USB Ethernet adapter needs a fixed IP on HogNet (172.31.0.3, mask 255.255.0.0, router blank).
+
+The Hog only acts on playback commands when the number arrives as an OSC **string**; an int or float is silently ignored (tested on the console, 2026-10-18). The app sends args of any `/hog/playback/...` address as text automatically, so type them plainly:
+
+| On the Hog | Address | Args |
+| --- | --- | --- |
+| GO cuelist 515 | `/hog/playback/go/0` | `515` |
+| Jump to cue 3 of cuelist 515 | `/hog/playback/go/0` | `515.3` (cue 10 is `515.10`) |
+| Halt / resume cuelist 515 | `/hog/playback/halt/0`, `/hog/playback/resume/0` | `515` |
+| Release cuelist 515 | `/hog/playback/release/0` | `515` |
+| GO / release scene 2 | `/hog/playback/go/1`, `/hog/playback/release/1` | `2` |
+| Run macro 4 | `/hog/playback/go/2` | `4` |
+
+To release one list and start another at a given cue, give the cue two `Send MIDI / OSC` actions: release first, then GO with `list.cue`. Hardware keys (`/hog/hardware/go/<master>`, `1` press / `0` release) are in the ETC manual but were not confirmed working on this console; prefer the playback paths. Use the **Test** button on any message to try it.
 
 **App → Hog (MSC):** send MSC GO with the Hog's device ID and the cue number; the Hog must have MSC in enabled.
 

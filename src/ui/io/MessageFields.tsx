@@ -1,7 +1,7 @@
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { IoMessage } from "@/core/types";
-import { sendMessage } from "@/engine/io";
+import { oscWantsText, sendMessage } from "@/engine/io";
 import { useProject } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 
@@ -17,7 +17,7 @@ export function defaultMessage(type: IoMessage["type"]): IoMessage {
   const io = useProject.getState().project.io;
   switch (type) {
     case "osc":
-      return { type, target: io?.osc.targets[0]?.id ?? null, address: "/hog/playback/go/0", args: [] };
+      return { type, target: io?.osc.targets[0]?.id ?? null, address: "/hog/playback/go/0", args: ["1"] };
     case "msc":
       return { type, deviceId: io?.midi.mscDeviceId ?? 0, command: "go", cue: "1", list: "" };
     case "midi.note":
@@ -27,6 +27,19 @@ export function defaultMessage(type: IoMessage["type"]): IoMessage {
     case "midi.pc":
       return { type, channel: 0, program: 0 };
   }
+}
+
+const looksNumeric = (x: string) => x !== "" && Number.isFinite(+x);
+
+/** Space-separated OSC args. "quoted" words stay text; Hog playback numbers stay text so "5.10" keeps cue 10. */
+function parseArgs(text: string, address: string): (number | string)[] {
+  const keepText = oscWantsText(address);
+  return (text.match(/"[^"]*"|\S+/g) ?? []).map((x) => (x.startsWith('"') ? x.slice(1, -1) : !keepText && looksNumeric(x) ? +x : x));
+}
+
+function formatArgs(args: (number | string)[], address: string): string {
+  const keepText = oscWantsText(address);
+  return args.map((a) => (typeof a === "string" && (/\s/.test(a) || (!keepText && looksNumeric(a))) ? `"${a}"` : String(a))).join(" ");
 }
 
 function TextBox({ value, onChange, className, placeholder, title }: { value: string; onChange: (v: string) => void; className: string; placeholder?: string; title?: string }) {
@@ -53,10 +66,10 @@ export function MessageFields({ m, onChange, compact = false }: { m: IoMessage; 
           <TextBox className={`${cls} w-[190px]`} value={m.address} placeholder="/address" onChange={(address) => onChange({ ...m, address })} />
           <TextBox
             className={`${cls} w-[120px]`}
-            value={m.args.join(" ")}
+            value={formatArgs(m.args, m.address)}
             placeholder="args (1 2.5 text)"
-            title="Space-separated arguments: numbers are sent as numbers, anything else as a string"
-            onChange={(v) => onChange({ ...m, args: v.split(/\s+/).filter(Boolean).map((x) => (Number.isFinite(+x) ? +x : x)) })}
+            title={oscWantsText(m.address) ? "Hog playback: list or list.cue, e.g. 515 or 5.10 (sent as text, which is what the Hog accepts)" : 'Space-separated arguments: numbers are sent as numbers, anything else (or "quoted") as text'}
+            onChange={(v) => onChange({ ...m, args: parseArgs(v, m.address) })}
           />
         </>
       )}

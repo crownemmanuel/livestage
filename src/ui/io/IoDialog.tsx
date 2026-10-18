@@ -380,7 +380,7 @@ function LogTab() {
       <Section title="Send a test message">
         <MessageFields m={msg} onChange={setMsg} />
       </Section>
-      <p className="text-[10.5px] leading-snug text-muted-foreground">Cues can send messages with the “Send MIDI / OSC” action, and clips can send at a time with Time markers (Scene Builder → the clip or video). Tip: a Hog 4 answers OSC at <code>/hog/playback/go/&lt;master&gt;</code> and MSC GO on its MIDI input.</p>
+      <p className="text-[10.5px] leading-snug text-muted-foreground">Cues can send messages with the “Send MIDI / OSC” action, and clips can send at a time with Time markers (Scene Builder → the clip or video). Hog 4 (port 7001): <code>/hog/playback/go/0</code> with <code>515</code> runs cuelist 515, <code>515.3</code> jumps to its cue 3; <code>/hog/playback/release/0</code> <code>515</code> releases it. Use <code>/1</code> for scenes, <code>/2</code> for macros.</p>
     </div>
   );
 }

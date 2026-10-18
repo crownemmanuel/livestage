@@ -346,8 +346,12 @@ export async function refreshMidiPorts() {
   }
 }
 
-function oscArgs(args: (number | string)[]) {
-  return args.map((a) => (typeof a === "number" ? (Number.isInteger(a) ? { t: "i", v: a } : { t: "f", v: a }) : { t: "s", v: a }));
+/** A Hog 4 ignores /hog/playback/... unless the list or cue number arrives as an OSC string (tested on the console). */
+export const oscWantsText = (address: string) => address.startsWith("/hog/playback/");
+
+function oscArgs(address: string, args: (number | string)[]) {
+  const text = oscWantsText(address);
+  return args.map((a) => (typeof a === "number" && !text ? (Number.isInteger(a) ? { t: "i", v: a } : { t: "f", v: a }) : { t: "s", v: String(a) }));
 }
 
 /** Send one message to the outside world. Never throws: failures go to the I/O log. */
@@ -360,7 +364,7 @@ export async function sendMessage(msg: IoMessage): Promise<void> {
       const target = targets.find((t) => t.id === msg.target) ?? targets[0];
       if (!target) throw new Error("No OSC target configured");
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("osc_send", { host: target.host, port: target.port, address: msg.address, args: oscArgs(msg.args) });
+      await invoke("osc_send", { host: target.host, port: target.port, address: msg.address, args: oscArgs(msg.address, msg.args) });
     } else {
       if (!midiOut) throw new Error("No MIDI output open");
       const ch = msg.type === "msc" ? 0 : msg.channel & 0x0f;
