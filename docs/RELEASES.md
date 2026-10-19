@@ -55,7 +55,7 @@ What a release contains:
 | `Salvation.Live.Studio_<version>_aarch64.app.tar.gz` (+ `.sig`) | The file the Mac app updates from |
 | `latest.json` | What installed apps read: version, notes, download links and signatures |
 
-Each installer is big (about 120 MB today) because the release build carries `public/media` inside the app.
+Each installer is big (over 150 MB today, and growing with the media) because the release build carries `public/media` inside the app.
 
 ## One-time setup on GitHub
 
