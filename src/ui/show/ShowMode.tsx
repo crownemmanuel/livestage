@@ -78,13 +78,14 @@ const PANE_DEFAULTS = [290, 360];
 export function ShowMode() {
   const [w, setW, reset] = usePaneWidths("show", PANE_DEFAULTS);
   return (
-    <div className="grid h-full min-h-0 grid-rows-[1fr_auto]">
-      <div className="flex min-h-0">
+    // minmax(0,1fr): the column is the window's width, not its widest row, so the side panels never get pushed off-screen.
+    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[1fr_auto]">
+      <div className="flex min-h-0 min-w-0">
         <aside className="min-h-0 shrink-0 border-r border-border" style={{ width: w[0] }}>
           <SceneList />
         </aside>
         <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-clip">
           <Monitors />
           <CueList />
         </main>
@@ -380,7 +381,7 @@ function CueList() {
   const live = target === "program";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2">
         <div className="flex rounded-lg bg-well p-0.5">
           {(["cues", "media", "announce", "timers"] as const).map((k) => (
             <button
@@ -398,7 +399,7 @@ function CueList() {
         <Tip label={live ? "These cues fire on the live wall" : "These cues fire in the preview only"}>
           <span className={cn("size-2.5 shrink-0 rounded-full", live ? "bg-live" : "bg-preview")} />
         </Tip>
-        <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">{rt.scene.name}</span>
+        <span className="min-w-0 flex-1 basis-[120px] truncate text-[12.5px] text-muted-foreground">{rt.scene.name}</span>
         <div className="ml-auto flex items-center gap-1">
           <CueButtons target={target} />
         </div>

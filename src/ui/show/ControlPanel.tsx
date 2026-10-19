@@ -74,7 +74,7 @@ export function ControlPanel() {
                 const active = rt.background.current === b.id;
                 const k = rt.background.dur > 0 ? clamp((t - rt.background.changedAt) / rt.background.dur, 0, 1) : 1;
                 return (
-                  <Button key={b.id} variant={active ? "secondary" : "outline"} size="sm" className={cn("relative justify-start overflow-hidden", active && "border border-foreground/30")} onClick={() => dispatch({ type: "background", backgroundId: b.id, delay: 0 })}>
+                  <Button key={b.id} variant={active ? "secondary" : "outline"} size="sm" className={cn("relative min-w-0 justify-start overflow-hidden", active && "border border-foreground/30")} onClick={() => dispatch({ type: "background", backgroundId: b.id, delay: 0 })}>
                     {active && k < 1 && <span className="absolute inset-y-0 left-0 bg-foreground/10" style={{ width: `${k * 100}%` }} />}
                     <span className={cn("size-1.5 rounded-full", active ? "bg-preview" : "bg-muted-foreground/40")} />
                     <span className="truncate">{b.name}</span>
@@ -166,14 +166,14 @@ function LayerRow({ comp, rt, onToggle, onRestart }: { comp: SceneComponent; rt:
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-card/50 px-2 py-1">
       <span className={cn("size-1.5 rounded-full", on ? "bg-preview" : "bg-muted-foreground/40")} />
-      <span className="flex-1 truncate text-[12px]">{comp.name}</span>
-      <span className="text-[11px] text-muted-foreground">{comp.kind === "procedural" ? comp.element : comp.kind}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px]">{comp.name}</span>
+      <span className="shrink-0 text-[11px] text-muted-foreground">{comp.kind === "procedural" ? comp.element : comp.kind}</span>
       {onRestart && (
         <Button variant="ghost" size="icon-xs" onClick={onRestart} aria-label="Restart">
           <RotateCcw />
         </Button>
       )}
-      <Button variant={on ? "secondary" : "outline"} size="xs" className="w-16" onClick={onToggle}>
+      <Button variant={on ? "secondary" : "outline"} size="xs" className="w-16 shrink-0" onClick={onToggle}>
         {on ? <Eye /> : <EyeOff />}
         {on ? "Hide" : "Show"}
       </Button>
@@ -194,15 +194,15 @@ function NamesControls({ comp, rt, target }: { comp: NamesComponent; rt: SceneRu
     <div className="rounded-md border border-border bg-card/60">
       <div className="flex items-center gap-2 px-2 py-1.5">
         <span className={cn("size-1.5 rounded-full", st.shown > 0 ? "bg-preview" : "bg-muted-foreground/40")} />
-        <span className="text-[12px] font-semibold">{comp.name}</span>
-        <span className="ml-auto text-[10.5px] tabular text-muted-foreground">
+        <span className="min-w-0 truncate text-[12px] font-semibold">{comp.name}</span>
+        <span className="ml-auto shrink-0 text-[10.5px] tabular text-muted-foreground">
           {st.shown} / {comp.names.length}
           {burn > 0.01 && <span className="text-armed"> · burned {Math.round(burn * 100)}%</span>}
           {bloom > 0.01 && <span className="text-preview"> · bloom {Math.round(bloom * 100)}%</span>}
         </span>
       </div>
       <div className="flex items-center gap-1 px-2 pb-2">
-        <Button size="sm" className={cn("h-8 flex-1 justify-between font-semibold", target === "program" ? "bg-live text-white hover:bg-live/85" : "")} disabled={st.shown >= comp.names.length} onClick={() => go("next")}>
+        <Button size="sm" className={cn("h-8 min-w-0 flex-1 justify-between font-semibold", target === "program" ? "bg-live text-white hover:bg-live/85" : "")} disabled={st.shown >= comp.names.length} onClick={() => go("next")}>
           <span>Next name</span>
           <span className="truncate text-[10.5px] font-normal opacity-80">{nextName ?? "— all shown —"}</span>
         </Button>
@@ -236,9 +236,9 @@ function RouteControls({ comp, rt, target }: { comp: RouteComponent; rt: SceneRu
   return (
     <div className="rounded-md border border-border bg-card/60">
       <div className="flex items-center gap-2 px-2 py-1.5">
-        <Route className="size-3.5 text-muted-foreground" />
-        <span className="text-[12px] font-semibold">{comp.name}</span>
-        <div className="ml-auto h-1 w-16 overflow-hidden rounded-full bg-muted">
+        <Route className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate text-[12px] font-semibold">{comp.name}</span>
+        <div className="ml-auto h-1 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
           <div className="h-full bg-armed" style={{ width: `${p * 100}%` }} />
         </div>
       </div>
@@ -280,18 +280,18 @@ function EffectControl({ comp, rt, target }: { comp: EffectComponent; rt: SceneR
         <button className="text-muted-foreground" onClick={() => setOpen(!open)} aria-label="Parameters">
           {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         </button>
-        <span className="flex-1 truncate text-[12px] font-medium">{comp.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{comp.name}</span>
         {def.mode === "toggle" && (
-          <div className="h-1 w-12 overflow-hidden rounded-full bg-muted" title={`${Math.round(level * 100)}%`}>
+          <div className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted" title={`${Math.round(level * 100)}%`}>
             <div className="h-full bg-armed transition-[width]" style={{ width: `${level * 100}%` }} />
           </div>
         )}
         {def.mode === "trigger" ? (
-          <Button size="xs" className="w-[92px] bg-armed/90 text-black hover:bg-armed" onClick={() => dispatch(target, { type: "effect", effectId: comp.id, op: "trigger", delay: 0 })}>
+          <Button size="xs" className="w-[92px] shrink-0 bg-armed/90 text-black hover:bg-armed" onClick={() => dispatch(target, { type: "effect", effectId: comp.id, op: "trigger", delay: 0 })}>
             <Zap /> {def.startLabel}
           </Button>
         ) : (
-          <Button size="xs" variant={e.active ? "secondary" : "outline"} className={cn("w-[92px]", e.active && "border border-armed/60")} onClick={() => dispatch(target, { type: "effect", effectId: comp.id, op: "toggle", delay: 0 })}>
+          <Button size="xs" variant={e.active ? "secondary" : "outline"} className={cn("w-[92px] shrink-0", e.active && "border border-armed/60")} onClick={() => dispatch(target, { type: "effect", effectId: comp.id, op: "toggle", delay: 0 })}>
             {e.active ? def.stopLabel : def.startLabel}
           </Button>
         )}
@@ -337,8 +337,8 @@ function LionControls({ comp, target, rt }: { comp: ActorComponent; target: Targ
   return (
     <div className={cn("rounded-md border bg-card/60", armed ? "border-armed shadow-[0_0_0_1px] shadow-armed/40" : "border-border")}>
       <div className="flex items-center gap-2 px-2 py-1.5">
-        <span className={cn("size-1.5 rounded-full", pose?.visible ? "bg-preview" : "bg-muted-foreground/40")} />
-        <span className="text-[12px] font-semibold">{comp.name}</span>
+        <span className={cn("size-1.5 shrink-0 rounded-full", pose?.visible ? "bg-preview" : "bg-muted-foreground/40")} />
+        <span className="min-w-0 truncate text-[12px] font-semibold">{comp.name}</span>
         {!comp.assetId ? (
           <span className="rounded bg-armed/15 px-1.5 text-[9.5px] font-bold tracking-wider text-armed" title="Procedural stand-in. Assign a rigged GLB lion in Scene Builder.">
             PLACEHOLDER MODEL
@@ -348,8 +348,8 @@ function LionControls({ comp, target, rt }: { comp: ActorComponent; target: Targ
             {info.missing.length} CLIPS MISSING
           </span>
         ) : null}
-        <span className="ml-auto text-[11px] text-muted-foreground tabular">{pose ? `${pose.action}${pose.target ? " →" : ""}` : "—"}</span>
-        <Button size="xs" variant={pose?.visible ? "secondary" : "outline"} onClick={() => dispatch({ type: "actor.visible", actorId: comp.id, visible: !pose?.visible, delay: 0 })}>
+        <span className="ml-auto shrink-0 text-[11px] text-muted-foreground tabular">{pose ? `${pose.action}${pose.target ? " →" : ""}` : "—"}</span>
+        <Button size="xs" className="shrink-0" variant={pose?.visible ? "secondary" : "outline"} onClick={() => dispatch({ type: "actor.visible", actorId: comp.id, visible: !pose?.visible, delay: 0 })}>
           {pose?.visible ? "Hide" : "Show"}
         </Button>
       </div>
@@ -402,19 +402,19 @@ function VideoActorControls({ comp, rt, target }: { comp: ClipActorComponent; rt
   return (
     <div className="rounded-md border border-border bg-card/60">
       <div className="flex items-center gap-2 px-2 py-1.5">
-        <span className={cn("size-1.5 rounded-full", st.clip ? "bg-preview" : "bg-muted-foreground/40")} />
-        <span className="text-[12px] font-semibold">{comp.name}</span>
-        <span className="ml-auto text-[10.5px] text-muted-foreground">
+        <span className={cn("size-1.5 shrink-0 rounded-full", st.clip ? "bg-preview" : "bg-muted-foreground/40")} />
+        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold" title={comp.name}>{comp.name}</span>
+        <span className="shrink-0 whitespace-nowrap text-[10.5px] text-muted-foreground">
           pose <span className="font-semibold text-foreground">{st.pose}</span>
         </span>
-        <Button size="xs" variant="outline" disabled={!st.clip} onClick={() => dispatch(null)} title="Remove the actor (cut back to the plate)">
+        <Button size="xs" variant="outline" className="shrink-0" disabled={!st.clip} onClick={() => dispatch(null)} title="Remove the actor (cut back to the plate)">
           Clear
         </Button>
       </div>
       <div className="mx-2 mb-1.5 h-1 overflow-hidden rounded-full bg-muted">
         <div className={cn("h-full", st.playing ? "bg-preview" : "bg-muted-foreground/50")} style={{ width: `${progress * 100}%` }} />
       </div>
-      <div className="px-2 pb-1 text-[10.5px] text-muted-foreground">
+      <div className="truncate px-2 pb-1 text-[10.5px] text-muted-foreground">
         {st.clip ? `${st.playing ? "Playing" : "Holding last frame of"} “${st.clip.name}”` : "Not on stage"}
         {st.queued && <span className="text-armed"> · next: {st.queued.clip.name} in {Math.max(0, (st.queued.at - t) / 1000).toFixed(1)}s</span>}
       </div>
@@ -426,12 +426,12 @@ function VideoActorControls({ comp, rt, target }: { comp: ClipActorComponent; rt
               key={c.id}
               size="xs"
               variant={st.clip?.id === c.id ? "secondary" : "outline"}
-              className={cn("justify-between", !fits && "border-armed/50")}
+              className={cn("min-w-0 justify-between", !fits && "border-armed/50")}
               onClick={() => dispatch(c.id)}
               title={fits ? `Continues seamlessly from “${st.pose}”` : `Starts on “${c.startPose}” but the actor is in “${st.pose}”: this will be a visible jump`}
             >
               <span className="truncate">{c.name}</span>
-              <span className={cn("text-[9px]", fits ? "text-preview" : "text-armed")}>
+              <span className={cn("shrink-0 text-[9px]", fits ? "text-preview" : "text-armed")}>
                 {c.startPose}→{c.endPose}
               </span>
             </Button>
