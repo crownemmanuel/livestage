@@ -139,13 +139,18 @@ export function reconcileRuntime(rt: SceneRuntime, scene: Scene): SceneRuntime {
   const names = { ...(rt.names ?? {}) };
   const routes = { ...(rt.routes ?? {}) };
   const ids = new Set(scene.components.map((c) => c.id));
+  const before = new Map(rt.scene.components.map((c) => [c.id, c]));
   for (const c of scene.components) {
     if (LAYER_KINDS.has(c.kind) && !layers[c.id]) layers[c.id] = { visible: c.initiallyVisible, changedAt: LONG_AGO, startAt: 0 };
+    // "Visible at start" toggled while the scene runs: follow it, unless a cue has shown or hidden the item since.
+    else if (LAYER_KINDS.has(c.kind) && before.get(c.id)?.initiallyVisible !== c.initiallyVisible && layers[c.id].changedAt === LONG_AGO) layers[c.id] = { ...layers[c.id], visible: c.initiallyVisible };
     if (c.kind === "names" && !names[c.id]) names[c.id] = initialNames();
     if (c.kind === "route" && !routes[c.id]) routes[c.id] = { progress: tween(0, 0, 0, 0) };
     if (c.kind === "effect") {
       const params = { ...EFFECT_DEFS[c.effect].defaults, ...c.params };
-      effects[c.id] = effects[c.id] ? { ...effects[c.id], params } : { active: c.initiallyVisible, changedAt: LONG_AGO, params };
+      const cur = effects[c.id];
+      const follow = cur && before.get(c.id)?.initiallyVisible !== c.initiallyVisible && cur.changedAt === LONG_AGO && EFFECT_DEFS[c.effect].mode !== "trigger";
+      effects[c.id] = cur ? { ...cur, params, ...(follow ? { active: c.initiallyVisible } : {}) } : { active: c.initiallyVisible, changedAt: LONG_AGO, params };
     }
   }
   const clipActors = { ...(rt.clipActors ?? {}) };

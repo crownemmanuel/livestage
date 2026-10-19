@@ -144,7 +144,8 @@ function ComponentList() {
   const scene = useProject(selectedScene)!;
   const selectedId = useProject((s) => s.selectedComponentId);
   const st = useProject.getState();
-  const add = (c: SceneComponent) => st.addComponent(scene.id, c);
+  // What you add in Build shows at once (a cue can still hide it); a second background doesn't replace the first.
+  const add = (c: SceneComponent) => st.addComponent(scene.id, c.kind === "background" ? c : { ...c, initiallyVisible: true });
   const sel = scene.components.find((c) => c.id === selectedId);
   const solo = useShow((s) => s.solo);
   const hidden = useShow((s) => s.hidden);
