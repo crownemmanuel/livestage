@@ -20,7 +20,7 @@ Then run the app as usual (`pnpm tauri dev`, `pnpm dev` + http://localhost:1430,
 - Every change an agent makes is written to the I/O log as `Agent → <tool>` (Control → Monitor).
 - Several agent sessions can run at once: the first MCP server hosts the bridge, later ones relay through it and take over if it exits.
 - Desktop app and a browser tab both open? Both connect. Agents drive the desktop app unless told otherwise (`connections` tool, or `SLS_AGENT_APP=browser`).
-- Port: `SLS_AGENT_PORT` for the MCP server, `localStorage["sls.agentPort"]` in the app.
+- Port: `SLS_AGENT_PORT` for the MCP server, `localStorage["sls.agentPort"]` or `VITE_SLS_AGENT_PORT` (build time) in the app. A second test instance on its own port never takes commands meant for the show machine.
 
 ### Safety
 
@@ -72,6 +72,8 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `asset_import`, `asset_remove` | Library media (local file or URL) |
 | `output_settings` | Wall size, scaling, standby card, timer style, audio host |
 | `project` | Save, export/import a show file, reset to the demo, rename |
+| `package_export` | Write a show package (show file, versioned manifest, every media file) for another computer; desktop app ([SHOW_PACKAGE.md](SHOW_PACKAGE.md)) |
+| `package_import` | Take in a show package: `dryRun` for the plan, per-conflict `choices` (`incoming`, `local`, `media`, `both`) or `resolve`; refuses while live unless `allowLive` |
 | `call_action` | Call any store action by name (escape hatch) |
 | `eval` | Development builds: run JavaScript in the operator window |
 

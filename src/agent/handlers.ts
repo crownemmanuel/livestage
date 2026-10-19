@@ -10,6 +10,8 @@ import { defaultTransition, makeClip, makeCue, makeScene, makeShot } from "@/cor
 import { normalizeGroups, sceneCodes, sceneRows } from "@/core/groups";
 import { uid } from "@/core/ids";
 import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, saveGeneratedAsset } from "@/core/platform";
+import type { MergeChoice } from "@/core/showMerge";
+import { exportShowPackage, isLive, openShowPackage, takeInShowPackage } from "@/engine/showTransfer";
 import * as runtime from "@/core/runtime";
 import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
 import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
@@ -800,7 +802,7 @@ export const handlers: Record<AgentCommand, Handler> = {
       case "import": {
         const proj = typeof a.json === "string" ? JSON.parse(a.json) : a.json;
         if (!isObj(proj) || !Array.isArray(proj.scenes)) throw new Error("Not a show file (no scenes)");
-        P().replaceProject(proj as unknown as Project);
+        await P().replaceProject(proj as unknown as Project);
         return { imported: P().project.name, scenes: P().project.scenes.length };
       }
       case "reset_demo":
@@ -815,6 +817,42 @@ export const handlers: Record<AgentCommand, Handler> = {
       default:
         throw new Error(`Unknown op ${a.op}`);
     }
+  },
+
+  async package_export(a) {
+    if (!isTauri) throw new Error("Show packages are written by the desktop app");
+    const dir = String(a.dir ?? "");
+    if (!dir) throw new Error("dir is required");
+    return exportShowPackage(/\.slshow$/i.test(dir) ? dir : `${dir}.slshow`);
+  },
+
+  async package_import(a) {
+    if (!isTauri) throw new Error("Show packages are opened by the desktop app");
+    const { pkg, preview } = await openShowPackage(String(a.dir ?? ""));
+    const mode: "merge" | "replace" = a.mode === "merge" || a.mode === "replace" ? a.mode : preview.unrelated ? "replace" : "merge";
+    const choices: Record<string, MergeChoice> = { ...(isObj(a.choices) ? (a.choices as Record<string, MergeChoice>) : {}) };
+    const conflicts = preview.plan.items.filter((x) => x.state === "conflict");
+    for (const c of conflicts) if (!choices[c.key] && (a.resolve === "local" || a.resolve === "incoming")) choices[c.key] = a.resolve;
+    const plan = {
+      show: pkg.manifest.showName,
+      version: pkg.manifest.version,
+      from: pkg.manifest.from,
+      createdAt: pkg.manifest.createdAt,
+      localVersion: preview.localVersion,
+      older: preview.older || undefined,
+      mode,
+      conflicts: conflicts.map((x) => ({ key: x.key, label: x.label, here: x.here, incoming: x.upstream, options: x.options })),
+      incoming: preview.plan.items.filter((x) => x.state === "incoming").map((x) => ({ key: x.key, label: x.label, change: x.upstream })),
+      keptLocal: preview.plan.items.filter((x) => x.state === "local").map((x) => ({ key: x.key, label: x.label, change: x.here })),
+      unchanged: preview.plan.items.filter((x) => x.state === "same").length,
+      files: pkg.manifest.files.length,
+      missingInPackage: pkg.manifest.missing.length ? pkg.manifest.missing : undefined,
+    };
+    if (a.dryRun) return { applied: false, plan };
+    const open = mode === "merge" ? conflicts.filter((c) => !choices[c.key]) : [];
+    if (open.length) return { applied: false, reason: `${open.length} conflict(s) need a choice (choices or resolve)`, plan };
+    if (isLive() && !a.allowLive) throw new Error("A scene is live on the wall. Ask the operator, then pass allowLive: true to take the package in anyway.");
+    return { applied: true, plan, result: await takeInShowPackage(pkg, { mode, choices, allowLive: !!a.allowLive }) };
   },
 
   async call_action(a) {

@@ -15,8 +15,16 @@ export interface Asset {
   type: AssetType;
   /** URL the webview can load (asset protocol URL in Tauri, blob URL in browser dev). */
   url: string;
-  /** Absolute path on disk when stored in the app library (Tauri only). */
+  /** Absolute path on disk when stored in the app library (Tauri only). Derived from `file` on load. */
   path?: string;
+  /**
+   * Portable location: a key relative to the show's media folder (the app data folder on the desktop),
+   * e.g. "assets/asset_x_take.mp4" or "media/prologue/p1.mp4". Set for library files and for media that
+   * arrived in a show package or sync; when that file is there, it is played instead of `url`.
+   */
+  file?: string;
+  /** Portable key of the HEVC-alpha twin (see `macUrl`). */
+  macFile?: string;
   /** Blob URLs disappear when the app reloads. */
   ephemeral?: boolean;
   /** Video/image declares an alpha channel (WebM VP9 alpha, HEVC alpha, PNG). */
@@ -656,6 +664,24 @@ export interface Project {
   timers?: ShowTimer[];
   /** Front-of-house announcements ("the show will begin in 5 minutes"). */
   announcements?: Announcement[];
+  /** Where this copy of the show came from, so a show package or sync can tell local edits from incoming ones. */
+  lineage?: ShowLineage;
+}
+
+/**
+ * Version history between machines (see docs/SHOW_PACKAGE.md). Each package or cloud push gets the next
+ * version number; the receiving machine remembers, per scene and per setting, the content hash it last took
+ * in (the merge base), so a later version only asks about what was changed on both sides.
+ */
+export interface ShowLineage {
+  /** The same show on every machine. */
+  showId: string;
+  /** Last version this machine sent out (package export or cloud push). */
+  sent?: number;
+  /** Last version this machine took in. */
+  received?: { version: number; at: number; via: "package" | "cloud"; from: string };
+  /** Merge base: unit key ("scene:<id>", "order", "output" …) → content hash as last exchanged. */
+  base?: Record<string, string>;
 }
 
 export type TimerOp = "start" | "pause" | "reset" | "restart";

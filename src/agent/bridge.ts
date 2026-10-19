@@ -11,6 +11,8 @@ import { AGENT_COMMANDS, AGENT_PORT, AGENT_SPEC_VERSION, type AgentCommand, type
 
 const ENABLED_KEY = "sls.agent";
 const PORT_KEY = "sls.agentPort";
+/** A second instance (e.g. a test profile) can talk to its own MCP server: VITE_SLS_AGENT_PORT=1441. */
+const ENV_PORT = Number(import.meta.env.VITE_SLS_AGENT_PORT) || AGENT_PORT;
 
 function readEnabled() {
   try {
@@ -46,9 +48,9 @@ export const useAgent = create<AgentStore>((set) => ({
 
 function port() {
   try {
-    return Number(localStorage.getItem(PORT_KEY)) || AGENT_PORT;
+    return Number(localStorage.getItem(PORT_KEY)) || ENV_PORT;
   } catch {
-    return AGENT_PORT;
+    return ENV_PORT;
   }
 }
 

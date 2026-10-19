@@ -3,12 +3,14 @@
 //
 //   node mcp/check.ts            tool list + read-only calls
 //   node mcp/check.ts --build    also builds a scratch scene in the preview, screenshots it, deletes it
+//   node mcp/check.ts --package  also writes a show package to a temp folder, dry-runs taking it back in,
+//                                and deletes it (desktop app; counts the show's package version up by one)
 //
 // The --build run never touches the live wall.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -16,9 +18,12 @@ import { AGENT_COMMANDS } from "../src/agent/spec.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const build = process.argv.includes("--build");
+const pkg = process.argv.includes("--package");
 
 const client = new Client({ name: "sls-mcp-check", version: "1.0.0" });
-await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(here, "server.ts")], stderr: "inherit" }));
+// Pass the environment through (the SDK otherwise drops it), so SLS_AGENT_PORT picks the app to check.
+const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => typeof e[1] === "string"));
+await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(here, "server.ts")], env, stderr: "inherit" }));
 
 let failures = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
@@ -93,6 +98,16 @@ if (status.error) {
       ok("scene_delete", !del.error, del.error ?? "");
     }
   }
+
+  if (pkg && status.json.app.desktop) {
+    const dir = join(tmpdir(), `sls-mcp-check-${process.pid}.slshow`);
+    const ex = await call("package_export", { dir });
+    ok("package_export", !!ex.json?.version, ex.error ?? `v${ex.json?.version}, ${ex.json?.files} files, ${ex.json?.megabytes} MB, missing ${ex.json?.missing?.length}`);
+    const im = await call("package_import", { dir, dryRun: true });
+    const plan = im.json?.plan;
+    ok("package_import dry run of own package", !!plan && plan.conflicts.length === 0 && plan.incoming.length === 0, im.error ?? `${plan?.unchanged} unchanged`);
+    rmSync(dir, { recursive: true, force: true });
+  } else if (pkg) console.log("skip package checks: the desktop app is needed");
 }
 
 await client.close();

@@ -4,7 +4,7 @@ import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
 import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, defaultTimers, HOG_DEFAULT_HOST, makeGroup, makeScene } from "@/core/factories";
 import { autoGroup, normalizeGroups } from "@/core/groups";
 import { FOH_ASSETS, FOH_CALLS, FOH_PIN, fohAnnouncements } from "@/core/fohCalls";
-import { loadProjectFile, refreshAssetUrls, saveProjectFile } from "@/core/platform";
+import { loadProjectFile, resolveAssetUrls, saveProjectFile } from "@/core/platform";
 import type { Asset, OutputSettings, Project, Scene, SceneComponent, SceneGroup } from "@/core/types";
 
 export type AppMode = "show" | "builder";
@@ -21,7 +21,8 @@ interface ProjectStore {
 
   load(): Promise<void>;
   save(): Promise<void>;
-  replaceProject(p: Project): void;
+  /** Swap in a whole show (import, package, sync): migrated, and its media pointed at this machine's files. */
+  replaceProject(p: Project): Promise<void>;
   resetToDemo(): void;
   setMode(m: AppMode): void;
   selectScene(id: string | null): void;
@@ -60,7 +61,7 @@ function renumber(p: Project) {
 const SCENE_GROUPS = "scene-groups-1";
 
 /** Fill fields added in later versions so old show files keep loading. */
-function migrate(p: Project): Project {
+export function migrateProject(p: Project): Project {
   const out = { ...defaultOutput(), ...p.output };
   out.safeArea = { ...defaultOutput().safeArea, ...p.output?.safeArea };
   out.standby = { ...defaultOutput().standby, ...p.output?.standby };
@@ -183,7 +184,8 @@ function migrate(p: Project): Project {
   }
   // Built-in assets ship with the app: keep their definitions in step with the code.
   const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS, ...FOH_ASSETS].map((a) => [a.id, a]));
-  merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)! } : a));
+  // Keep the keys of local copies (from a show package or sync); resolveAssetUrls points at them when present.
+  merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)!, file: a.file, macFile: a.macFile } : a));
   return merged;
 }
 
@@ -199,8 +201,8 @@ export const useProject = create<ProjectStore>((set, get) => ({
 
   async load() {
     const saved = await loadProjectFile();
-    const project = saved ? migrate(saved) : defaultProject();
-    project.assets = await refreshAssetUrls(project.assets);
+    const project = saved ? migrateProject(saved) : defaultProject();
+    project.assets = await resolveAssetUrls(project.assets);
     set({ project, loaded: true, dirty: !saved, selectedSceneId: project.scenes[0]?.id ?? null });
   },
 
@@ -213,8 +215,9 @@ export const useProject = create<ProjectStore>((set, get) => ({
     }
   },
 
-  replaceProject(p) {
-    const project = migrate(p);
+  async replaceProject(p) {
+    const project = migrateProject(p);
+    project.assets = await resolveAssetUrls(project.assets);
     set({ project, dirty: true, selectedSceneId: project.scenes[0]?.id ?? null, selectedComponentId: null });
   },
 

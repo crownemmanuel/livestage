@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 1;
+export const AGENT_SPEC_VERSION = 2;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -381,6 +381,27 @@ export const AGENT_COMMANDS = {
     params: args(
       { op: oneOf(["save", "export", "import", "reset_demo", "rename"], "What to do."), file: str("Absolute path for export/import (handled by the MCP server)."), name: str("For rename.") },
       ["op"],
+    ),
+  },
+  package_export: {
+    description:
+      "Write a show package: a folder (<name>.slshow) with the show file, a versioned manifest (per-scene hashes) and every media file the show uses, so another computer gets the identical show. Each export gets the next version number. Desktop app only.",
+    params: args({ dir: str('Absolute path of the package folder to write; ".slshow" is added if missing. An older package at that path is replaced once the new one is complete.') }, ["dir"]),
+  },
+  package_import: {
+    destructive: true,
+    description:
+      "Take in a show package from another computer. Scenes and settings changed only in the package are taken, ones changed only here are kept; ones changed on both sides are conflicts. Without choices for every conflict (or `resolve`), nothing changes and the plan is returned. Refuses while a scene is live unless allowLive. Desktop app only.",
+    params: args(
+      {
+        dir: str("Absolute path of the .slshow package folder."),
+        mode: oneOf(["merge", "replace"], "merge (default when this show has taken in this show before) or replace the whole show (default otherwise). Machine settings (output display, MIDI ports) are always kept."),
+        choices: obj('Conflict key → "incoming" | "local" | "media" (keep this scene, add the incoming media) | "both" (keep this scene, add the incoming one as a copy). Keys come from the plan, e.g. "scene:scene_ab12", "order", "output".'),
+        resolve: oneOf(["local", "incoming"], "Choice for conflicts not listed in choices."),
+        dryRun: bool("Only return the plan (versions, conflicts, what would change)."),
+        allowLive: bool("Take it in even though a scene is live on the wall (the operator confirmed)."),
+      },
+      ["dir"],
     ),
   },
   call_action: {

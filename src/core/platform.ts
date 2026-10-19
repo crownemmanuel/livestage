@@ -285,9 +285,10 @@ export async function importAssets(only?: AssetType): Promise<Asset[]> {
       const type = assetTypeFor(name);
       if (!type) continue;
       const id = uid("asset");
-      const dest = await join(dir, `${id}_${name}`);
+      const fileName = `${id}_${name}`;
+      const dest = await join(dir, fileName);
       await fs.copyFile(src, dest);
-      out.push({ id, name, type, url: convertFileSrc(dest), path: dest, hasAlpha: guessAlpha(name) });
+      out.push({ id, name, type, url: convertFileSrc(dest), path: dest, file: `assets/${fileName}`, hasAlpha: guessAlpha(name) });
     }
     return out;
   }
@@ -308,9 +309,10 @@ export async function saveGeneratedAsset(bytes: Uint8Array, name: string, type: 
     const { convertFileSrc } = await import("@tauri-apps/api/core");
     const dir = await join(await appDataDir(), "assets");
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
-    const dest = await join(dir, `${id}_${name.replace(/[\\/:*?"<>|]/g, "-")}`);
+    const fileName = `${id}_${name.replace(/[\\/:*?"<>|]/g, "-")}`;
+    const dest = await join(dir, fileName);
     await fs.writeFile(dest, bytes);
-    return { id, name, type, url: convertFileSrc(dest), path: dest };
+    return { id, name, type, url: convertFileSrc(dest), path: dest, file: `assets/${fileName}` };
   }
   const blob = new Blob([bytes as BlobPart], { type: type === "audio" ? "audio/mpeg" : "application/octet-stream" });
   return { id, name, type, url: URL.createObjectURL(blob), ephemeral: true };
@@ -321,9 +323,44 @@ function guessAlpha(name: string) {
   return n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".webm") || n.includes("alpha");
 }
 
-/** Re-derive asset URLs after load (asset protocol URLs depend on the install path). */
-export async function refreshAssetUrls(assets: Asset[]): Promise<Asset[]> {
+/** The portable key of a library file from its absolute path (show files from before keys existed). */
+function legacyKey(path: string, root: string): string {
+  const norm = (x: string) => x.replace(/\\/g, "/").replace(/\/+$/, "");
+  const p = norm(path);
+  const r = norm(root);
+  if (p.toLowerCase().startsWith(r.toLowerCase() + "/")) return p.slice(r.length + 1);
+  // A path from another computer: the file may have been copied into this one's library.
+  return `assets/${p.split("/").pop()}`;
+}
+
+/**
+ * Point assets at the files on this machine (asset protocol URLs depend on the install path). An asset
+ * with a portable `file` key plays its local copy when there is one; media that ships with the app
+ * (`/media/…`) falls back to the bundled file.
+ */
+export async function resolveAssetUrls(assets: Asset[]): Promise<Asset[]> {
   if (!isTauri) return assets;
   const { convertFileSrc } = await import("@tauri-apps/api/core");
-  return assets.map((a) => (a.path ? { ...a, url: convertFileSrc(a.path) } : a));
+  const { appDataDir, join } = await import("@tauri-apps/api/path");
+  const fs = await import("@tauri-apps/plugin-fs");
+  const root = await appDataDir();
+  const local = async (key: string | undefined) => {
+    if (!key) return null;
+    const ok = await fs.exists(key, { baseDir: fs.BaseDirectory.AppData }).catch(() => false);
+    return ok ? join(root, ...key.split("/")) : null;
+  };
+  return Promise.all(
+    assets.map(async (a) => {
+      const file = a.file ?? (a.path ? legacyKey(a.path, root) : undefined);
+      const [p, mp] = await Promise.all([local(file), local(a.macFile)]);
+      const out: Asset = { ...a };
+      if (file) out.file = file;
+      if (p) {
+        out.path = p;
+        out.url = convertFileSrc(p);
+      } else if (a.path) out.url = convertFileSrc(a.path);
+      if (mp) out.macUrl = convertFileSrc(mp);
+      return out;
+    }),
+  );
 }

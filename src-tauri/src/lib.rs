@@ -1,5 +1,6 @@
 mod fonts;
 mod io;
+mod package;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
@@ -41,6 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(io::IoState::default())
+        .manage(package::HashCache::default())
         .invoke_handler(tauri::generate_handler![
             ensure_output_window,
             io::midi_ports,
@@ -48,7 +50,11 @@ pub fn run() {
             io::midi_send,
             io::osc_listen,
             io::osc_send,
-            fonts::system_fonts
+            fonts::system_fonts,
+            package::package_export,
+            package::package_read,
+            package::package_import_files,
+            package::hash_files
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

@@ -14,6 +14,8 @@ import {
   MonitorX,
   Moon,
   MoreHorizontal,
+  PackageOpen,
+  PackagePlus,
   PencilRuler,
   Power,
   RotateCcw,
@@ -32,6 +34,7 @@ import { useIo } from "@/engine/io";
 import { clearLiveState } from "@/engine/persist";
 import { OutputSettingsDialog } from "./OutputSettings";
 import { IoDialog } from "./io/IoDialog";
+import { ShowPackageDialog, startPackageExport, startPackageImport } from "./ShowPackage";
 import { getErrors, onErrors } from "./ErrorBoundary";
 import { RoundToggle, Tip, ToolbarButton } from "./kit";
 import { useSceneCodes } from "./SceneList";
@@ -144,10 +147,17 @@ export function TopBar() {
             <DropdownMenuItem
               onClick={async () => {
                 const p = await importProject();
-                if (p) useProject.getState().replaceProject(p);
+                if (p) await useProject.getState().replaceProject(p);
               }}
             >
               <FileUp /> Import show file…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => void startPackageExport()}>
+              <PackagePlus /> Export show package (with media)…
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void startPackageImport()}>
+              <PackageOpen /> Import show package…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -203,6 +213,7 @@ export function TopBar() {
 
       <OutputSettingsDialog open={settings} onOpenChange={setSettings} />
       <IoDialog open={io} onOpenChange={setIo} />
+      <ShowPackageDialog />
       <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
         <DialogContent>
           <DialogHeader>

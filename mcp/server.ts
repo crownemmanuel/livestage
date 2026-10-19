@@ -246,7 +246,7 @@ const appInfo = () => activeApp(prefer)?.hello ?? null;
 
 const commands = AGENT_COMMANDS as Record<string, CommandSpec>;
 
-const TIMEOUTS: Record<string, number> = { asset_import: 180000, take: 20000, project: 60000, screenshot: 8000 };
+const TIMEOUTS: Record<string, number> = { asset_import: 180000, take: 20000, project: 60000, screenshot: 8000, package_export: 1800000, package_import: 1800000 };
 
 /** Work that needs the local file system happens here, before / after the app runs the command. */
 async function prepare(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
