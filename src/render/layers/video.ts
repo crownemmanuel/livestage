@@ -7,6 +7,26 @@ export interface VideoHandle {
   video: HTMLVideoElement;
   texture: THREE.VideoTexture;
   lastSeek: number;
+  /** currentTime of the last frame uploaded while paused. */
+  shownTime: number;
+}
+
+/**
+ * WebKit (the desktop app) decodes a seek on a paused <video> only for elements in the
+ * document, so a paused scrub would keep showing the old frame. Park every video in an
+ * invisible box on the page.
+ */
+let videoHost: HTMLDivElement | null = null;
+function hostVideo(v: HTMLVideoElement) {
+  if (typeof document === "undefined") return;
+  if (!videoHost) {
+    videoHost = document.createElement("div");
+    videoHost.setAttribute("aria-hidden", "true");
+    videoHost.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-1";
+    document.body.appendChild(videoHost);
+  }
+  v.style.cssText = "width:2px;height:2px";
+  videoHost.appendChild(v);
 }
 
 /** One <video> per use; playback is slaved to the shared scene clock. */
@@ -32,7 +52,8 @@ export function useVideo(url: string | null): VideoHandle | null {
     };
     v.addEventListener("seeked", refresh);
     v.addEventListener("loadeddata", refresh);
-    return { video: v, texture, lastSeek: 0 };
+    hostVideo(v);
+    return { video: v, texture, lastSeek: 0, shownTime: -1 };
   }, [url]);
   useEffect(
     () => () => {
@@ -40,6 +61,7 @@ export function useVideo(url: string | null): VideoHandle | null {
       h.video.pause();
       h.video.removeAttribute("src");
       h.video.load();
+      h.video.remove();
       h.texture.dispose();
     },
     [h],
@@ -94,6 +116,11 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
     if (Math.abs(drift) > (want.reverse ? 0.02 : 0.02) && !v.seeking && wallMs - h.lastSeek > gap) {
       v.currentTime = want.time;
       h.lastSeek = wallMs;
+    }
+    // Belt and braces for a paused frame: upload it whenever the parked time changes, even if no 'seeked' event arrives.
+    if (!v.seeking && v.readyState >= 2 && v.currentTime !== h.shownTime) {
+      h.shownTime = v.currentTime;
+      h.texture.needsUpdate = true;
     }
     return;
   }

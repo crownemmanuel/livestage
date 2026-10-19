@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, Crop, Eye, Footprints, Gauge, Image, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, X } from "lucide-react";
+import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, CornerDownRight, Crop, Eye, Footprints, Gauge, Image, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -25,6 +25,9 @@ import { NumberInput, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
 import { TRANSITIONS } from "../show/ShowMode";
 import { MessageFields, defaultMessage } from "../io/MessageFields";
+import { useSceneCodes } from "../SceneList";
+import { FireField } from "./FireField";
+import { flowNext } from "@/core/groups";
 
 /** "hog" is a Send action preset to a Hog 4 message; it gets its own menu entry because it is the common case. */
 type MenuType = CueActionType | "hog";
@@ -162,8 +165,8 @@ export function CueEditor({ scene }: { scene: Scene }) {
     <div className="space-y-2.5 p-3">
       <div className="flex items-center gap-1.5">
         <ListOrdered className="size-3.5 text-muted-foreground" />
-        <h3 className="text-[12.5px] font-semibold">Cues</h3>
-        <InfoTip>Each GO in Show Mode fires the next cue. A cue runs all its actions at once; give an action a delay (⏱) to run a short sequence from one GO. The note is shown to the operator: the line to GO on.</InfoTip>
+        <h3 className="text-[12.5px] font-semibold">Run sheet</h3>
+        <InfoTip>The steps of this scene, in order. Each GO fires the next one; a step can also fire on its own at a scene time, a few seconds after the step before it, or when a video reaches a time. A step runs all its actions at once; an action's delay (⏱) spaces them out. The note is shown to the operator: the line to GO on.</InfoTip>
         <Button size="xs" variant="outline" className="ml-auto" onClick={addCue}>
           <Plus /> Add cue
         </Button>
@@ -202,6 +205,9 @@ export function CueEditor({ scene }: { scene: Scene }) {
               <Play /> Test
             </Button>
           </div>
+          <div className="mx-2.5 mt-1 px-1">
+            <FireField scene={scene} cue={cue} index={i} />
+          </div>
           <label className="mx-2.5 mt-1 flex items-center gap-1.5 rounded-md px-1 text-amber-200/80">
             <MessageSquareText className="size-3.5 shrink-0 opacity-70" />
             <input
@@ -227,7 +233,27 @@ export function CueEditor({ scene }: { scene: Scene }) {
           </div>
         </div>
       ))}
+      {scene.cues.length > 0 && <AfterLastStep scene={scene} />}
     </div>
+  );
+}
+
+/** What GO does after the last step: take the next scene of a flowing group, or nothing. */
+function AfterLastStep({ scene }: { scene: Scene }) {
+  const project = useProject((s) => s.project);
+  const codes = useSceneCodes();
+  const next = flowNext(project, scene.id);
+  return (
+    <p className="flex items-center gap-1.5 px-1 text-[11.5px] text-muted-foreground">
+      <CornerDownRight className="size-3.5" />
+      {next ? (
+        <>
+          Then GO takes <span className="font-key font-semibold text-foreground/80">{codes.get(next.id)}</span> <span className="text-foreground/80">{next.name}</span>
+        </>
+      ) : (
+        "End of the scene: the next scene is taken by hand (or put the scenes in a group)."
+      )}
+    </p>
   );
 }
 

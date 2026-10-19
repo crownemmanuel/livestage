@@ -32,7 +32,9 @@ export type Command =
   | { type: "seek"; t: number }
   /** Put a video actor on one clip, `offset` seconds in, right now (scrubbing). */
   | { type: "clip.seek"; actorId: string; clipId: string; offset: number }
-  | { type: "cuePointer"; index: number };
+  | { type: "cuePointer"; index: number }
+  /** Cue `index` has fired: remember it and move the GO pointer past it (and past cues that already fired). */
+  | { type: "cueFired"; index: number };
 
 const LONG_AGO = -1e9;
 
@@ -107,6 +109,7 @@ export function createRuntime(scene: Scene, wallNow = now()): SceneRuntime {
     strikes: [],
     camera: { from: pose, to: pose, at: 0, dur: 0, ease: "inOut", follow: shot?.followActorId ? { actorId: shot.followActorId, offset: shot.followOffset } : null },
     cuePointer: 0,
+    fired: [],
     clipActors: {},
     names: {},
     routes: {},
@@ -429,6 +432,14 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     }
     case "cuePointer":
       return { rt: { ...rt, cuePointer: Math.max(0, Math.min(cmd.index, scene.cues.length)) }, poses };
+    case "cueFired": {
+      const cue = scene.cues[cmd.index];
+      if (!cue) return { rt, poses };
+      const fired = rt.fired?.includes(cue.id) ? rt.fired : [...(rt.fired ?? []), cue.id];
+      let ptr = Math.max(rt.cuePointer, cmd.index + 1);
+      while (ptr < scene.cues.length && fired.includes(scene.cues[ptr].id)) ptr++;
+      return { rt: { ...rt, fired, cuePointer: ptr }, poses };
+    }
     case "seek": {
       const target = Math.max(0, cmd.t);
       const base = (rt.clock.pausedAt ?? wallNow) - target;

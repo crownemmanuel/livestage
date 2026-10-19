@@ -10,6 +10,7 @@ import { isOutputOpen, openOutputWindow, outputClosedByUs } from "@/core/platfor
 import { mediaElapsed } from "@/core/runtime";
 import { stepActors, type ActorInput } from "@/core/sim";
 import type { Cue, CueAction, IoAction, MediaMarker, MediaSettings, Scene, SceneRuntime, TransitionSpec } from "@/core/types";
+import { flowNext } from "@/core/groups";
 import { useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
 import { ioLog, sendMessage, setIoActionHandler, startIo } from "./io";
@@ -79,9 +80,14 @@ interface Pending extends PendingRecord {
 }
 const pending: Record<Target, Pending[]> = { program: [], preview: [] };
 
+/** Follow cues waiting for their previous cue's delay. */
+const follows: Record<Target, ReturnType<typeof setTimeout>[]> = { program: [], preview: [] };
+
 export function cancelPending(target: Target) {
   pending[target].forEach((p) => clearTimeout(p.handle));
   pending[target] = [];
+  follows[target].forEach(clearTimeout);
+  follows[target] = [];
 }
 
 export function pendingCount(target: Target) {
@@ -137,23 +143,81 @@ function rtFor(target: Target) {
   return target === "program" ? s.program.runtime : s.preview;
 }
 
+/**
+ * Fire cue `index` of the scene running on `target`: its actions, the GO pointer, and any
+ * follow cues chained after it. Every way a cue fires (GO, scene time, follow, video marker) ends here.
+ */
+export function fireCue(target: Target, index: number, auto = false) {
+  const rt = rtFor(target);
+  const cue = rt?.scene.cues[index];
+  if (!rt || !cue) return;
+  useShow.getState().dispatch(target, { type: "cueFired", index });
+  // A cue firing by itself while rehearsing must not swap the scene out from under the editor.
+  runCue(target, auto && target === "preview" ? { ...cue, actions: cue.actions.filter((a) => a.type !== "takeScene") } : cue);
+  if (target === "program") notifyCue(rt, index, cue);
+  const next = rt.scene.cues[index + 1];
+  if (next?.fire?.mode === "follow") {
+    const key = rt.key;
+    const h = setTimeout(() => {
+      follows[target] = follows[target].filter((x) => x !== h);
+      // Only if the same run of the scene is still up and the follow hasn't fired some other way.
+      const cur = rtFor(target);
+      if (cur?.key === key && !cur.fired?.includes(next.id)) fireCue(target, index + 1, true);
+    }, Math.max(0, next.fire.after) * 1000);
+    follows[target].push(h);
+  }
+}
+
+/** Scene-time cues whose moment has come. Called from the 60 Hz loop. */
+function pollTimedCues(target: Target, rt: SceneRuntime, wall: number) {
+  const t = sceneNow(rt, wall) / 1000;
+  rt.scene.cues.forEach((c, i) => {
+    if (c.fire?.mode === "time" && t >= c.fire.at && !rt.fired?.includes(c.id)) fireCue(target, i, true);
+  });
+}
+
+/** Take the next scene of a flowing group in place of a GO past the last cue. */
+function goIntoNextScene(target: Target, rt: SceneRuntime): boolean {
+  const next = flowNext(useProject.getState().project, rt.scene.id);
+  if (!next) return false;
+  if (target === "program") void takeScene(next.id);
+  else {
+    useProject.getState().selectScene(next.id);
+    useShow.getState().setPreview(next);
+  }
+  return true;
+}
+
+/**
+ * Show the preview as the scene looks after its first `step` cues: restart it, then apply those
+ * cues at once (delays dropped, follow chains not run). Nothing is sent out.
+ */
+export function previewAtStep(step: number) {
+  const show = useShow.getState();
+  const cur = show.preview;
+  if (!cur) return;
+  cancelPending("preview");
+  const scene = useProject.getState().project.scenes.find((s) => s.id === cur.scene.id) ?? cur.scene;
+  show.setPreview(scene);
+  scene.cues.slice(0, step).forEach((cue, i) => {
+    for (const a of cue.actions) if (a.type !== "takeScene") execAction("preview", a);
+    useShow.getState().dispatch("preview", { type: "cueFired", index: i });
+  });
+  useShow.getState().dispatch("preview", { type: "cuePointer", index: step });
+}
+
 export const cueControl = {
   go(target: Target) {
     const rt = rtFor(target);
     if (!rt) return;
-    const cue = rt.scene.cues[rt.cuePointer];
-    if (!cue) return;
-    useShow.getState().dispatch(target, { type: "cuePointer", index: rt.cuePointer + 1 });
-    runCue(target, cue);
-    if (target === "program") notifyCue(rt, rt.cuePointer, cue);
+    if (!rt.scene.cues[rt.cuePointer]) {
+      goIntoNextScene(target, rt);
+      return;
+    }
+    fireCue(target, rt.cuePointer);
   },
   fire(target: Target, index: number) {
-    const rt = rtFor(target);
-    const cue = rt?.scene.cues[index];
-    if (!rt || !cue) return;
-    useShow.getState().dispatch(target, { type: "cuePointer", index: index + 1 });
-    runCue(target, cue);
-    if (target === "program") notifyCue(rt, index, cue);
+    fireCue(target, index);
   },
   repeat(target: Target) {
     const rt = rtFor(target);
@@ -305,13 +369,17 @@ function fireMarkers(fire: (m: MediaMarker) => void, markers: MediaMarker[] | un
   }
 }
 
-function pollMarkers(rt: SceneRuntime, wall: number) {
+function pollMarkers(target: Target, rt: SceneRuntime, wall: number) {
   const t = sceneNow(rt, wall);
   const fire = (m: MediaMarker) => {
-    if (!m.cueId) return void sendMessage(m.message);
-    const cue = rt.scene.cues.find((c) => c.id === m.cueId);
-    if (cue) runCue("program", cue);
-    else ioLog("error", `Marker "${m.name}" points at a cue that no longer exists`);
+    if (!m.cueId) {
+      // Messages leave the building only from the live show.
+      if (target === "program") void sendMessage(m.message);
+      return;
+    }
+    const i = rt.scene.cues.findIndex((c) => c.id === m.cueId);
+    if (i >= 0) fireCue(target, i, true);
+    else if (target === "program") ioLog("error", `Marker "${m.name}" points at a cue that no longer exists`);
   };
   for (const c of rt.scene.components) {
     if (c.kind === "clipActor") {
@@ -456,11 +524,20 @@ export function startOperatorServices(): () => void {
     if (s.program.runtime) {
       const p = stepActors(s.program.runtime, s.programPoses, inputsFor("program"), dt, t);
       if (p !== s.programPoses) s.setPoses("program", p, t);
-      if (!s.program.standby) pollMarkers(s.program.runtime, t);
+      if (!s.program.standby) {
+        pollMarkers("program", s.program.runtime, t);
+        pollTimedCues("program", s.program.runtime, t);
+      }
     }
     if (s.preview) {
       const p = stepActors(s.preview, s.previewPoses, inputsFor("preview"), dt, t);
       if (p !== s.previewPoses) s.setPoses("preview", p, t);
+      // Rehearsal: video markers and timed cues run in the preview too (nothing is sent out).
+      const pv = useShow.getState().preview;
+      if (pv) {
+        pollMarkers("preview", pv, t);
+        pollTimedCues("preview", pv, t);
+      }
     }
   }, 1000 / 60);
   cleanups.push(() => clearInterval(sim));

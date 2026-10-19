@@ -2,17 +2,24 @@
 // which is what TAKE LIVE starts from) and a scrubber for the videos in the scene.
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { Crosshair, Film, Scan, Send } from "lucide-react";
+import { ChevronRight, Clock, Crosshair, Film, Flag, Focus, Pause, Play, Plus, Scan, Send, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
 import { clipStateAt } from "@/core/clipActor";
 import { playableUrl } from "@/core/platform";
 import { NO_FRAMING, clampFraming, evalFraming, mediaElapsed, type Command } from "@/core/runtime";
-import type { Asset, Framing, SceneRuntime } from "@/core/types";
-import { probeDuration } from "@/engine/operator";
+import { uid } from "@/core/ids";
+import { markerHosts, setHostMarkers } from "@/core/markers";
+import type { Asset, Framing, MediaMarker, SceneRuntime } from "@/core/types";
+import { describeMessage } from "@/engine/io";
+import { previewAtStep, probeDuration } from "@/engine/operator";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
+import { SelectBox } from "./fields";
+import { defaultMessage } from "./io/MessageFields";
+import { MarkersEditor } from "./io/MarkersEditor";
+import { useSceneCodes } from "./SceneList";
 
 function useTick(ms: number) {
   const [, force] = useState(0);
@@ -252,61 +259,229 @@ export function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
 
-/** Scrub through the videos playing in the preview (moves the preview's scene clock). */
-export function VideoScrubber() {
+// ---------------------------------------------------------------- Build: what the preview shows
+
+/** Says whether the preview is the whole scene or one isolated component, and at which step. */
+export function PreviewHeader() {
+  const rt = useShow((s) => s.preview);
+  const solo = useShow((s) => s.solo);
+  const codes = useSceneCodes();
+  if (!rt) return null;
+  const comp = solo ? rt.scene.components.find((c) => c.id === solo) : null;
+  return (
+    <div className="mb-1.5 flex items-center gap-2 text-[11.5px]">
+      <span className="flex items-center gap-1.5 rounded-full bg-preview/15 px-2 py-0.5 font-key text-[12.5px] font-bold text-preview">
+        <span className="size-2 rounded-full bg-preview" />
+        Preview
+      </span>
+      {comp ? (
+        <>
+          <span className="flex items-center gap-1 rounded-full bg-armed/15 px-2 py-0.5 font-medium text-armed">
+            <Focus className="size-3.5" /> Isolated: {comp.name}
+          </span>
+          <Button size="xs" variant="ghost" className="h-6" onClick={() => useShow.getState().setSolo(null)}>
+            <X /> Show whole scene
+          </Button>
+        </>
+      ) : (
+        <span className="min-w-0 truncate text-muted-foreground">
+          Whole scene · <span className="font-key font-semibold">{codes.get(rt.scene.id)}</span> <span className="text-foreground/85">{rt.scene.name}</span>
+        </span>
+      )}
+      <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground" title="Edits here never reach the wall until the scene is taken live in Show Mode">
+        not on the wall
+      </span>
+    </div>
+  );
+}
+
+/** Start · 1 · 2 …: click a step to see the scene as it looks after that cue. */
+export function StepBar() {
+  const rt = useShow((s) => s.preview);
+  if (!rt) return null;
+  const cues = rt.scene.cues;
+  const at = rt.cuePointer;
+  const pill = (i: number, label: string, title: string, auto?: boolean) => (
+    <button
+      key={i}
+      type="button"
+      title={title}
+      onClick={() => previewAtStep(i)}
+      className={cn(
+        "flex h-7 max-w-[180px] shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11.5px] transition-colors",
+        i === at ? "border-preview bg-preview/15 text-foreground" : i < at ? "border-border bg-accent/40 text-muted-foreground" : "border-border text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {i === 0 ? <Flag className="size-3 shrink-0" /> : <span className="font-key font-bold tabular">{i}</span>}
+      <span className="truncate">{label}</span>
+      {auto && <Zap className="size-3 shrink-0 text-armed" />}
+    </button>
+  );
+  return (
+    <div className="mt-1.5 flex items-center gap-1 overflow-x-auto pb-0.5">
+      <span className="mr-1 shrink-0 text-[10.5px] text-muted-foreground">Show at</span>
+      {pill(0, "Start", "The scene as it goes live, before any cue")}
+      {cues.map((c, i) => [<ChevronRight key={`a${i}`} className="size-3 shrink-0 text-muted-foreground/50" />, pill(i + 1, c.name, `After cue ${i + 1}: ${c.name}`, !!c.fire && c.fire.mode !== "go")])}
+    </div>
+  );
+}
+
+/**
+ * Timeline for one video of the preview: drag to scrub (pauses the preview), see its markers as
+ * ticks, add a marker at the playhead. Follows the isolated component when there is one.
+ * `editable` off (Show Mode): scrub and jump to markers only.
+ */
+export function Timeline({ editable = true }: { editable?: boolean }) {
   const rt = useShow((s) => s.preview);
   const assets = useShow((s) => s.assets);
+  const solo = useShow((s) => s.solo);
   const sel = useScrubSelection((s) => s.key);
-  const [drag, setDrag] = useState<{ v: number; src: Source; wasPlaying: boolean } | null>(null);
-  useTick(150);
+  const sceneDef = useProject((s) => (rt ? s.project.scenes.find((x) => x.id === rt.scene.id) : undefined));
+  const [drag, setDrag] = useState<{ v: number; src: Source } | null>(null);
+  // The ref is current within one event burst (state lags a render), so a fast scrub never loses its start.
+  const dragRef = useRef<{ v: number; src: Source } | null>(null);
+  const [open, setOpen] = useState(false);
+  useTick(120);
   const ids = rt ? rt.scene.components.flatMap((c) => (c.kind === "background" || c.kind === "video" ? (c.media.assetId ? [c.media.assetId] : []) : [])) : [];
   useAssetDurations(assets, ids);
-  if (!rt) return null;
-  const sources = videoSources(rt, assets);
-  if (!sources.length && !drag) return null;
-  // Default: whatever is playing (preferring a clip a cue started over an idle loop), else the first video.
+  if (!rt || !sceneDef) return null;
+  const all = videoSources(rt, assets);
+  const sources = solo && all.some((s) => s.key.split(":")[0] === solo) ? all.filter((s) => s.key.split(":")[0] === solo) : all;
+  const clock = sceneNow(rt) / 1000;
+  if (!sources.length && !drag) {
+    if (!editable) return null;
+    return (
+      <div className="mt-2 flex items-center gap-2 rounded-md border border-dashed border-border px-2 py-1.5 text-[11px] text-muted-foreground">
+        <Clock className="size-3.5" /> Scene clock {fmt(Math.max(0, clock))} · no video playing to put markers on
+      </div>
+    );
+  }
   const playing = sources.filter((s) => s.playing);
   const src = drag?.src ?? sources.find((s) => s.key === sel) ?? playing.find((s) => !s.label.includes("(loop)")) ?? playing[0] ?? sources[0];
-  if (!src) return null;
   const pos = drag ? drag.v : src.pos;
   const dispatch = useShow.getState().dispatch;
-  const scrub = (v: number, s: Source) => dispatch("preview", s.seek(v));
+  const paused = rt.clock.pausedAt !== null;
+  // Scrubbing, jumping to a marker or adding one stops playback, and it stays stopped until Play.
+  const pause = () => {
+    if (useShow.getState().preview?.clock.pausedAt === null) dispatch("preview", { type: "clock", op: "pause" });
+  };
+  const startScrub = () => {
+    if (dragRef.current) return dragRef.current;
+    pause();
+    dragRef.current = { v: src.pos, src };
+    setDrag(dragRef.current);
+    return dragRef.current;
+  };
+  const endScrub = () => {
+    dragRef.current = null;
+    setDrag(null);
+  };
+  const host = markerHosts(sceneDef).find((h) => h.key === src.key);
+  const markers = host?.markers ?? [];
+  const cues = sceneDef.cues;
+  const setMarkers = (m: MediaMarker[]) => useProject.getState().updateScene(sceneDef.id, (s) => setHostMarkers(s, src.key, m));
+  const addMarker = () => {
+    pause();
+    const at = Math.round(pos * 10) / 10;
+    setMarkers([...markers, { id: uid("mk"), name: `Marker ${markers.length + 1}`, at, message: defaultMessage("hog"), cueId: null }]);
+    setOpen(true);
+  };
+  const describe = (m: MediaMarker) => {
+    const i = m.cueId ? cues.findIndex((c) => c.id === m.cueId) : -1;
+    return `${m.name} · ${m.at.toFixed(1)} s → ${i >= 0 ? `cue ${i + 1}: ${cues[i].name}` : m.cueId ? "missing cue" : describeMessage(m.message)}`;
+  };
 
   return (
-    <div className="mt-1.5 text-[11px]">
-      {/* Full width, so a few pixels of travel are a small step in time. */}
-      <input
-        type="range"
-        min={0}
-        max={src.duration}
-        step={0.01}
-        value={Math.min(pos, src.duration)}
-        className="block h-2 w-full cursor-pointer accent-[var(--preview)]"
-        onPointerDown={() => {
-          const live = useShow.getState().preview;
-          const wasPlaying = !!live && live.clock.pausedAt === null;
-          if (wasPlaying) dispatch("preview", { type: "clock", op: "pause" });
-          setDrag({ v: src.pos, src, wasPlaying });
-        }}
-        onChange={(e) => {
-          const v = +e.target.value;
-          if (drag) setDrag({ ...drag, v });
-          scrub(v, drag?.src ?? src);
-        }}
-        onPointerUp={() => {
-          if (drag?.wasPlaying) dispatch("preview", { type: "clock", op: "resume" });
-          setDrag(null);
-        }}
-      />
-      <div className="mt-1 flex items-center gap-2">
+    <div className="mt-2 rounded-md border border-border bg-black/20 px-2 pb-1.5 pt-1">
+      <div className="flex items-center gap-2 text-[11px]">
+        {editable && (
+        <Button size="icon-xs" variant="ghost" className="size-6 shrink-0" title={paused ? "Play the preview" : "Pause the preview"} aria-label={paused ? "Play" : "Pause"} onClick={() => {
+            endScrub();
+            dispatch("preview", { type: "clock", op: paused ? "resume" : "pause" });
+          }}>
+          {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
+        </Button>
+        )}
         <Film className="size-3.5 shrink-0 text-muted-foreground" />
-<span className="min-w-0 truncate text-foreground/80" title="Pick another video in the Media tab">
-          {src.label}
-        </span>
-        <span className="ml-auto shrink-0 whitespace-nowrap tabular text-muted-foreground">
+        <SelectBox
+          className="h-6 w-auto max-w-[260px] border-transparent bg-transparent px-1 text-[11.5px] font-medium hover:border-input"
+          value={src.key}
+          onChange={(k) => selectScrubSource(k)}
+          options={sources.map((s) => ({ value: s.key, label: s.label + (s.playing ? "" : " (not playing)") }))}
+        />
+        <span className="tabular text-muted-foreground">
           {fmt(pos)} / {fmt(src.duration)}
         </span>
+        {editable && (
+          <>
+            <span className="ml-auto flex items-center gap-1 tabular text-muted-foreground" title="Time since the scene started in the preview">
+              <Clock className="size-3" /> scene {fmt(Math.max(0, clock))}
+            </span>
+            <Button size="xs" variant="outline" className="h-6 border-armed/50 text-armed hover:text-armed" onClick={addMarker} title="Add a marker at the playhead">
+              <Plus /> Marker at {pos.toFixed(1)} s
+            </Button>
+          </>
+        )}
       </div>
+      <div className="relative mt-1 h-6">
+        <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-muted" />
+        <div className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-preview/70" style={{ width: `${(Math.min(pos, src.duration) / src.duration) * 100}%` }} />
+        {markers.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            title={describe(m)}
+            className="absolute top-0 z-10 -translate-x-1/2"
+            style={{ left: `${(Math.min(m.at, src.duration) / src.duration) * 100}%` }}
+            onClick={() => {
+              pause();
+              dispatch("preview", src.seek(m.at));
+              if (editable) setOpen(true);
+            }}
+          >
+            <span className={cn("block size-2.5 rotate-45 rounded-[2px] border border-black/60", m.cueId ? "bg-preview" : "bg-armed")} />
+            <span className="mx-auto mt-0.5 block h-2.5 w-px bg-armed/70" />
+          </button>
+        ))}
+        <input
+          type="range"
+          min={0}
+          max={src.duration}
+          step={0.01}
+          value={Math.min(pos, src.duration)}
+          aria-label="Scrub"
+          className="absolute inset-0 h-6 w-full cursor-pointer opacity-0"
+          // Pointer, mouse and touch all start a scrub: WebKit's range input does not always send pointer events.
+          onPointerDown={startScrub}
+          onMouseDown={startScrub}
+          onTouchStart={startScrub}
+          onChange={(e) => {
+            const d = startScrub();
+            d.v = +e.target.value;
+            setDrag({ ...d });
+            dispatch("preview", d.src.seek(d.v));
+          }}
+          onPointerUp={endScrub}
+          onMouseUp={endScrub}
+          onTouchEnd={endScrub}
+          onBlur={endScrub}
+        />
+        <span className="pointer-events-none absolute top-0 h-6 w-0.5 -translate-x-1/2 rounded bg-foreground" style={{ left: `${(Math.min(pos, src.duration) / src.duration) * 100}%` }} />
+      </div>
+      {editable && (
+      <button type="button" className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setOpen(!open)}>
+        <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
+        {markers.length ? `${markers.length} marker${markers.length > 1 ? "s" : ""} on this video` : "No markers on this video yet"}
+        <span className="ml-1 flex items-center gap-1 text-[10.5px]">
+          <span className="size-2 rotate-45 bg-preview" /> runs a cue <span className="ml-1 size-2 rotate-45 bg-armed" /> sends lighting / MIDI / OSC
+        </span>
+      </button>
+      )}
+      {editable && open && (
+        <div className="mt-1.5">
+          <MarkersEditor markers={markers} onChange={setMarkers} />
+        </div>
+      )}
     </div>
   );
 }

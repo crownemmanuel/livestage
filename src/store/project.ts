@@ -1,9 +1,10 @@
 import { create } from "zustand";
 import { applyPrologueFeel, defaultProject, LION_PROOF_ASSETS, PROLOGUE_ASSETS, PROLOGUE_DEMO, PROLOGUE_FEEL, prologueScenes, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene, SHEPHERD_PHOTOREAL_DEMO, shepherdPhotorealScene } from "@/core/defaultProject";
 import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
-import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, HOG_DEFAULT_HOST, makeScene } from "@/core/factories";
+import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, HOG_DEFAULT_HOST, makeGroup, makeScene } from "@/core/factories";
+import { autoGroup, normalizeGroups } from "@/core/groups";
 import { loadProjectFile, refreshAssetUrls, saveProjectFile } from "@/core/platform";
-import type { Asset, OutputSettings, Project, Scene, SceneComponent } from "@/core/types";
+import type { Asset, OutputSettings, Project, Scene, SceneComponent, SceneGroup } from "@/core/types";
 
 export type AppMode = "show" | "builder";
 
@@ -31,6 +32,12 @@ interface ProjectStore {
   duplicateScene(id: string): string | null;
   deleteScene(id: string): void;
   moveScene(id: string, dir: -1 | 1): void;
+  /** Put a scene in a group (null = take it out); a new group is made when `groupId` is "new". */
+  setSceneGroup(sceneId: string, groupId: string | null | "new"): void;
+  updateGroup(id: string, fn: (g: SceneGroup) => void): void;
+  /** Dissolve a group; its scenes stay where they are. */
+  ungroup(id: string): void;
+  moveGroup(id: string, dir: -1 | 1): void;
 
   addComponent(sceneId: string, c: SceneComponent): void;
   updateComponent(sceneId: string, compId: string, fn: (c: SceneComponent) => void): void;
@@ -44,9 +51,12 @@ interface ProjectStore {
   setThumbnail(sceneId: string, dataUrl: string): void;
 }
 
+/** Keep groups together and the running-order numbers in step. */
 function renumber(p: Project) {
-  p.scenes.forEach((s, i) => (s.number = i + 1));
+  normalizeGroups(p);
 }
+
+const SCENE_GROUPS = "scene-groups-1";
 
 /** Fill fields added in later versions so old show files keep loading. */
 function migrate(p: Project): Project {
@@ -151,6 +161,12 @@ function migrate(p: Project): Project {
     applyPrologueFeel(merged.scenes);
     merged.demoAdditions = [...merged.demoAdditions!, PROLOGUE_FEEL];
   }
+  if (!merged.demoAdditions!.includes(SCENE_GROUPS)) {
+    // Older shows were one flat list: group the Prologue's places (and "Scene 1" + "Scene 1b" runs).
+    autoGroup(merged, (name, color) => makeGroup(name, color));
+    merged.demoAdditions = [...merged.demoAdditions!, SCENE_GROUPS];
+  }
+  renumber(merged);
   // Built-in assets ship with the app: keep their definitions in step with the code.
   const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS].map((a) => [a.id, a]));
   merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)! } : a));
@@ -243,9 +259,80 @@ export const useProject = create<ProjectStore>((set, get) => ({
   moveScene(id, dir) {
     get().update((p) => {
       const i = p.scenes.findIndex((s) => s.id === id);
-      const j = i + dir;
-      if (i < 0 || j < 0 || j >= p.scenes.length) return;
-      [p.scenes[i], p.scenes[j]] = [p.scenes[j], p.scenes[i]];
+      const s = p.scenes[i];
+      const n = p.scenes[i + dir];
+      if (!s || !n) return;
+      if (s.groupId || !n.groupId) {
+        // Inside a group a scene only moves within it; loose scenes swap with loose neighbours.
+        if (s.groupId && n.groupId !== s.groupId) return;
+        [p.scenes[i], p.scenes[i + dir]] = [n, s];
+      } else {
+        // A loose scene steps over a whole group.
+        p.scenes.splice(i, 1);
+        const members = p.scenes.map((x, k) => (x.groupId === n.groupId ? k : -1)).filter((k) => k >= 0);
+        p.scenes.splice(dir < 0 ? members[0] : members[members.length - 1] + 1, 0, s);
+      }
+      renumber(p);
+    });
+  },
+
+  setSceneGroup(sceneId, groupId) {
+    get().update((p) => {
+      const s = p.scenes.find((x) => x.id === sceneId);
+      if (!s) return;
+      p.groups ??= [];
+      if (groupId === "new") {
+        const g = makeGroup("New group", (["amber", "teal", "violet", "blue", "pink", "green"] as const)[p.groups.length % 6]);
+        p.groups.push(g);
+        s.groupId = g.id;
+      } else if (groupId) {
+        // Joining a group moves the scene to the end of it.
+        p.scenes = p.scenes.filter((x) => x !== s);
+        const last = p.scenes.map((x) => x.groupId).lastIndexOf(groupId);
+        s.groupId = groupId;
+        p.scenes.splice(last + 1, 0, s);
+      } else if (s.groupId) {
+        // Leaving puts it just after the group.
+        const gid = s.groupId;
+        s.groupId = null;
+        p.scenes = p.scenes.filter((x) => x !== s);
+        const last = p.scenes.map((x) => x.groupId).lastIndexOf(gid);
+        p.scenes.splice(last + 1, 0, s);
+      }
+      renumber(p);
+    });
+  },
+
+  updateGroup(id, fn) {
+    get().update((p) => {
+      const g = p.groups?.find((x) => x.id === id);
+      if (g) fn(g);
+    });
+  },
+
+  ungroup(id) {
+    get().update((p) => {
+      for (const s of p.scenes) if (s.groupId === id) s.groupId = null;
+      renumber(p);
+    });
+  },
+
+  moveGroup(id, dir) {
+    get().update((p) => {
+      const members = p.scenes.filter((s) => s.groupId === id);
+      if (!members.length) return;
+      const rest = p.scenes.filter((s) => s.groupId !== id);
+      const at = rest.indexOf(dir < 0 ? p.scenes[p.scenes.indexOf(members[0]) - 1] : p.scenes[p.scenes.indexOf(members[members.length - 1]) + 1]);
+      if (at < 0) return;
+      // Step over the neighbouring row: a loose scene or a whole group.
+      const nb = rest[at];
+      let k = at;
+      if (nb.groupId) {
+        const idx = rest.map((s, i) => (s.groupId === nb.groupId ? i : -1)).filter((i) => i >= 0);
+        k = dir < 0 ? idx[0] : idx[idx.length - 1];
+      }
+      rest.splice(dir < 0 ? k : k + 1, 0, ...members);
+      p.scenes = rest;
       renumber(p);
     });
   },

@@ -32,6 +32,7 @@ import { OutputSettingsDialog } from "./OutputSettings";
 import { IoDialog } from "./io/IoDialog";
 import { getErrors, onErrors } from "./ErrorBoundary";
 import { RoundToggle, Tip, ToolbarButton } from "./kit";
+import { useSceneCodes } from "./SceneList";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -60,6 +61,7 @@ export function TopBar() {
   }, []);
   const connected = !!status && Date.now() - seenAt < 3500;
   const live = program.standby ? null : program.runtime?.scene;
+  const codes = useSceneCodes();
   const ioOn = midiStatus === "open" || oscStatus === "listening";
   const blackout = !!program.blackout?.on;
 
@@ -87,7 +89,7 @@ export function TopBar() {
           <span className={cn("font-key text-[13px] font-bold", live ? "text-live" : "text-muted-foreground")}>{live ? "On air" : "Standby"}</span>
           {live && (
             <span className="min-w-0 truncate text-[13px]">
-              <span className="font-key font-semibold text-muted-foreground">{String(live.number).padStart(2, "0")}</span> {live.name}
+              <span className="font-key font-semibold text-muted-foreground">{codes.get(live.id) ?? live.number}</span> {live.name}
             </span>
           )}
         </div>

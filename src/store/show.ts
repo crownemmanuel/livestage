@@ -28,6 +28,8 @@ interface ShowStore {
   preview: SceneRuntime | null;
   previewPoses: ActorPoses;
   previewPosesAt: number;
+  /** Component shown on its own in the preview (Build's isolate); null = the whole scene. */
+  solo: string | null;
 
   assets: Asset[];
   output: OutputSettings;
@@ -43,6 +45,7 @@ interface ShowStore {
   lionControl: { armed: boolean; actorId: string | null; target: Target };
 
   setPreview(scene: Scene | null, opts?: { keepState?: boolean }): void;
+  setSolo(id: string | null): void;
   restartPreview(): void;
   take(scene: Scene, spec: TransitionSpec): void;
   finishTransition(takeCount: number): void;
@@ -74,6 +77,7 @@ export const useShow = create<ShowStore>((set, get) => ({
   preview: null,
   previewPoses: {},
   previewPosesAt: 0,
+  solo: null,
   assets: [],
   output: defaultOutput(),
   outputStatus: null,
@@ -83,8 +87,12 @@ export const useShow = create<ShowStore>((set, get) => ({
   nextTransition: null,
   lionControl: { armed: false, actorId: null, target: "program" },
 
+  setSolo: (id) => set({ solo: id }),
+
   setPreview(scene, opts) {
     const cur = get().preview;
+    // Isolating is per scene: another scene comes up whole.
+    if (get().solo && cur?.scene.id !== scene?.id) set({ solo: null });
     if (!scene) return set({ preview: null, previewPoses: {} });
     if (opts?.keepState && cur && cur.scene.id === scene.id) {
       const rt = reconcileRuntime(cur, scene);

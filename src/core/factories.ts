@@ -458,3 +458,24 @@ export const defaultLook = (): import("./types").LookSettings => ({
   vignette: 0.25,
   grain: 0.04,
 });
+
+// ---------------------------------------------------------------- scene groups
+
+export const GROUP_COLORS: import("./types").GroupColor[] = ["amber", "red", "orange", "green", "teal", "blue", "violet", "pink", "gray"];
+
+/** Hex per group colour, readable on the dark operator UI. */
+export const GROUP_HEX: Record<import("./types").GroupColor, string> = {
+  amber: "#f2b544",
+  red: "#e5483b",
+  orange: "#f08a3c",
+  green: "#3fbf6f",
+  teal: "#2fb5a8",
+  blue: "#4c8df0",
+  violet: "#9b7cf0",
+  pink: "#e46aa6",
+  gray: "#8a8f98",
+};
+
+export function makeGroup(name: string, color: import("./types").GroupColor = "amber"): import("./types").SceneGroup {
+  return { id: uid("grp"), name, color, flow: true };
+}

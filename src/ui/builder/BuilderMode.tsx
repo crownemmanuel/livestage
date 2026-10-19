@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Box, Clapperboard, Copy, Film, Image as ImageIcon, Layers, Mountain, Plus, Sparkles, Trash2, Upload, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route } from "lucide-react";
+import { Box, Clapperboard, Copy, Film, Focus, Image as ImageIcon, Layers, ListOrdered, Mountain, Plus, Repeat, Settings2, Sparkles, Trash2, Upload, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { EFFECT_DEFS, EFFECT_TYPES } from "@/core/effects";
 import { makeBackground, makeClipActor, makeEffect, makeImageLayer, makeLion, makeModel, makeNames, makeProcedural, makeRoute, makeText, makeVideoLayer } from "@/core/factories";
 import { importAssets } from "@/core/platform";
-import type { ProceduralElement, SceneComponent } from "@/core/types";
+import type { ProceduralElement, Scene, SceneComponent } from "@/core/types";
 import { StageView } from "@/render/StageView";
 import { selectedScene, useProject } from "@/store/project";
 import { useShow } from "@/store/show";
@@ -19,8 +19,8 @@ import { Inspector } from "./Inspector";
 import { SceneSettings } from "./SceneSettings";
 import { CueEditor } from "./CueEditor";
 import { CameraShots } from "./CameraShots";
-import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
-import { Splitter, usePaneWidths } from "../kit";
+import { FramingBar, FramingOverlay, PreviewHeader, selectScrubSource, StepBar, Timeline } from "../PreviewTools";
+import { InfoTip, Splitter, usePaneWidths } from "../kit";
 
 export function BuilderMode() {
   const scene = useProject(selectedScene);
@@ -41,25 +41,33 @@ export function BuilderMode() {
       <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="border-b border-border p-3">
-          <div className="mb-1.5 flex items-center gap-2 text-[11px]">
-            <span className="flex items-center gap-1.5 rounded-full bg-preview/15 px-2 py-0.5 font-key text-[12.5px] font-bold text-preview"><span className="size-2 rounded-full bg-preview" />Preview</span>
-            <span className="text-muted-foreground">Edits apply to the preview only. TAKE LIVE in Show Mode to put them on the wall.</span>
-          </div>
+          <PreviewHeader />
           <div className="relative mx-auto w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: `${output.canvasWidth} / ${output.canvasHeight}`, maxHeight: "44vh" }}>
             <StageView source="preview" maxDpr={1.5} showSafeArea onCapture={capture} />
             <FramingOverlay />
           </div>
-          <div className="mt-1.5 flex justify-end">
-            <FramingBar />
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <StepBar />
+            </div>
+            <div className="mt-1.5 shrink-0">
+              <FramingBar />
+            </div>
           </div>
-          <VideoScrubber />
+          <Timeline />
         </div>
         {scene ? (
-          <Tabs defaultValue="scene" className="flex min-h-0 flex-1 flex-col gap-0">
+          <Tabs defaultValue="cues" className="flex min-h-0 flex-1 flex-col gap-0">
             <TabsList className="mx-3 mt-2 h-8">
-              <TabsTrigger value="scene" className="text-[12px]">Scene</TabsTrigger>
-              <TabsTrigger value="cues" className="text-[12px]">Cues ({scene.cues.length})</TabsTrigger>
-              <TabsTrigger value="camera" className="text-[12px]">Camera ({scene.cameraShots.length})</TabsTrigger>
+              <TabsTrigger value="cues" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                <ListOrdered /> Run sheet ({scene.cues.length})
+              </TabsTrigger>
+              <TabsTrigger value="scene" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                <Settings2 /> Scene settings
+              </TabsTrigger>
+              <TabsTrigger value="camera" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                <Video /> Camera ({scene.cameraShots.length})
+              </TabsTrigger>
             </TabsList>
             <ScrollArea className="min-h-0 flex-1">
               <TabsContent value="scene">
@@ -81,11 +89,11 @@ export function BuilderMode() {
       <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: w[1] }}>
         <Tabs value={rightTab} onValueChange={setRightTab} className="flex min-h-0 flex-1 flex-col gap-0">
           <TabsList className="mx-3 mt-2 h-8">
-            <TabsTrigger value="inspect" className="text-[12px]">Components</TabsTrigger>
+            <TabsTrigger value="inspect" className="text-[12px]">On stage</TabsTrigger>
             <TabsTrigger value="test" className="text-[12px]">Test controls</TabsTrigger>
           </TabsList>
           <TabsContent value="inspect" className="flex min-h-0 flex-1 flex-col">
-            {scene && <ComponentList />}
+            {scene && <OnStage />}
             <ScrollArea className="min-h-0 flex-1 border-t border-border">{scene && <Inspector />}</ScrollArea>
           </TabsContent>
           <TabsContent value="test" className="min-h-0 flex-1">
@@ -111,20 +119,30 @@ const KIND_ICON: Record<SceneComponent["kind"], typeof Box> = {
   route: Route,
 };
 
-function ComponentList() {
+/** When a component first appears: on at the start, or the first cue that brings it in. */
+function entersAt(scene: Scene, id: string, initiallyVisible: boolean): { label: string; on: boolean } {
+  if (initiallyVisible) return { label: "at start", on: true };
+  const i = scene.cues.findIndex((c) => c.actions.some((a) => Object.values(a).includes(id)));
+  return i >= 0 ? { label: `cue ${i + 1}`, on: false } : { label: "not used", on: false };
+}
+
+/** Everything in the scene, when it comes in, and an isolate switch for the preview. */
+function OnStage() {
   const scene = useProject(selectedScene)!;
   const selectedId = useProject((s) => s.selectedComponentId);
   const st = useProject.getState();
   const add = (c: SceneComponent) => st.addComponent(scene.id, c);
   const sel = scene.components.find((c) => c.id === selectedId);
+  const solo = useShow((s) => s.solo);
 
   return (
     <div className="flex max-h-[42%] min-h-[180px] flex-col">
       <div className="flex items-center gap-1 px-3 py-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          <Layers className="mr-1 inline size-3" />
-          Components
+        <h3 className="flex items-center gap-1 text-[12.5px] font-semibold">
+          <Layers className="size-3.5 text-muted-foreground" />
+          On stage
         </h3>
+        <InfoTip>Everything in this scene. Green = visible when the scene goes live; “cue 2” = the first cue that brings it in. Isolate (⊙) shows one item on its own in the preview, with its markers on the timeline. A video character's clips are its moves.</InfoTip>
         <div className="ml-auto flex gap-0.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -202,17 +220,50 @@ function ComponentList() {
         <ul className="space-y-px px-2 pb-2">
           {scene.components.map((c) => {
             const Icon = KIND_ICON[c.kind];
+            const enters = entersAt(scene, c.id, c.initiallyVisible);
+            const isolated = solo === c.id;
             return (
-              <li key={c.id}>
-                <button
-                  onClick={() => st.selectComponent(c.id)}
-                  className={cn("flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px]", c.id === selectedId ? "bg-accent text-foreground" : "text-foreground/85 hover:bg-accent/50")}
-                >
-                  <Icon className="size-3.5 text-muted-foreground" />
-                  <span className="flex-1 truncate">{c.name}</span>
-                  <span className="text-[10px] text-muted-foreground">{c.kind === "effect" ? c.effect : c.kind === "procedural" ? c.element : c.kind === "video" || c.kind === "image" ? c.placement : c.kind === "clipActor" ? "video actor" : c.kind === "names" ? c.style : c.kind === "text" ? "title" : c.kind}</span>
-                  {c.initiallyVisible && <span className="size-1.5 rounded-full bg-preview" title="Active when scene goes live" />}
-                </button>
+              <li key={c.id} className="group/row">
+                <div className={cn("flex items-center gap-2 rounded px-2 py-1 text-[12px]", c.id === selectedId ? "bg-accent text-foreground" : "text-foreground/85 hover:bg-accent/50", isolated && "ring-1 ring-armed/70")}>
+                  <button type="button" onClick={() => st.selectComponent(c.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                    <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1 truncate">{c.name}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">{KIND_LABEL(c)}</span>
+                    <span className={cn("shrink-0 rounded px-1.5 text-[10px] tabular", enters.on ? "bg-preview/15 text-preview" : enters.label === "not used" ? "text-muted-foreground/50" : "bg-accent text-foreground/75")}>{enters.label}</span>
+                  </button>
+                  <button
+                    type="button"
+                    title={isolated ? "Show the whole scene" : "Isolate: show only this in the preview"}
+                    aria-label="Isolate"
+                    onClick={() => {
+                      useShow.getState().setSolo(isolated ? null : c.id);
+                      st.selectComponent(c.id);
+                    }}
+                    className={cn("grid size-5 shrink-0 place-items-center rounded", isolated ? "bg-armed text-black" : "text-muted-foreground opacity-0 hover:text-foreground group-hover/row:opacity-100")}
+                  >
+                    <Focus className="size-3.5" />
+                  </button>
+                </div>
+                {c.kind === "clipActor" && c.clips.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pb-1 pl-8 pt-0.5">
+                    {c.clips.map((k) => (
+                      <button
+                        key={k.id}
+                        type="button"
+                        title={`Move “${k.name}” (${k.startPose} → ${k.endPose}, ${k.duration}s). Click to put it on the timeline.`}
+                        onClick={() => {
+                          st.selectComponent(c.id);
+                          selectScrubSource(`${c.id}:${k.id}`);
+                        }}
+                        className="flex items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10.5px] text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                      >
+                        {k.name}
+                        {k.loop && <Repeat className="size-2.5" />}
+                        {(k.markers?.length ?? 0) > 0 && <span className="size-1.5 rotate-45 bg-armed" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -221,6 +272,9 @@ function ComponentList() {
     </div>
   );
 }
+
+const KIND_LABEL = (c: SceneComponent) =>
+  c.kind === "effect" ? c.effect : c.kind === "procedural" ? c.element : c.kind === "video" || c.kind === "image" ? `${c.kind} · ${c.placement}` : c.kind === "clipActor" ? "video character" : c.kind === "names" ? c.style : c.kind === "text" ? "title" : c.kind === "actor" ? "3D character" : c.kind;
 
 function AssetLibrary() {
   const assets = useProject((s) => s.project.assets);

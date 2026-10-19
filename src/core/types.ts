@@ -530,16 +530,40 @@ export type CueAction =
 
 export type CueActionType = CueAction["type"];
 
+/**
+ * What makes a cue fire. GO always works too (it fires the next cue early); the other modes
+ * also fire it on their own. "video" cues are fired by time markers on a clip or video whose
+ * `cueId` points at the cue.
+ */
+export type CueFire = { mode: "go" } | { mode: "time"; /** scene seconds after TAKE */ at: number } | { mode: "follow"; /** seconds after the previous cue fires */ after: number } | { mode: "video" };
+
 export interface Cue {
   id: string;
   name: string;
   notes: string;
   actions: CueAction[];
+  /** Absent = on GO. */
+  fire?: CueFire;
 }
+
+/** A coloured, collapsible run of scenes in the scene list (e.g. the Prologue's places). */
+export interface SceneGroup {
+  id: string;
+  name: string;
+  color: GroupColor;
+  collapsed?: boolean;
+  /** GO after a scene's last cue takes the next scene of the group, so the group plays as one sequence. */
+  flow: boolean;
+}
+
+export type GroupColor = "amber" | "red" | "orange" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 
 export interface Scene {
   id: string;
+  /** Running-order number (1..n over the whole show); what MSC and /sls/take address. */
   number: number;
+  /** Group this scene belongs to; grouped scenes sit next to each other in `Project.scenes`. */
+  groupId?: string | null;
   name: string;
   notes: string;
   /** Planned duration in seconds (informational). */
@@ -598,6 +622,8 @@ export interface Project {
   demoAdditions?: string[];
   /** MIDI / OSC integration (lighting console, sound). */
   io?: IoSettings;
+  /** Scene groups, in no particular order (their scenes' order sets the running order). */
+  groups?: SceneGroup[];
 }
 
 // ---------------------------------------------------------------- show control I/O
@@ -783,6 +809,8 @@ export interface SceneRuntime {
   strikes: LightningStrike[];
   camera: CameraRuntime;
   cuePointer: number;
+  /** Cues already fired in this run of the scene (GO, scene time, follow or a video marker). */
+  fired?: string[];
   /** Video actors: the clips scheduled so far (scene time ms). */
   clipActors: Record<string, ClipActorRuntime>;
   /** One-shot effect events (shake, projectile): scene time they fired. */

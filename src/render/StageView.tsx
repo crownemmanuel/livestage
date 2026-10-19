@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clamp, now, smoothstep } from "@/core/clock";
 import type { ScalingMode, SceneRuntime } from "@/core/types";
 import { useShow } from "@/store/show";
@@ -76,8 +76,25 @@ export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 
 
 // ---------------------------------------------------------------- preview
 
+/** The preview runtime, cut down to one component when Build isolates it. */
+function useSoloRuntime(rt: SceneRuntime | null, solo: string | null) {
+  const scene = rt?.scene;
+  const filtered = useMemo(() => {
+    if (!scene || !solo || !scene.components.some((c) => c.id === solo)) return null;
+    const comp = scene.components.find((c) => c.id === solo)!;
+    // A media plate on its own shows on black; an environment look keeps its world.
+    const keepWorld = comp.kind === "background" && comp.source === "environment";
+    return { ...scene, components: [comp], environment: keepWorld ? scene.environment : ("none" as const) };
+  }, [scene, solo]);
+  // Only the scene matters to the canvas (it reads live state through getRt), so rebuild on scene changes, not every tick.
+  const soloRt = useMemo(() => (rt && filtered ? { ...rt, scene: filtered } : null), [rt?.key, filtered]); // eslint-disable-line react-hooks/exhaustive-deps
+  return soloRt ?? rt;
+}
+
 function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: number; onCapture?: (sceneId: string, d: string) => void }) {
-  const rt = useShow((s) => s.preview);
+  const fullRt = useShow((s) => s.preview);
+  const solo = useShow((s) => s.solo);
+  const rt = useSoloRuntime(fullRt, solo);
   const key = rt?.key;
   const assets = useShow((s) => s.assets);
   const targetFps = useShow((s) => s.output.targetFps);
@@ -88,12 +105,13 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
     return { poses: s.previewPoses, at: s.previewPosesAt };
   }, []);
   const getTransition = useCallback(() => null, []);
-  const capture = useCallback((d: string) => rt && onCapture?.(rt.scene.id, d), [rt, onCapture]);
+  // No thumbnails from an isolated view: they would not show the scene.
+  const capture = useCallback((d: string) => rt && !solo && onCapture?.(rt.scene.id, d), [rt, solo, onCapture]);
   if (!rt) return <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">No scene selected</div>;
   return (
     <ErrorBoundary name="preview canvas" retryAfter={1500} fallback={null}>
     <SceneCanvas
-      key={key}
+      key={`${key}:${solo ?? ""}`}
       role="preview"
       runtime={rt}
       getRt={getRt}

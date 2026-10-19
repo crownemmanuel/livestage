@@ -51,8 +51,10 @@ import { StageView } from "@/render/StageView";
 import { selectedScene, useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
 import { NumberInput, SelectBox } from "../fields";
-import { FramingBar, FramingOverlay, VideoScrubber } from "../PreviewTools";
-import { SceneList } from "../SceneList";
+import { FramingBar, FramingOverlay, Timeline } from "../PreviewTools";
+import { SceneList, useSceneCodes } from "../SceneList";
+import { FireIcon, fireLabel } from "../builder/FireField";
+import { flowNext } from "@/core/groups";
 import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 import { MediaPanel } from "./MediaPanel";
@@ -121,11 +123,12 @@ function MonitorHeader({ kind, children, info }: { kind: "preview" | "program"; 
   );
 }
 
-function SceneTitle({ scene }: { scene: { number: number; name: string } | null | undefined }) {
+function SceneTitle({ scene }: { scene: { id: string; number: number; name: string } | null | undefined }) {
+  const codes = useSceneCodes();
   if (!scene) return <span className="text-muted-foreground">Nothing selected</span>;
   return (
     <span className="min-w-0 truncate">
-      <span className="font-key font-semibold text-muted-foreground">{String(scene.number).padStart(2, "0")}</span> {scene.name}
+      <span className="font-key font-semibold text-muted-foreground">{codes.get(scene.id) ?? String(scene.number).padStart(2, "0")}</span> {scene.name}
     </span>
   );
 }
@@ -149,7 +152,7 @@ function Monitors() {
             <FramingOverlay />
           </div>
           <PreviewTransport />
-          <VideoScrubber />
+          <Timeline editable={false} />
         </div>
         <div className="min-w-0">
           <MonitorHeader kind="program" info="Exactly what the LED wall shows right now.">
@@ -182,8 +185,11 @@ function LiveNextCue() {
   const standby = useShow((s) => s.program.standby);
   const pend = pendingCount("program");
   useTick(500);
+  const project = useProject((s) => s.project);
+  const codes = useSceneCodes();
   if (!rt || standby) return <div className="mt-2 text-[12px] text-muted-foreground">Nothing live</div>;
   const next = rt.scene.cues[rt.cuePointer];
+  const flow = next ? null : flowNext(project, rt.scene.id);
   return (
     <div className="mt-2 flex items-center gap-2 text-[12.5px]">
       <Tip label="The live scene's next cue">
@@ -193,6 +199,10 @@ function LiveNextCue() {
         {next ? (
           <>
             <span className="font-key font-semibold text-muted-foreground">{rt.cuePointer + 1}</span> {next.name}
+          </>
+        ) : flow ? (
+          <>
+            <span className="text-muted-foreground">GO takes</span> <span className="font-key font-semibold text-muted-foreground">{codes.get(flow.id)}</span> {flow.name}
           </>
         ) : (
           <span className="text-muted-foreground">End of the cue list</span>
@@ -392,7 +402,7 @@ function CueList() {
         ) : (
           <ol className="space-y-1.5 px-3 pb-3">
             {cues.map((c, i) => {
-              const done = i < rt.cuePointer;
+              const done = i < rt.cuePointer || !!rt.fired?.includes(c.id);
               const next = i === rt.cuePointer;
               return (
                 <li
@@ -411,6 +421,11 @@ function CueList() {
                       <span className="truncate text-[14px] font-semibold leading-tight">{c.name}</span>
                       {next && <ChevronRight className={cn("size-4 shrink-0", live ? "text-live" : "text-preview")} />}
                     </div>
+                    {c.fire && c.fire.mode !== "go" && (
+                      <div className="mt-0.5 flex items-center gap-1 text-[11.5px] text-armed">
+                        <FireIcon cue={c} /> fires {fireLabel(c, i, rt.scene)}
+                      </div>
+                    )}
                     {c.notes && <div className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-armed/85">{c.notes}</div>}
                     <div className="mt-1">
                       <ActionIcons actions={c.actions} />
