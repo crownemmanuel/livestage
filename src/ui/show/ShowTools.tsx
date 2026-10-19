@@ -1,8 +1,8 @@
 // Show Mode's show-wide tools: front-of-house announcements and show timers. Both work over
 // anything on the wall (standby, any scene) and are also reachable from cues.
 
-import { useEffect, useState } from "react";
-import { KeyRound, Loader2, Megaphone, Minus, MonitorUp, Palette, Pause, Pencil, Pin, Play, Plus, RotateCcw, Square, Timer, Trash2, TriangleAlert, Upload, Wand2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { KeyRound, Loader2, Megaphone, Minus, MonitorUp, Palette, Pause, Pencil, Pin, Play, Plus, RotateCcw, Square, Timer, Trash2, TriangleAlert, Upload, Volume2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -355,6 +355,28 @@ function GenerateDialog({ open, onOpenChange, onAdd }: { open: boolean; onOpenCh
   const [name, setName] = useState("");
   const [text, setText] = useState("Ladies and gentlemen... ");
   const [state, setState] = useState<{ busy: boolean; error: string | null; done: string | null }>({ busy: false, error: null, done: null });
+  // Auditioning a voice plays on this computer's speakers, not the show's audio output.
+  const sampleRef = useRef<HTMLAudioElement | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const current = voices.find((v) => v.id === voice);
+  const stopSample = () => {
+    sampleRef.current?.pause();
+    sampleRef.current = null;
+    setPreviewing(false);
+  };
+  const playSample = (url?: string) => {
+    stopSample();
+    if (!url) return;
+    const a = new Audio(url);
+    a.onended = () => setPreviewing(false);
+    a.onerror = () => setPreviewing(false);
+    sampleRef.current = a;
+    setPreviewing(true);
+    void a.play().catch(() => setPreviewing(false));
+  };
+  useEffect(() => {
+    if (!open) stopSample();
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // With a key, offer the voices saved in the account too.
   useEffect(() => {
@@ -408,7 +430,20 @@ function GenerateDialog({ open, onOpenChange, onAdd }: { open: boolean; onOpenCh
             )}
           </div>
           <Field label="Voice">
-            <SelectBox value={voice} onChange={setVoice} options={voices.map((v) => ({ value: v.id, label: v.note ? `${v.name} · ${v.note}` : v.name }))} />
+            <div className="flex items-center gap-1.5">
+              <SelectBox value={voice} onChange={(v) => { stopSample(); setVoice(v); }} options={voices.map((v) => ({ value: v.id, label: v.note ? `${v.name} · ${v.note}` : v.name }))} />
+              <Button
+                size="icon-sm"
+                variant={previewing ? "secondary" : "outline"}
+                className="size-8 shrink-0"
+                disabled={!current?.sample}
+                title={current?.sample ? (previewing ? "Stop the sample" : "Hear this voice") : "No sample for this voice"}
+                aria-label={previewing ? "Stop sample" : "Preview voice"}
+                onClick={() => (previewing ? stopSample() : playSample(current?.sample))}
+              >
+                {previewing ? <Square className="fill-current" /> : <Volume2 />}
+              </Button>
+            </div>
           </Field>
           <Field label="Model">
             <SelectBox value={model} onChange={setModel} options={TTS_MODELS} />
@@ -422,7 +457,7 @@ function GenerateDialog({ open, onOpenChange, onAdd }: { open: boolean; onOpenCh
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
-          <p className="text-[10.5px] text-muted-foreground">Tip: “...” adds a pause. The key stays on this machine and is never saved in the show file.</p>
+          <p className="text-[10.5px] text-muted-foreground">Tip: “...” adds a pause; with v4, tags like [dramatic pause] or [booming] steer the delivery. The key stays on this machine and is never saved in the show file.</p>
           {state.error && <p className="text-[12px] text-destructive">{state.error}</p>}
           {state.done && <p className="text-[12px] text-preview">Added “{state.done}”. Write another, or close.</p>}
           <div className="flex justify-end gap-2">

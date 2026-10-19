@@ -1,5 +1,5 @@
 // Front-of-house calls that ship with the show: recorded in a movie-trailer voice
-// (ElevenLabs "David - The Movie Trailer", laTmoAT4stwoPzthxjZT) and served from /media/announcements.
+// (ElevenLabs "David - The Movie Trailer", laTmoAT4stwoPzthxjZT, model eleven_v4) and served from /media/announcements.
 
 import type { Announcement, Asset } from "./types";
 

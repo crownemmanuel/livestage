@@ -25,18 +25,24 @@ export interface Voice {
   id: string;
   name: string;
   note?: string;
+  /** A short clip of the voice to audition. */
+  sample?: string;
 }
+
+/** "Ladies and gentlemen... the show will begin soon." recorded in each built-in voice (v4). */
+const sample = (id: string) => `/media/voice-samples/${id}.mp3`;
 
 /** Deep trailer voices from the ElevenLabs library that suit house calls. */
 export const TRAILER_VOICES: Voice[] = [
-  { id: "laTmoAT4stwoPzthxjZT", name: "David · The Movie Trailer", note: "the show's announcer (built-in calls)" },
-  { id: "9GVWvaD23xXLseHJlxy8", name: "Movie Trailer Voice", note: "the classic trailer read" },
-  { id: "JJCR1UICgHnHljtvu5uF", name: "Don · Epic trailer & documentary", note: "deep, powerful" },
-  { id: "mq6RH3bgBY9BDzvWeMZk", name: "Flavio · Deep & authoritative", note: "calm, gravelly" },
-  { id: "NgBYGKDDq2Z8Hnhatgma", name: "Atlas Pro · Deep narrator", note: "warm, clear" },
+  { id: "laTmoAT4stwoPzthxjZT", name: "David · The Movie Trailer", note: "the show's announcer (built-in calls)", sample: sample("laTmoAT4stwoPzthxjZT") },
+  { id: "9GVWvaD23xXLseHJlxy8", name: "Movie Trailer Voice", note: "the classic trailer read", sample: sample("9GVWvaD23xXLseHJlxy8") },
+  { id: "JJCR1UICgHnHljtvu5uF", name: "Don · Epic trailer & documentary", note: "deep, powerful", sample: sample("JJCR1UICgHnHljtvu5uF") },
+  { id: "mq6RH3bgBY9BDzvWeMZk", name: "Flavio · Deep & authoritative", note: "calm, gravelly", sample: sample("mq6RH3bgBY9BDzvWeMZk") },
+  { id: "NgBYGKDDq2Z8Hnhatgma", name: "Atlas Pro · Deep narrator", note: "warm, clear", sample: sample("NgBYGKDDq2Z8Hnhatgma") },
 ];
 
 export const TTS_MODELS = [
+  { value: "eleven_v4", label: "v4 (newest; [tags] direct the delivery)" },
   { value: "eleven_multilingual_v2", label: "Multilingual v2 (steady, natural)" },
   { value: "eleven_v3", label: "v3 (most expressive)" },
   { value: "eleven_turbo_v2_5", label: "Turbo v2.5 (fast)" },
@@ -57,8 +63,8 @@ async function fail(r: Response): Promise<never> {
 export async function accountVoices(key: string): Promise<Voice[]> {
   const r = await fetch(`${API}/voices`, { headers: { "xi-api-key": key } });
   if (!r.ok) return fail(r);
-  const j = (await r.json()) as { voices?: { voice_id: string; name: string; labels?: Record<string, string> }[] };
-  return (j.voices ?? []).map((v) => ({ id: v.voice_id, name: v.name, note: [v.labels?.gender, v.labels?.accent].filter(Boolean).join(", ") || undefined }));
+  const j = (await r.json()) as { voices?: { voice_id: string; name: string; labels?: Record<string, string>; preview_url?: string }[] };
+  return (j.voices ?? []).map((v) => ({ id: v.voice_id, name: v.name, note: [v.labels?.gender, v.labels?.accent].filter(Boolean).join(", ") || undefined, sample: v.preview_url || undefined }));
 }
 
 /** Speak `text` and return the MP3 bytes. */

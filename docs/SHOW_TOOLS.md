@@ -5,8 +5,8 @@ Both live in **Show Mode**, next to Cues and Media, and work over whatever is on
 ## Announcements (front-of-house calls)
 
 - **Announce** tab: one button per recorded call. Click to play, **Stop** fades it out. One plays at a time, on the show's audio output (Output settings → audio host).
-- Ten calls ship with the show, read in a movie-trailer voice (ElevenLabs "David - The Movie Trailer"): doors in 15 / 10 / 5, doors open, show in 10 / 5, show starting, technical difficulties, intermission + restrooms, resuming in 5. Files: `public/media/announcements/`. Technical difficulties is pinned first and red; any call can be pinned or marked urgent in edit mode (✎).
-- **Generate**: write a call, pick a voice and the app has ElevenLabs read it; the MP3 goes into the library and becomes a new button. The API key is kept on this computer only (never in the show file). **Import audio** adds your own recordings.
+- Ten calls ship with the show, read in a movie-trailer voice (ElevenLabs "David - The Movie Trailer", model v4): doors in 15 / 10 / 5, doors open, show in 10 / 5, show starting, technical difficulties, intermission + restrooms, resuming in 5. Files: `public/media/announcements/`. Technical difficulties is pinned first and red; any call can be pinned or marked urgent in edit mode (✎).
+- **Generate**: write a call, pick a voice (▶ plays a sample of each) and the app has ElevenLabs read it; the MP3 goes into the library and becomes a new button. The API key is kept on this computer only (never in the show file). **Import audio** adds your own recordings.
 - Media settings (backgrounds, layers, clips, sounds…) open the same library as a picker: thumbnails, search, None.
 - A cue can play one: Run sheet → Add action → Lighting & sound → **Announcement**.
 
