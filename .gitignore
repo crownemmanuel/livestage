@@ -8,3 +8,8 @@ src-tauri/gen/
 renders/
 *.tsbuildinfo
 output/
+
+# Office documents and their lock files: working material, not part of the app
+*.docx
+*.pptx
+~$*
