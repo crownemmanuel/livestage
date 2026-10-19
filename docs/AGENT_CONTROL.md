@@ -53,7 +53,9 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `cue` | GO, fire, back, skip, set pointer, repeat (preview or program) |
 | `preview_step` | Preview the scene as it looks after N cues |
 | `run_action` | Run any cue action now |
-| `seek`, `freeze`, `cancel_pending`, `restart_preview` | Scene clock and pending actions |
+| `transport` [LIVE] | Hold, resume, seek or nudge the scene's video in its own seconds; the live wall scrubs only while held ([VIDEO_TRANSPORT.md](VIDEO_TRANSPORT.md)) |
+| `seek`, `freeze` [LIVE] | Scene clock: jump (program only while held), freeze / resume |
+| `cancel_pending`, `restart_preview` | Pending actions, restart the preview |
 | `blackout`, `standby` [LIVE] | Wall-wide controls |
 | `timer`, `timer_overlay`, `announce` [LIVE] | Show timers, on-screen clock, front-of-house announcements |
 | `next_transition` | Transition for the next TAKE |

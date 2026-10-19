@@ -55,6 +55,7 @@ Open http://localhost:1430. **Open output** pops up a second browser window that
 | Fire the next live cue | **GO** under the Program monitor, or `G` |
 | Back / skip / repeat cue, cancel pending delays | Buttons next to GO |
 | Freeze all motion on the wall | **Freeze** (resumes exactly where it stopped) |
+| Hold, scrub and resume the live video | **Hold** under the Program monitor (or `P`), drag the bar, **Resume** ([VIDEO_TRANSPORT.md](docs/VIDEO_TRANSPORT.md)) |
 | Safe standby visual | **STANDBY** (fades the wall to the title card or image) |
 | Drive the lion | **Arm keyboard** on the lion card, then `W A S D` to move, `Q`/`E` to turn, `Shift` to run, `1`–`7` for actions, `Space` to stop |
 

@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 3;
+export const AGENT_SPEC_VERSION = 4;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -141,12 +141,29 @@ export const AGENT_COMMANDS = {
     params: args({ target, action: obj("A CueAction, e.g. {type: \"effect\", effectId, op: \"start\", delay: 0}. `delay` defaults to 0.") }, ["target", "action"]),
   },
   seek: {
-    description: "Jump the scene clock to `seconds` after the TAKE (scrub). Video, effects and tweens follow.",
+    live: true,
+    description:
+      "Jump the scene clock to `seconds` after the TAKE (scrub). Video, effects and tweens follow. On program it only works while the scene is held (freeze/transport hold). Markers and time cues in the stretch jumped over or replayed do not fire. To scrub in a video's own time, use transport.",
     params: args({ target, seconds: num("Scene time in seconds.") }, ["target", "seconds"]),
   },
   freeze: {
-    description: "Freeze every moving thing in the scene, or resume exactly where it stopped.",
+    live: true,
+    description: "Freeze every moving thing in the scene, or resume exactly where it stopped. Same as transport hold/resume.",
     params: args({ target, op: oneOf(["pause", "resume", "toggle"], "pause = freeze.") }, ["target", "op"]),
+  },
+  transport: {
+    live: true,
+    description:
+      "Video transport for the scene on `target`: status, hold (freeze on this frame: video, its sound and effects), resume, toggle, seek to `seconds` into a video, or nudge by `seconds` (negative = back). Times are the video's own seconds, not scene time. On program, seek/nudge only work while held, so the live wall never jumps by accident. Markers and time cues fire only on normal playback past a point for the first time: never for the stretch jumped over, never again on a replay after scrubbing back. Returns held, the video's position and length, and every scrubbable video.",
+    params: args(
+      {
+        target,
+        op: oneOf(["status", "hold", "resume", "toggle", "seek", "nudge"], "What to do. Default status."),
+        seconds: num("seek: video seconds to go to. nudge: seconds to move (negative = back)."),
+        source: str('Which video: a key from `videos` ("componentId" or "actorId:clipId"), or a component name. Default: the scene\'s main playing video.'),
+      },
+      ["target"],
+    ),
   },
   blackout: {
     live: true,

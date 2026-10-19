@@ -6,18 +6,17 @@ import { ChevronRight, Clock, Crosshair, Eye, Film, Flag, Focus, MousePointer2, 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
-import { clipStateAt } from "@/core/clipActor";
-import { playableUrl } from "@/core/platform";
-import { NO_FRAMING, clampFraming, evalFraming, mediaElapsed, type Command } from "@/core/runtime";
+import { NO_FRAMING, clampFraming, evalFraming } from "@/core/runtime";
 import { uid } from "@/core/ids";
 import { markerHosts, setHostMarkers } from "@/core/markers";
 import { defaultActorLayout } from "@/core/factories";
 import type { Asset, Framing, MediaMarker, Scene, SceneComponent, SceneRuntime } from "@/core/types";
 import { fitFrame } from "@/render/layers/MediaLayers";
 import { describeMessage } from "@/engine/io";
-import { previewAtStep, probeDuration } from "@/engine/operator";
+import { previewAtStep } from "@/engine/operator";
+import { hold, knownDuration, mainSource, mediaAssetIds, probeDurations, seekSource, videoSources, type Source } from "@/engine/transport";
 import { useProject } from "@/store/project";
-import { useShow } from "@/store/show";
+import { useShow, type Target } from "@/store/show";
 import { SelectBox } from "./fields";
 import { defaultMessage } from "./io/MessageFields";
 import { MarkersEditor } from "./io/MarkersEditor";
@@ -188,77 +187,19 @@ export function selectScrubSource(key: string) {
   if (src && !src.playing) useShow.getState().dispatch("preview", src.seek(0));
 }
 
-const durationCache = new Map<string, number>();
-const probing = new Set<string>();
-
 export function useAssetDurations(assets: Asset[], ids: string[]) {
   const [, force] = useState(0);
   useEffect(() => {
-    for (const id of ids) {
-      if (durationCache.has(id) || probing.has(id)) continue;
-      const a = assets.find((x) => x.id === id);
-      const url = playableUrl(a);
-      if (!url) continue;
-      probing.add(id);
-      void probeDuration(url).then((d) => {
-        probing.delete(id);
-        if (d) durationCache.set(id, d);
-        force((n) => n + 1);
-      });
-    }
+    if (ids.every((id) => knownDuration(id) !== undefined)) return;
+    let alive = true;
+    void probeDurations(assets, ids).then(() => alive && force((n) => n + 1));
+    return () => {
+      alive = false;
+    };
   }, [assets, ids.join("|")]);
 }
 
-export interface Source {
-  key: string;
-  label: string;
-  playing: boolean;
-  duration: number;
-  pos: number;
-  /** The command that puts this video at v seconds. */
-  seek: (v: number) => Command;
-}
-
-export function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
-  const t = sceneNow(rt);
-  const out: Source[] = [];
-  const isVideo = (id: string | null) => !!id && assets.find((a) => a.id === id)?.type === "video";
-  for (const c of rt.scene.components) {
-    if (c.kind === "clipActor") {
-      // Every clip can be scrubbed, playing or not: scrubbing puts the actor on that clip.
-      const st = clipStateAt(c, rt.clipActors?.[c.id], t);
-      for (const k of c.clips) {
-        if (!k.assetId && !k.cutoutAssetId) continue;
-        const active = st.clip?.id === k.id;
-        out.push({
-          key: `${c.id}:${k.id}`,
-          label: `${c.name} · ${k.name}`,
-          playing: active,
-          duration: Math.max(0.05, k.duration),
-          pos: active ? st.localT : 0,
-          seek: (v) => ({ type: "clip.seek", actorId: c.id, clipId: k.id, offset: v }),
-        });
-      }
-    } else if (c.kind === "background" && c.source === "media" && rt.background.current === c.id && isVideo(c.media.assetId)) {
-      const D = durationCache.get(c.media.assetId!);
-      if (!D) continue;
-      const startAt = rt.background.changedAt > -1e8 ? rt.background.changedAt : 0;
-      const rate = c.media.playbackRate || 1;
-      const el = mediaElapsed(rt, c.id, startAt, t, rate);
-      const iter = c.media.loop ? Math.floor(el / D) : 0;
-      out.push({ key: c.id, label: `${c.name} (background)`, playing: true, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, startAt + ((iter * D + v) / rate) * 1000) }) });
-    } else if (c.kind === "video" && rt.layers[c.id]?.visible && isVideo(c.media.assetId)) {
-      const D = durationCache.get(c.media.assetId!);
-      if (!D) continue;
-      const l = rt.layers[c.id];
-      const rate = c.media.playbackRate || 1;
-      const el = mediaElapsed(rt, c.id, l.startAt, t, rate);
-      const iter = c.media.loop ? Math.floor(el / D) : 0;
-      out.push({ key: c.id, label: c.name, playing: true, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, l.startAt + ((iter * D + v) / rate) * 1000) }) });
-    }
-  }
-  return out;
-}
+export { videoSources, type Source };
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
 
@@ -340,16 +281,26 @@ export function StepBar() {
 }
 
 /**
- * Timeline for one video of the preview: drag to scrub (pauses the preview), see its markers as
- * ticks, add a marker at the playhead. Follows the isolated component when there is one.
+ * Timeline for one video of a running scene: drag to scrub, see its markers as ticks, add a
+ * marker at the playhead (Build). Follows the isolated component when there is one.
  * `editable` off (Show Mode): scrub and jump to markers only.
+ *
+ * `target="program"` is the live wall's transport: Hold / Resume, and scrubbing only while held.
+ * A live scrub moves a ghost playhead and lands once, on release, so the audience sees one cut
+ * to the chosen frame rather than the whole scrub.
  */
-export function Timeline({ editable = true }: { editable?: boolean }) {
-  const rt = useShow((s) => s.preview);
+export function Timeline({ editable = true, target = "preview" }: { editable?: boolean; target?: Target }) {
+  const live = target === "program";
+  const rt = useShow((s) => (live ? (s.program.standby ? null : s.program.runtime) : s.preview));
   const assets = useShow((s) => s.assets);
-  const solo = useShow((s) => s.solo);
-  const sel = useScrubSelection((s) => s.key);
-  const sceneDef = useProject((s) => (rt ? s.project.scenes.find((x) => x.id === rt.scene.id) : undefined));
+  const soloPreview = useShow((s) => s.solo);
+  const solo = live ? null : soloPreview;
+  const pickedPreview = useScrubSelection((s) => s.key);
+  const [pickedLive, setPickedLive] = useState<string | null>(null);
+  const sel = live ? pickedLive : pickedPreview;
+  const projectScene = useProject((s) => (rt && !live ? s.project.scenes.find((x) => x.id === rt.scene.id) : undefined));
+  // The live wall plays its own snapshot of the scene (markers as taken).
+  const sceneDef = live ? rt?.scene : projectScene;
   const [drag, setDrag] = useState<{ v: number; src: Source } | null>(null);
   // The ref is current within one event burst (state lags a render), so a fast scrub never loses its start.
   const dragRef = useRef<{ v: number; src: Source } | null>(null);
@@ -358,13 +309,38 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
   const [mDrag, setMDrag] = useState<{ id: string; at: number; x0: number; moved: boolean } | null>(null);
   const track = useRef<HTMLDivElement>(null);
   useTick(120);
-  const ids = rt ? rt.scene.components.flatMap((c) => (c.kind === "background" || c.kind === "video" ? (c.media.assetId ? [c.media.assetId] : []) : [])) : [];
+  const ids = rt ? mediaAssetIds(rt) : [];
   useAssetDurations(assets, ids);
   if (!rt || !sceneDef) return null;
   const all = videoSources(rt, assets);
   const sources = solo && all.some((s) => s.key.split(":")[0] === solo) ? all.filter((s) => s.key.split(":")[0] === solo) : all;
   const clock = sceneNow(rt) / 1000;
+  const dispatch = useShow.getState().dispatch;
+  const paused = rt.clock.pausedAt !== null;
+  const holdButton = live && (
+    <Button
+      size="xs"
+      className={cn("h-7 shrink-0 gap-1 px-2 font-key text-[12.5px] font-bold", paused ? "bg-live text-white hover:bg-live/85" : "bg-armed/90 text-black hover:bg-armed")}
+      title={paused ? "Resume the live wall from this frame (P)" : "Hold the live wall on this frame: video, its sound and effects (P)"}
+      aria-label={paused ? "Resume live" : "Hold live"}
+      onClick={() => {
+        endScrub(false);
+        hold("program", paused ? "resume" : "pause");
+      }}
+    >
+      {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
+      {paused ? "Resume" : "Hold"}
+    </Button>
+  );
   if (!sources.length && !drag) {
+    if (live)
+      return (
+        <div className="mt-2 flex items-center gap-2 text-[11.5px] text-muted-foreground">
+          {holdButton}
+          <Clock className="size-3.5" /> scene {fmt(Math.max(0, clock))} · no video to scrub
+          {paused && <span className="font-semibold text-armed">HELD</span>}
+        </div>
+      );
     if (!editable) return null;
     return (
       <div className="mt-2 flex items-center gap-2 rounded-md border border-dashed border-border px-2 py-1.5 text-[11px] text-muted-foreground">
@@ -372,25 +348,31 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
       </div>
     );
   }
-  const playing = sources.filter((s) => s.playing);
-  const src = drag?.src ?? sources.find((s) => s.key === sel) ?? playing.find((s) => !s.label.includes("(loop)")) ?? playing[0] ?? sources[0];
+  const src = drag?.src ?? mainSource(sources, sel)!;
   const pos = drag ? drag.v : src.pos;
-  const dispatch = useShow.getState().dispatch;
-  const paused = rt.clock.pausedAt !== null;
-  // Scrubbing, jumping to a marker or adding one stops playback, and it stays stopped until Play.
-  const pause = () => {
-    if (useShow.getState().preview?.clock.pausedAt === null) dispatch("preview", { type: "clock", op: "pause" });
-  };
-  const startScrub = () => {
+  // The live wall scrubs only while held; the preview pauses itself when you scrub.
+  const canScrub = !live || paused;
+  // Scrubbing, jumping to a marker or adding one stops the preview, and it stays stopped until Play.
+  function pause() {
+    if (!live) hold("preview", "pause");
+  }
+  function startScrub() {
     if (dragRef.current) return dragRef.current;
     pause();
     dragRef.current = { v: src.pos, src };
     setDrag(dragRef.current);
     return dragRef.current;
-  };
-  const endScrub = () => {
+  }
+  function endScrub(commit = true) {
+    const d = dragRef.current;
     dragRef.current = null;
     setDrag(null);
+    // Live: one jump, on release.
+    if (commit && live && d) seekSource("program", d.src, d.v);
+  }
+  const jump = (v: number) => {
+    pause();
+    seekSource(target, src, v);
   };
   const host = markerHosts(sceneDef).find((h) => h.key === src.key);
   const markers = host?.markers ?? [];
@@ -406,13 +388,15 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
     const i = m.cueId ? cues.findIndex((c) => c.id === m.cueId) : -1;
     return `${m.name} · ${m.at.toFixed(1)} s → ${i >= 0 ? `cue ${i + 1}: ${cues[i].name}` : m.cueId ? "missing cue" : describeMessage(m.message)}`;
   };
+  const pct = (v: number) => `${(Math.min(v, src.duration) / src.duration) * 100}%`;
 
   return (
-    <div className="mt-2 rounded-md border border-border bg-black/20 px-2 pb-1.5 pt-1">
+    <div className={cn("mt-2 rounded-md border bg-black/20 px-2 pb-1.5 pt-1", live && paused ? "border-armed/70" : "border-border")}>
       <div className="flex items-center gap-2 text-[11px]">
+        {holdButton}
         {editable && (
         <Button size="icon-xs" variant="ghost" className="size-6 shrink-0" title={paused ? "Play the preview" : "Pause the preview"} aria-label={paused ? "Play" : "Pause"} onClick={() => {
-            endScrub();
+            endScrub(false);
             dispatch("preview", { type: "clock", op: paused ? "resume" : "pause" });
           }}>
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
@@ -420,14 +404,24 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
         )}
         <Film className="size-3.5 shrink-0 text-muted-foreground" />
         <SelectBox
-          className="h-6 w-auto max-w-[260px] border-transparent bg-transparent px-1 text-[11.5px] font-medium hover:border-input"
+          className="h-6 w-auto max-w-[260px] min-w-0 border-transparent bg-transparent px-1 text-[11.5px] font-medium hover:border-input"
           value={src.key}
-          onChange={(k) => selectScrubSource(k)}
+          onChange={(k) => (live ? setPickedLive(k) : selectScrubSource(k))}
           options={sources.map((s) => ({ value: s.key, label: s.label + (s.playing ? "" : " (not playing)") }))}
         />
-        <span className="tabular text-muted-foreground">
+        <span className={cn("shrink-0 tabular", drag && live ? "font-semibold text-armed" : "text-muted-foreground")}>
           {fmt(pos)} / {fmt(src.duration)}
         </span>
+        {live && paused && (
+          <span className="ml-auto flex shrink-0 items-center gap-0.5" title="Step the held wall back or forward">
+            {[-5, -1, 1, 5].map((d) => (
+              <Button key={d} size="xs" variant="ghost" className="h-6 px-1.5 text-[10.5px] tabular" onClick={() => jump(src.pos + d)}>
+                {d > 0 ? `+${d}` : d}s
+              </Button>
+            ))}
+          </span>
+        )}
+        {live && !paused && <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground">Hold to scrub the wall</span>}
         {editable && (
           <>
             <span className="ml-auto flex items-center gap-1 tabular text-muted-foreground" title="Time since the scene started in the preview">
@@ -439,9 +433,9 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
           </>
         )}
       </div>
-      <div ref={track} className="relative mt-1 h-6">
+      <div ref={track} className={cn("relative mt-1 h-6", !canScrub && "opacity-70")} title={canScrub ? undefined : "Hold the wall first (P), then scrub"}>
         <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-muted" />
-        <div className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-preview/70" style={{ width: `${(Math.min(pos, src.duration) / src.duration) * 100}%` }} />
+        <div className={cn("absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full", live ? "bg-live/70" : "bg-preview/70")} style={{ width: pct(live && drag ? src.pos : pos) }} />
         {markers.map((m) => {
           const dragging = mDrag?.id === m.id;
           const at = dragging ? mDrag.at : m.at;
@@ -453,9 +447,9 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
             <button
               key={m.id}
               type="button"
-              title={editable ? `${describe(m)} · drag to move` : describe(m)}
-              className={cn("absolute top-0 z-10 -translate-x-1/2 touch-none", editable && (dragging ? "cursor-grabbing" : "cursor-grab"))}
-              style={{ left: `${(Math.min(at, src.duration) / src.duration) * 100}%` }}
+              title={editable ? `${describe(m)} · drag to move` : canScrub ? `${describe(m)} · click to jump here` : describe(m)}
+              className={cn("absolute top-0 z-10 -translate-x-1/2 touch-none", editable && (dragging ? "cursor-grabbing" : "cursor-grab"), !canScrub && "pointer-events-none")}
+              style={{ left: pct(at) }}
               onPointerDown={(e) => {
                 if (!editable || e.button !== 0) return;
                 try {
@@ -484,9 +478,7 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
               onPointerCancel={() => setMDrag(null)}
               onClick={() => {
                 // Show Mode (not editable): a click jumps to the marker.
-                if (editable) return;
-                pause();
-                dispatch("preview", src.seek(m.at));
+                if (!editable) jump(m.at);
               }}
             >
               <span className={cn("block size-2.5 rotate-45 rounded-[2px] border border-black/60", m.cueId ? "bg-preview" : "bg-armed", dragging && mDrag.moved && "scale-125 ring-2 ring-foreground/70")} />
@@ -501,8 +493,9 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
           max={src.duration}
           step={0.01}
           value={Math.min(pos, src.duration)}
-          aria-label="Scrub"
-          className="absolute inset-0 h-6 w-full cursor-pointer opacity-0"
+          aria-label={live ? "Scrub the live wall" : "Scrub"}
+          disabled={!canScrub}
+          className={cn("absolute inset-0 h-6 w-full opacity-0", canScrub ? "cursor-pointer" : "cursor-not-allowed")}
           // Pointer, mouse and touch all start a scrub: WebKit's range input does not always send pointer events.
           onPointerDown={startScrub}
           onMouseDown={startScrub}
@@ -511,14 +504,16 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
             const d = startScrub();
             d.v = +e.target.value;
             setDrag({ ...d });
-            dispatch("preview", d.src.seek(d.v));
+            if (!live) dispatch("preview", d.src.seek(d.v));
           }}
-          onPointerUp={endScrub}
-          onMouseUp={endScrub}
-          onTouchEnd={endScrub}
-          onBlur={endScrub}
+          onPointerUp={() => endScrub()}
+          onMouseUp={() => endScrub()}
+          onTouchEnd={() => endScrub()}
+          onBlur={() => endScrub()}
+          onKeyUp={() => live && endScrub()}
         />
-        <span className="pointer-events-none absolute top-0 h-6 w-0.5 -translate-x-1/2 rounded bg-foreground" style={{ left: `${(Math.min(pos, src.duration) / src.duration) * 100}%` }} />
+        {live && drag && <span className="pointer-events-none absolute top-0 h-6 w-0.5 -translate-x-1/2 rounded bg-foreground/40" style={{ left: pct(src.pos) }} />}
+        <span className={cn("pointer-events-none absolute top-0 h-6 w-0.5 -translate-x-1/2 rounded", live && drag ? "bg-armed" : "bg-foreground")} style={{ left: pct(pos) }} />
       </div>
       {editable && (
       <button type="button" className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setOpen(!open)}>

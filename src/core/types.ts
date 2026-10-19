@@ -892,7 +892,12 @@ export interface CameraRuntime {
 export interface SceneRuntime {
   key: string;
   scene: Scene;
-  clock: { base: number; pausedAt: number | null };
+  /**
+   * Scene clock. `reached` is the furthest scene time (ms) this run had played before its last
+   * seek: markers and timed cues up to it count as passed, so scrubbing back and replaying, or
+   * jumping forward over them, never fires them (see docs/VIDEO_TRANSPORT.md).
+   */
+  clock: { base: number; pausedAt: number | null; reached?: number };
   background: { current: string | null; previous: string | null; changedAt: number; dur: number };
   env: { timeOfDay: Tween; storm: Tween };
   layers: Record<string, LayerRuntime>;
@@ -918,6 +923,8 @@ export interface SceneRuntime {
 export interface ClipSegment {
   clipId: string;
   at: number;
+  /** Clip seconds already passed or jumped over by a scrub (clip.seek): markers up to here do not fire. */
+  skip?: number;
 }
 
 export interface ClipActorRuntime {

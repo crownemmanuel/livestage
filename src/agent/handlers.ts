@@ -18,6 +18,7 @@ import * as runtime from "@/core/runtime";
 import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
 import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
 import * as ops from "@/engine/operator";
+import * as transport from "@/engine/transport";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { requestSnap } from "@/render/snap";
 import { useProject } from "@/store/project";
@@ -479,6 +480,7 @@ export const handlers: Record<AgentCommand, Handler> = {
 
   seek(a) {
     rtFor(a.target);
+    if (a.target === "program" && S().program.runtime?.clock.pausedAt == null) throw new Error('The live wall scrubs only while held: freeze {target: "program", op: "pause"} (or transport hold) first');
     S().dispatch(a.target, { type: "seek", t: Math.max(0, Number(a.seconds)) * 1000 });
     return { sceneTime: round(sceneNow(rtFor(a.target)!) / 1000) };
   },
@@ -487,6 +489,51 @@ export const handlers: Record<AgentCommand, Handler> = {
     rtFor(a.target);
     S().dispatch(a.target, { type: "clock", op: a.op });
     return { frozen: rtFor(a.target)!.clock.pausedAt !== null };
+  },
+
+  async transport(a) {
+    const target: Target = a.target;
+    const rt0 = rtFor(target)!;
+    if (target === "program" && S().program.standby) throw new Error("The live wall is on standby");
+    await transport.probeDurations(S().assets, transport.mediaAssetIds(rt0));
+    const op = a.op ?? "status";
+    const pick = () => {
+      const rt = rtFor(target)!;
+      const all = transport.videoSources(rt, S().assets);
+      if (!a.source) return transport.mainSource(all);
+      const comp = rt.scene.components.find((c) => c.name === a.source);
+      return all.find((v) => v.key === a.source || v.label === a.source) ?? (comp ? all.find((v) => v.key.split(":")[0] === comp.id && v.playing) ?? all.find((v) => v.key.split(":")[0] === comp.id) : undefined);
+    };
+    switch (op) {
+      case "status":
+        break;
+      case "hold":
+      case "resume":
+      case "toggle":
+        transport.hold(target, op === "hold" ? "pause" : op);
+        break;
+      case "seek":
+      case "nudge": {
+        if (typeof a.seconds !== "number" || !Number.isFinite(a.seconds)) throw new Error(`${op} needs seconds`);
+        if (target === "program" && !transport.isHeld("program")) throw new Error('The live wall scrubs only while held: transport {target: "program", op: "hold"} first');
+        const src = pick();
+        if (!src) throw new Error(a.source ? `No video "${a.source}" in this scene (see videos in transport status)` : "No video to scrub in this scene");
+        transport.seekSource(target, src, op === "seek" ? a.seconds : src.pos + a.seconds);
+        break;
+      }
+      default:
+        throw new Error(`Unknown op ${op}`);
+    }
+    const rt = rtFor(target)!;
+    const v = pick();
+    const brief = (x: transport.Source) => ({ key: x.key, label: x.label, playing: x.playing, position: round(x.pos), duration: round(x.duration) });
+    return {
+      target,
+      held: rt.clock.pausedAt !== null,
+      sceneTime: round(sceneNow(rt) / 1000),
+      video: v ? brief(v) : null,
+      videos: transport.videoSources(rt, S().assets).map(brief),
+    };
   },
 
   blackout(a) {

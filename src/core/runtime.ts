@@ -1,7 +1,7 @@
 import { clamp, ease, evalTween, hermite, lerp, now, retarget, sceneNow, smootherstep, tween } from "./clock";
 import { EFFECT_DEFS, num } from "./effects";
 import { uid } from "./ids";
-import { initialSegments, scheduleClip } from "./clipActor";
+import { clipStateAt, initialSegments, scheduleClip } from "./clipActor";
 import { LION_ACTION_INFO } from "./lion";
 import type {
   ActorComponent,
@@ -425,7 +425,7 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
       const op = cmd.op === "toggle" ? (paused ? "resume" : "pause") : cmd.op;
       if (op === "pause" && !paused) return { rt: { ...rt, clock: { ...rt.clock, pausedAt: wallNow } }, poses };
       if (op === "resume" && paused) {
-        return { rt: { ...rt, clock: { base: rt.clock.base + (wallNow - rt.clock.pausedAt!), pausedAt: null } }, poses };
+        return { rt: { ...rt, clock: { ...rt.clock, base: rt.clock.base + (wallNow - rt.clock.pausedAt!), pausedAt: null } }, poses };
       }
       return { rt, poses };
     }
@@ -448,12 +448,20 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     case "seek": {
       const target = Math.max(0, cmd.t);
       const base = (rt.clock.pausedAt ?? wallNow) - target;
-      return { rt: { ...rt, clock: { ...rt.clock, base } }, poses };
+      // Everything up to the furthest point played, or jumped to, counts as passed: markers and
+      // timed cues in the stretch scrubbed back over or jumped across do not fire.
+      const reached = Math.max(rt.clock.reached ?? 0, t, target);
+      return { rt: { ...rt, clock: { ...rt.clock, base, reached } }, poses };
     }
     case "clip.seek": {
       const actor = findComponent(scene, cmd.actorId, "clipActor");
       if (!actor || !actor.clips.some((k) => k.id === cmd.clipId)) return { rt, poses };
-      return { rt: { ...rt, clipActors: { ...rt.clipActors, [actor.id]: { segments: [{ clipId: cmd.clipId, at: t - Math.max(0, cmd.offset) * 1000 }] } } }, poses };
+      const offset = Math.max(0, cmd.offset);
+      // Same rule per clip: what this clip already played, or was scrubbed over, does not fire its markers again.
+      const cur = clipStateAt(actor, rt.clipActors?.[actor.id], t);
+      const passed = cur.clip?.id === cmd.clipId && cur.segment ? Math.max(cur.localT, cur.segment.skip ?? 0) : 0;
+      const segment = { clipId: cmd.clipId, at: t - offset * 1000, skip: Math.max(offset, passed) };
+      return { rt: { ...rt, clipActors: { ...rt.clipActors, [actor.id]: { segments: [segment] } } }, poses };
     }
     case "framing": {
       const from = evalFraming(rt.framing, t);

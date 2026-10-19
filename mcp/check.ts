@@ -63,6 +63,11 @@ if (status.error) {
   ok("get path", typeof width.json === "number", String(width.json));
   ok("bad path explains", !!(await call("get", { path: "project/nope/x" })).error);
   ok("io_log", Array.isArray((await call("io_log", { limit: 5 })).json));
+  if (status.json.preview) {
+    // Read-only: where the preview's video is, without holding or moving it.
+    const tr = await call("transport", { target: "preview", op: "status" });
+    ok("transport status (preview)", typeof tr.json?.held === "boolean", tr.error ?? (tr.json?.video ? `${tr.json.video.label} ${tr.json.video.position}/${tr.json.video.duration} s` : "no video"));
+  }
   const cloud = await call("cloud_status");
   ok("cloud_status", typeof cloud.json?.configured === "boolean", cloud.error ?? (cloud.json?.configured ? `${cloud.json.project}, signed in: ${cloud.json.signedIn}` : "not set up"));
 
@@ -89,6 +94,11 @@ if (status.error) {
       await new Promise((r) => setTimeout(r, 1500));
       const rt = await call("get_runtime", { target: "preview" });
       ok("title visible after GO", rt.json?.layers?.some((l: { name: string; visible: boolean }) => l.name === "Title" && l.visible), rt.error ?? "");
+      const held = await call("transport", { target: "preview", op: "hold" });
+      ok("transport hold (preview)", held.json?.held === true, held.error ?? "");
+      ok("transport nudge without a video explains", !!(await call("transport", { target: "preview", op: "nudge", seconds: -1 })).error);
+      const resumed = await call("transport", { target: "preview", op: "resume" });
+      ok("transport resume (preview)", resumed.json?.held === false, resumed.error ?? "");
       const shot = await call("screenshot", { target: "preview", width: 640 });
       if (shot.image?.data) {
         const file = join(tmpdir(), "sls-mcp-check.jpg");
