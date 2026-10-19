@@ -32,7 +32,7 @@ With **Announce TAKE / GO** on, every TAKE sends `/sls/scene <number> <name>` an
 
 ## Sending at a moment in a clip
 
-A clip can carry **time markers** (Scene Builder → the clip inside a video actor, or any video layer / plate → Time markers). When live playback passes the marker's time the message is sent, once. Markers on a looping clip fire on every pass. Example: a marker at 2.5 s on the lion's charge clip that sends `/hog/playback/go/3` so the lighting strobe fires exactly on the leap.
+A clip can carry **time markers**: Build → select the video, background or video actor in Components → **Time markers** at the bottom of its settings (a video actor has them per clip) → **Add marker**. Set the time in seconds, then choose what happens: **Run cue N** of this scene (all of that cue's actions, lighting included) or **Send lighting / MIDI / OSC** (a new marker starts as a Hog Lighting action). Example: a marker at 2.5 s on the lion's charge clip that GOes the strobe cuelist so it fires exactly on the leap. Running a cue from a marker does not move the GO pointer.
 
 Markers only fire from the live (PROGRAM) show, never from previews, and never twice for the same pass.
 

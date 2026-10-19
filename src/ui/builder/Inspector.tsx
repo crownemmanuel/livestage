@@ -272,9 +272,7 @@ function MediaFields({ m, set }: { m: MediaSettings; set: (fn: (m: MediaSettings
       <SwitchField label="Reverse" hint="Plays backwards by scrubbing (about 12 steps a second). For a smooth rewind, import a reversed render of the clip instead." value={!!m.reverse} onChange={(v) => set((x) => (x.reverse = v))} />
       <SwitchField label="Muted" value={m.muted} onChange={(v) => set((x) => (x.muted = v))} />
       {!m.muted && <SliderField label="Volume" value={m.volume} min={0} max={1} step={0.01} onChange={(v) => set((x) => (x.volume = v))} />}
-      <Field label="Time markers">
-        <MarkersEditor markers={m.markers} onChange={(markers) => set((x) => (x.markers = markers))} />
-      </Field>
+      <MarkersEditor markers={m.markers} onChange={(markers) => set((x) => (x.markers = markers))} />
     </>
   );
 }
@@ -725,9 +723,7 @@ function ClipActorForm({ c, up }: { c: ClipActorComponent; up: Updater<ClipActor
               value={!!k.interrupt}
               onChange={(v) => upClip(k.id, (x) => (x.interrupt = v))}
             />
-            <Field label="Time markers">
-              <MarkersEditor markers={k.markers} onChange={(markers) => upClip(k.id, (x) => (x.markers = markers))} />
-            </Field>
+            <MarkersEditor markers={k.markers} onChange={(markers) => upClip(k.id, (x) => (x.markers = markers))} />
           </div>
         ))}
       </Section>

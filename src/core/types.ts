@@ -96,6 +96,8 @@ export interface MediaMarker {
   /** Seconds into the clip. */
   at: number;
   message: IoMessage;
+  /** When set, the marker runs this cue of the scene (all its actions) instead of sending `message`. */
+  cueId?: string | null;
 }
 
 /** Slow pan/zoom over a still or plate (storybook art, maps). Offsets are canvas fractions, scale ≥ 1. */

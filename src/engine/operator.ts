@@ -285,7 +285,7 @@ export function describeIoAction(a: IoAction): string {
 /** Remembered playback position per media component, to detect marker crossings. */
 const markerPos = new Map<string, { clipId: string | null; t: number }>();
 
-function fireMarkers(markers: MediaMarker[] | undefined, key: string, clipId: string | null, t: number, duration: number, loop: boolean) {
+function fireMarkers(fire: (m: MediaMarker) => void, markers: MediaMarker[] | undefined, key: string, clipId: string | null, t: number, duration: number, loop: boolean) {
   if (!markers?.length) {
     markerPos.set(key, { clipId, t });
     return;
@@ -294,27 +294,33 @@ function fireMarkers(markers: MediaMarker[] | undefined, key: string, clipId: st
   markerPos.set(key, { clipId, t });
   if (!prev || prev.clipId !== clipId) {
     // Fresh clip: anything between its start and now fires (a marker at 0 fires on the first frame).
-    for (const m of markers) if (m.at <= t && m.at >= 0) void sendMessage(m.message);
+    for (const m of markers) if (m.at <= t && m.at >= 0) fire(m);
     return;
   }
   if (t >= prev.t) {
-    for (const m of markers) if (m.at > prev.t && m.at <= t) void sendMessage(m.message);
+    for (const m of markers) if (m.at > prev.t && m.at <= t) fire(m);
   } else if (loop && duration > 0) {
     // Wrapped around the loop boundary.
-    for (const m of markers) if (m.at > prev.t || m.at <= t) void sendMessage(m.message);
+    for (const m of markers) if (m.at > prev.t || m.at <= t) fire(m);
   }
 }
 
 function pollMarkers(rt: SceneRuntime, wall: number) {
   const t = sceneNow(rt, wall);
+  const fire = (m: MediaMarker) => {
+    if (!m.cueId) return void sendMessage(m.message);
+    const cue = rt.scene.cues.find((c) => c.id === m.cueId);
+    if (cue) runCue("program", cue);
+    else ioLog("error", `Marker "${m.name}" points at a cue that no longer exists`);
+  };
   for (const c of rt.scene.components) {
     if (c.kind === "clipActor") {
       const st = clipStateAt(c, rt.clipActors?.[c.id], t);
-      fireMarkers(st.clip?.markers, `${rt.key}:${c.id}`, st.clip?.id ?? null, st.localT, st.clip?.duration ?? 0, !!st.clip?.loop);
+      fireMarkers(fire, st.clip?.markers, `${rt.key}:${c.id}`, st.clip?.id ?? null, st.localT, st.clip?.duration ?? 0, !!st.clip?.loop);
     } else if (c.kind === "background" && c.source === "media" && c.media.markers?.length) {
       if (rt.background.current !== c.id) continue;
       const el = mediaElapsed(rt, c.id, Math.max(0, rt.background.changedAt), t, c.media.playbackRate);
-      fireMarkers(c.media.markers, `${rt.key}:${c.id}`, c.media.assetId, markerTime(c.media, el), c.media.endTime ?? 0, c.media.loop);
+      fireMarkers(fire, c.media.markers, `${rt.key}:${c.id}`, c.media.assetId, markerTime(c.media, el), c.media.endTime ?? 0, c.media.loop);
     } else if (c.kind === "video" && c.media.markers?.length) {
       const l = rt.layers[c.id];
       if (!l?.visible) {
@@ -322,7 +328,7 @@ function pollMarkers(rt: SceneRuntime, wall: number) {
         continue;
       }
       const el = mediaElapsed(rt, c.id, l.startAt, t, c.media.playbackRate);
-      fireMarkers(c.media.markers, `${rt.key}:${c.id}`, c.media.assetId, markerTime(c.media, el), c.media.endTime ?? 0, c.media.loop);
+      fireMarkers(fire, c.media.markers, `${rt.key}:${c.id}`, c.media.assetId, markerTime(c.media, el), c.media.endTime ?? 0, c.media.loop);
     }
   }
 }
