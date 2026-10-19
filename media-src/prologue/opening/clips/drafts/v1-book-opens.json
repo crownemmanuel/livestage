@@ -1,0 +1,51 @@
+[
+  {
+    "created_at": "2026-10-19T12:00:32.114547Z",
+    "display_name": "Seedance 2.5",
+    "id": "40c1c6d5-4b34-4b92-b6e3-595316359b05",
+    "job_type": "seedance_2_5",
+    "min_result_url": null,
+    "params": {
+      "aspect_ratio": "21:9",
+      "bitrate_mode": "standard",
+      "draft": false,
+      "draft_job_id": null,
+      "duration": 6,
+      "extension_mode": null,
+      "generate_audio": false,
+      "genre": "auto",
+      "height": 384,
+      "medias": [
+        {
+          "data": {
+            "id": "cc11cc5a-766f-4445-b08d-76c6907b3baf",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/cc11cc5a-766f-4445-b08d-76c6907b3baf_resize.jpg"
+          },
+          "role": "start_image"
+        },
+        {
+          "data": {
+            "id": "d37da059-e38b-4f16-9657-7c38497dc0b2",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/d37da059-e38b-4f16-9657-7c38497dc0b2_resize.jpg"
+          },
+          "role": "end_image"
+        }
+      ],
+      "model": "default",
+      "multi_prompt": [],
+      "multi_shot_mode": "custom",
+      "multi_shots": false,
+      "prompt": "Magical moment: the closed Holy Bible's cover lifts and swings open by itself, the pages begin to flip on their own as if in a breeze, faster and faster, and warm golden light pours up out of the book, sparkles and motes swirling into the dark room. Slow gentle push-in toward the book. Keep the 2D hand-drawn storybook animation style of the frames throughout (ink outlines, cel shading, painted textures); it never turns photographic.\nThe frame is letterboxed: solid black bars stay fixed across the top and bottom for the whole clip and nothing ever enters them; all the picture and all the motion stay inside the wide strip in the middle. Smooth, continuous single camera move, no cuts, no text.",
+      "prompt_language": "en",
+      "reference_elements": [],
+      "resolution": "480p",
+      "speedramp": "auto",
+      "width": 896
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120032_40c1c6d5-4b34-4b92-b6e3-595316359b05.mp4",
+    "status": "completed",
+    "thumbnail_url": "https://cdn.higgsfield.ai/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120032_40c1c6d5-4b34-4b92-b6e3-595316359b05_thumbnail.webp"
+  }
+]

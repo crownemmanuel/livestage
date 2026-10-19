@@ -1,0 +1,48 @@
+[
+  {
+    "created_at": "2026-10-19T06:08:52.471999Z",
+    "display_name": "GPT Image 2.5",
+    "id": "5e2a4119-e11a-492e-b1a7-795b75000259",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_060852_5e2a4119-e11a-492e-b1a7-795b75000259_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 576,
+      "medias": [
+        {
+          "data": {
+            "id": "385298b9-4605-461d-9a3e-52fe3befe539",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/385298b9-4605-461d-9a3e-52fe3befe539.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "c7ffc7b6-f5bf-48e8-ac1b-d4b565b1ca6e",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/c7ffc7b6-f5bf-48e8-ac1b-d4b565b1ca6e.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "ae65c14b-f671-466e-8925-7e23132226d6",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/ae65c14b-f671-466e-8925-7e23132226d6.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "A high, sweeping aerial view, as if from a bird flying over the Judean hills at dawn, looking down and forward over the countryside around Bethlehem. The small walled hill town of Bethlehem, the same town as in the first reference image, sits on its hill in the middle distance with terraced slopes, olive groves and dark cypress trees; winding paths and low stone walls lead down the hillside to open golden shepherds' pastures in the foreground below, where a tiny flock of sheep grazes beside an old olive tree. Morning mist lies in the valleys, layered blue hills recede to the horizon, the sun is just rising with long golden rays and glowing clouds, birds circle below the camera. Vast, peaceful, epic. No people visible.\nStyle: hand-painted epic storybook illustration matching the style reference exactly — rich painterly gouache-and-oil brushwork with visible strokes, fine dark ink linework on figures and edges, subtle parchment paper grain, warm golden-hour glow, honey gold, amber, ochre and crimson with lapis-blue accents, luminous sunlit clouds; the feel of an epic hand-drawn animated feature and a treasured children's Bible come to life. Cinematic 21:9 widescreen composition. No borders, no watermark, no captions.\nFraming: this picture will be shown on an ultra-wide 4:1 LED wall, cropped to a 4:1 strip through the middle of the image. Keep the whole subject and every important detail inside the central horizontal band (the middle 55% of the height). The top and bottom fifth of the image must hold only simple, uneventful sky, darkness, tabletop or ground that can be cut away. Spread the scene wide rather than tall.",
+      "quality": "low",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "1k",
+      "width": 1344
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_060852_5e2a4119-e11a-492e-b1a7-795b75000259.png",
+    "status": "completed"
+  }
+]

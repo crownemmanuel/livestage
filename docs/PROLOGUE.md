@@ -2,6 +2,8 @@
 
 The opening of *Salvation 2026: The House of David*. These scenes are built from AI video: generated stills, then image-to-video clips with matched first and last frames, so every cut lands on the same frame. Live effects (fog, shake, sling stone, blackout) run on top in the app.
 
+The new opening (the Holy Bible → drone flight over storybook Bethlehem → the painting turns real → lights up on David) is being built in [PROLOGUE_OPENING.md](PROLOGUE_OPENING.md); it will replace P1's push-in opening.
+
 All clips are **480p drafts**. Re-render them in HQ and swap them in (see [Swapping in HQ renders](#swapping-in-hq-renders)); no scene changes are needed.
 
 ## Running it
@@ -27,11 +29,11 @@ Notes:
 ## Adjusting to the stage
 
 - **Flock size and position** (P1): select *Sheep (cut-out, stage left)* in the Scene Builder and change Scale, X/Y and Mirror under the cut-out layout. Shrinking slides the flock toward the horizon, so it reads as further away.
-- **Goliath** (P4): same controls. The default (scale 0.73, pivot at his feet) fills a 32:9 wall from top to bottom.
+- **Goliath** (P4): same controls. The default (scale 0.73, pivot at his feet) fills the wall from top to bottom (tuned on a 32:9 wall; re-check on the real 3072 × 768 wall).
   - If you move or scale him, update the *Sling stone* effect's Target X/Y (canvas fractions) so it still hits the helmet.
   - Turn up *Glow + streak* if the stone is hard to see on the wall.
 - **Shake strength**: the two Shake effects in P4 (*shield hits the ground* and *Goliath hits the ground*) have Intensity, Duration and Frequency.
-- **Vertical framing**: plates are 21:9 and the default wall is 32:9, so each plate is cropped top and bottom.
+- **Vertical framing**: plates are 21:9 and the LED wall is 3072 × 768 (4:1), so each plate loses about 42% of its height, top and bottom.
   - Background `anchorY` (0 = show the top, 1 = the bottom) sets the crop: P1 0.35, P2 0.05 (keeps the lion's mane on the ledge), P3 0.42, P4 0.5.
   - Keep each video actor's `anchorY` equal to its plate's.
   - Travel videos glide between the two plates' framings automatically.
@@ -99,6 +101,6 @@ If you change the fall clip, re-measure when the stone hits and update the trim 
 
 - **Goliath's fall**: the model drew its own stone. The trim removes it, but a faint trail line lingers near the top for about 0.7 s.
   - For the HQ version, regenerate without a stone in the prompt ("he is suddenly struck on the forehead, his head snaps back…").
-- **Crop on a 32:9 wall**: Goliath's helmet crest touches the top edge, and the lower part of the fallen lion is cropped in P3. Adjust Scale or `anchorY` to taste.
+- **Crop on the wall** (noted on 32:9; the 4:1 wall crops more): Goliath's helmet crest touches the top edge, and the lower part of the fallen lion is cropped in P3. Adjust Scale or `anchorY` to taste.
 - **Sheep loop seam**: the start and end frames match closely but not perfectly (about 34 dB PSNR). A slight pop is possible every 10 s.
 - **Transparent WebM**: the cut-outs need a Chromium webview (Windows / WebView2). macOS WKWebView may not show VP9 alpha. Test on the show machine, or export HEVC-with-alpha for Mac.
