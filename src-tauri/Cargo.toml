@@ -1,6 +1,6 @@
 [package]
 name = "salvation-live-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Salvation Live Studio: real-time visual production and show control"
 authors = ["Salvation Productions"]
 license = ""
