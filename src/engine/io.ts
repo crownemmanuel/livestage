@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import { isTauri } from "@/core/platform";
-import type { IoAction, IoMatch, IoMessage, IoSettings } from "@/core/types";
+import type { HogKind, HogOp, IoAction, IoMatch, IoMessage, IoSettings } from "@/core/types";
 import { useProject } from "@/store/project";
 
 export type IncomingMessage =
@@ -66,7 +66,41 @@ export function describeMessage(m: IoMessage): string {
       return `MSC ${m.command.toUpperCase()} cue ${m.cue}${m.list ? ` list ${m.list}` : ""} → device ${m.deviceId}`;
     case "osc":
       return `OSC ${m.address} ${m.args.map(String).join(" ")}`.trim();
+    case "hog": {
+      const r = resolveHog(m);
+      const what = `${HOG_KIND_LABEL[r.kind].toLowerCase()} ${r.number || "?"}${hogCueSuffix(m, r.kind)}`;
+      return `Hog ${HOG_OP_LABEL[m.op]} ${r.name ? `${r.name} (${what})` : what}`;
+    }
   }
+}
+
+// ---------------------------------------------------------------- Hog 4
+
+export type HogMessage = Extract<IoMessage, { type: "hog" }>;
+
+export const HOG_KIND_LABEL: Record<HogKind, string> = { cuelist: "Cuelist", scene: "Scene", macro: "Macro" };
+export const HOG_OP_LABEL: Record<HogOp, string> = { go: "GO", release: "Release", halt: "Halt", resume: "Resume" };
+const HOG_KIND_INDEX: Record<HogKind, number> = { cuelist: 0, scene: 1, macro: 2 };
+
+/** The console's OSC target: the one the app created for it, else the first. */
+export function hogTarget(io: IoSettings | undefined) {
+  const targets = io?.osc.targets ?? [];
+  return targets.find((t) => t.id === "osc_hog") ?? targets[0];
+}
+
+/** What a Hog message points at now: a library entry wins over the copy stored on the message. */
+export function resolveHog(m: HogMessage): { name: string | null; kind: HogKind; number: string } {
+  const item = m.item ? useProject.getState().project.io?.hogItems.find((i) => i.id === m.item) : undefined;
+  return { name: item?.name ?? null, kind: item?.kind ?? m.kind, number: (item?.number ?? m.number).trim() };
+}
+
+const hogCueSuffix = (m: HogMessage, kind: HogKind) => (m.op === "go" && kind === "cuelist" && m.cue.trim() ? `.${m.cue.trim()}` : "");
+
+/** The OSC the console expects: /hog/playback/<op>/<0 cuelist | 1 scene | 2 macro> "list[.cue]". */
+export function hogOsc(m: HogMessage): { address: string; arg: string } {
+  const r = resolveHog(m);
+  if (!r.number) throw new Error(`No ${HOG_KIND_LABEL[r.kind].toLowerCase()} number`);
+  return { address: `/hog/playback/${m.op}/${HOG_KIND_INDEX[r.kind]}`, arg: `${r.number}${hogCueSuffix(m, r.kind)}` };
 }
 
 export function describeMatch(m: IoMatch): string {
@@ -358,13 +392,14 @@ function oscArgs(address: string, args: (number | string)[]) {
 export async function sendMessage(msg: IoMessage): Promise<void> {
   const settings = useProject.getState().project.io;
   try {
-    if (msg.type === "osc") {
-      if (!isTauri) throw new Error("OSC needs the desktop app");
+    if (msg.type === "osc" || msg.type === "hog") {
       const targets = settings?.osc.targets ?? [];
-      const target = targets.find((t) => t.id === msg.target) ?? targets[0];
-      if (!target) throw new Error("No OSC target configured");
+      const target = msg.type === "hog" ? hogTarget(settings) : (targets.find((t) => t.id === msg.target) ?? targets[0]);
+      if (!target) throw new Error(msg.type === "hog" ? "No lighting console set up (I/O → Connection)" : "No OSC target configured");
+      const { address, args } = msg.type === "hog" ? (({ address, arg }) => ({ address, args: [arg] }))(hogOsc(msg)) : msg;
+      if (!isTauri) throw new Error("OSC needs the desktop app");
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("osc_send", { host: target.host, port: target.port, address: msg.address, args: oscArgs(msg.address, msg.args) });
+      await invoke("osc_send", { host: target.host, port: target.port, address, args: oscArgs(address, args) });
     } else {
       if (!midiOut) throw new Error("No MIDI output open");
       const ch = msg.type === "msc" ? 0 : msg.channel & 0x0f;

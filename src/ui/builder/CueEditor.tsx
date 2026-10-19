@@ -1,5 +1,8 @@
-import { ArrowDown, ArrowUp, Copy, Play, Plus, Trash2, X } from "lucide-react";
+import type { ReactNode } from "react";
+import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, Crop, Eye, Footprints, Gauge, Image, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 import { makeCue, defaultTransition } from "@/core/factories";
 import { uid } from "@/core/ids";
 import { LION_ACTION_INFO } from "@/core/lion";
@@ -19,31 +22,46 @@ function currentPreviewFraming() {
 }
 import { useProject } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
+import { InfoTip } from "../kit";
 import { TRANSITIONS } from "../show/ShowMode";
 import { MessageFields, defaultMessage } from "../io/MessageFields";
 
-const ACTION_TYPES: { value: CueActionType; label: string }[] = [
-  { value: "clip", label: "Video actor clip" },
-  { value: "layer", label: "Layer / title / element" },
-  { value: "background", label: "Background" },
-  { value: "effect", label: "Effect" },
-  { value: "effect.param", label: "Effect parameter" },
-  { value: "camera", label: "Camera move" },
-  { value: "framing", label: "Framing (zoom / reposition)" },
-  { value: "names", label: "Family tree / names" },
-  { value: "route", label: "Map route" },
-  { value: "media.speed", label: "Video speed ramp" },
-  { value: "timeOfDay", label: "Time of day" },
-  { value: "clock", label: "Freeze / resume motion" },
-  { value: "sound", label: "Play sound" },
-  { value: "send", label: "Send MIDI / OSC" },
-  { value: "blackout", label: "Blackout / lights up" },
-  { value: "takeScene", label: "Take another scene live" },
-  { value: "lion", label: "Lion action" },
-  { value: "lion.moveTo", label: "Lion walk/run to marker" },
-  { value: "lion.place", label: "Lion place at marker" },
-  { value: "actor.visible", label: "Lion show/hide" },
+/** "hog" is a Send action preset to a Hog 4 message; it gets its own menu entry because it is the common case. */
+type MenuType = CueActionType | "hog";
+
+const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> = {
+  hog: { label: "Lighting (Hog 4)", icon: <Lightbulb className="text-armed" /> },
+  send: { label: "MIDI / OSC", icon: <Radio /> },
+  blackout: { label: "Blackout / lights up", icon: <Power /> },
+  sound: { label: "Play sound", icon: <Volume2 /> },
+  clip: { label: "Video clip", icon: <Clapperboard /> },
+  layer: { label: "Layer / title", icon: <Layers /> },
+  background: { label: "Background", icon: <Image /> },
+  effect: { label: "Effect", icon: <Sparkles /> },
+  "effect.param": { label: "Effect setting", icon: <SlidersHorizontal /> },
+  "media.speed": { label: "Video speed", icon: <Gauge /> },
+  timeOfDay: { label: "Time of day", icon: <Sun /> },
+  names: { label: "Family tree", icon: <Users /> },
+  route: { label: "Map route", icon: <Route /> },
+  camera: { label: "Camera move", icon: <Video /> },
+  framing: { label: "Framing", icon: <Crop /> },
+  takeScene: { label: "Take scene", icon: <ArrowRightLeft /> },
+  clock: { label: "Freeze / resume", icon: <Snowflake /> },
+  lion: { label: "Lion action", icon: <PawPrint /> },
+  "lion.moveTo": { label: "Lion walk / run", icon: <Footprints /> },
+  "lion.place": { label: "Lion place", icon: <MapPin /> },
+  "actor.visible": { label: "Lion show / hide", icon: <Eye /> },
+};
+
+const MENU: { group: string; types: MenuType[] }[] = [
+  { group: "Lighting & sound", types: ["hog", "blackout", "sound", "send"] },
+  { group: "Picture", types: ["clip", "layer", "background", "effect", "effect.param", "media.speed", "timeOfDay", "names", "route"] },
+  { group: "Camera", types: ["camera", "framing"] },
+  { group: "Show", types: ["takeScene", "clock"] },
+  { group: "Lion", types: ["lion", "lion.moveTo", "lion.place", "actor.visible"] },
 ];
+
+const infoFor = (a: CueAction) => ACTION_INFO[a.type === "send" && a.message.type === "hog" ? "hog" : a.type];
 
 const LAYER_KINDS = ["video", "image", "model", "procedural", "text", "names", "route"];
 
@@ -101,6 +119,35 @@ function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]): CueA
   }
 }
 
+function newAction(t: MenuType, scene: Scene, scenes: Scene[]): CueAction {
+  return t === "hog" ? { type: "send", message: defaultMessage("hog"), delay: 0 } : defaultAction(t, scene, scenes);
+}
+
+function AddActionMenu({ onAdd }: { onAdd: (t: MenuType) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="xs" variant="ghost" className="h-6 text-muted-foreground hover:text-foreground">
+          <Plus /> Add action
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-[60vh] w-[210px] overflow-y-auto">
+        {MENU.map((g, gi) => (
+          <DropdownMenuGroup key={g.group}>
+            {gi > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuLabel className="text-[10.5px] font-medium text-muted-foreground">{g.group}</DropdownMenuLabel>
+            {g.types.map((t) => (
+              <DropdownMenuItem key={t} className="text-[12px] [&_svg]:size-3.5" onSelect={() => onAdd(t)}>
+                {ACTION_INFO[t].icon} {ACTION_INFO[t].label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function CueEditor({ scene }: { scene: Scene }) {
   const scenes = useProject((s) => s.project.scenes);
   const up = (fn: (s: Scene) => void) => useProject.getState().updateScene(scene.id, fn);
@@ -109,42 +156,63 @@ export function CueEditor({ scene }: { scene: Scene }) {
       const c = s.cues.find((x) => x.id === id);
       if (c) fn(c);
     });
+  const addCue = () => up((s) => s.cues.push(makeCue(`Cue ${s.cues.length + 1}`)));
 
   return (
-    <div className="space-y-2 p-3">
-      <div className="flex items-center gap-2">
-        <p className="flex-1 text-[11px] text-muted-foreground">A cue fires one or more actions; delays let one GO run a short sequence. The note under a cue is shown to the operator in Show Mode (the line to GO on).</p>
-        <Button size="xs" variant="outline" onClick={() => up((s) => s.cues.push(makeCue(`Cue ${s.cues.length + 1}`)))}>
+    <div className="space-y-2.5 p-3">
+      <div className="flex items-center gap-1.5">
+        <ListOrdered className="size-3.5 text-muted-foreground" />
+        <h3 className="text-[12.5px] font-semibold">Cues</h3>
+        <InfoTip>Each GO in Show Mode fires the next cue. A cue runs all its actions at once; give an action a delay (⏱) to run a short sequence from one GO. The note is shown to the operator: the line to GO on.</InfoTip>
+        <Button size="xs" variant="outline" className="ml-auto" onClick={addCue}>
           <Plus /> Add cue
         </Button>
       </div>
+      {scene.cues.length === 0 && (
+        <button type="button" onClick={addCue} className="flex w-full flex-col items-center gap-1 rounded-lg border border-dashed border-border py-8 text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground">
+          <Plus className="size-4" />
+          No cues yet. Add one to fire video, lights and sound on GO.
+        </button>
+      )}
       {scene.cues.map((cue, i) => (
-        <div key={cue.id} className="rounded-md border border-border bg-card/40">
-          <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-            <span className="w-5 text-right text-[12px] font-semibold tabular text-muted-foreground">{i + 1}</span>
+        <div key={cue.id} className="group/cue overflow-hidden rounded-lg border border-border bg-card/50 shadow-sm">
+          <div className="flex items-center gap-2 px-2.5 pt-2">
+            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-accent text-[11.5px] font-semibold tabular">{i + 1}</span>
             <input
-              className="h-7 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[12.5px] font-medium hover:border-input focus:border-input"
+              className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[13px] font-medium hover:border-input focus:border-input"
               defaultValue={cue.name}
               key={cue.id + cue.name}
               onBlur={(e) => e.target.value !== cue.name && upCue(cue.id, (c) => (c.name = e.target.value))}
             />
-            <Button size="xs" variant="ghost" title="Test this cue in the preview" onClick={() => runCue("preview", cue)}>
+            <div className="flex items-center opacity-0 transition-opacity group-focus-within/cue:opacity-100 group-hover/cue:opacity-100">
+              <Button size="icon-xs" variant="ghost" title="Duplicate cue" onClick={() => up((s) => s.cues.splice(i + 1, 0, { ...structuredClone(cue), id: uid("cue"), name: `${cue.name} copy` }))} aria-label="Duplicate cue">
+                <Copy />
+              </Button>
+              <Button size="icon-xs" variant="ghost" title="Move up" disabled={i === 0} onClick={() => up((s) => ([s.cues[i - 1], s.cues[i]] = [s.cues[i], s.cues[i - 1]]))} aria-label="Move up">
+                <ArrowUp />
+              </Button>
+              <Button size="icon-xs" variant="ghost" title="Move down" disabled={i === scene.cues.length - 1} onClick={() => up((s) => ([s.cues[i + 1], s.cues[i]] = [s.cues[i], s.cues[i + 1]]))} aria-label="Move down">
+                <ArrowDown />
+              </Button>
+              <Button size="icon-xs" variant="ghost" title="Delete cue" className="hover:text-destructive" onClick={() => up((s) => (s.cues = s.cues.filter((c) => c.id !== cue.id)))} aria-label="Delete cue">
+                <Trash2 />
+              </Button>
+            </div>
+            <Button size="xs" variant="secondary" title="Run this cue in the preview (and send its lighting / MIDI / OSC)" onClick={() => runCue("preview", cue)}>
               <Play /> Test
             </Button>
-            <Button size="icon-xs" variant="ghost" title="Duplicate cue" onClick={() => up((s) => s.cues.splice(i + 1, 0, { ...structuredClone(cue), id: uid("cue"), name: `${cue.name} copy` }))} aria-label="Duplicate cue">
-              <Copy />
-            </Button>
-            <Button size="icon-xs" variant="ghost" disabled={i === 0} onClick={() => up((s) => ([s.cues[i - 1], s.cues[i]] = [s.cues[i], s.cues[i - 1]]))} aria-label="Move up">
-              <ArrowUp />
-            </Button>
-            <Button size="icon-xs" variant="ghost" disabled={i === scene.cues.length - 1} onClick={() => up((s) => ([s.cues[i + 1], s.cues[i]] = [s.cues[i], s.cues[i + 1]]))} aria-label="Move down">
-              <ArrowDown />
-            </Button>
-            <Button size="icon-xs" variant="ghost" onClick={() => up((s) => (s.cues = s.cues.filter((c) => c.id !== cue.id)))} aria-label="Delete cue">
-              <Trash2 />
-            </Button>
           </div>
-          <div className="space-y-1 p-2">
+          <label className="mx-2.5 mt-1 flex items-center gap-1.5 rounded-md px-1 text-amber-200/80">
+            <MessageSquareText className="size-3.5 shrink-0 opacity-70" />
+            <input
+              className="h-6 min-w-0 flex-1 bg-transparent text-[11.5px] placeholder:text-muted-foreground/50 focus:outline-none"
+              placeholder="Operator note: the line or moment to GO on…"
+              defaultValue={cue.notes}
+              key={cue.id + cue.notes}
+              onBlur={(e) => e.target.value !== cue.notes && upCue(cue.id, (c) => (c.notes = e.target.value))}
+            />
+          </label>
+          <div className="mt-1.5 space-y-px border-t border-border/70 bg-black/10 px-1.5 py-1.5">
             {cue.actions.map((a, j) => (
               <ActionRow
                 key={j}
@@ -155,21 +223,7 @@ export function CueEditor({ scene }: { scene: Scene }) {
                 onRemove={() => upCue(cue.id, (c) => c.actions.splice(j, 1))}
               />
             ))}
-            <div className="flex items-center gap-2">
-              <SelectBox
-                className="h-6 w-[210px] text-[11px]"
-                value="__add__"
-                onChange={(t) => t !== "__add__" && upCue(cue.id, (c) => c.actions.push(defaultAction(t as CueActionType, scene, scenes)))}
-                options={[{ value: "__add__", label: "+ Add action…" }, ...ACTION_TYPES]}
-              />
-              <input
-                className="h-6 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[11px] text-amber-200/80 placeholder:text-muted-foreground/60 hover:border-input focus:border-input"
-                placeholder="Operator note: the line or action to GO on…"
-                defaultValue={cue.notes}
-                key={cue.id + cue.notes}
-                onBlur={(e) => e.target.value !== cue.notes && upCue(cue.id, (c) => (c.notes = e.target.value))}
-              />
-            </div>
+            <AddActionMenu onAdd={(t) => upCue(cue.id, (c) => c.actions.push(newAction(t, scene, scenes)))} />
           </div>
         </div>
       ))}
@@ -329,7 +383,7 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       );
       break;
     case "send":
-      body = <MessageFields compact m={a.message} onChange={(message) => onChange({ ...a, message })} />;
+      body = <MessageFields compact hideType={a.message.type === "hog"} m={a.message} onChange={(message) => onChange({ ...a, message })} />;
       break;
     case "names":
       body = (
@@ -393,14 +447,20 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       );
       break;
   }
+  const info = infoFor(a);
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-      <span className="w-[86px] truncate text-muted-foreground">{ACTION_TYPES.find((t) => t.value === a.type)?.label}</span>
-      {body}
-      <span className="ml-auto text-muted-foreground">+</span>
-      <NumberInput className="h-6 w-14" value={a.delay} min={0} step={0.5} onChange={(v) => onChange({ ...a, delay: v })} />
-      <span className="text-muted-foreground">s</span>
-      <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label="Remove action">
+    <div className="group/action flex items-start gap-2 rounded-md px-1 py-1 text-[11px] hover:bg-accent/40">
+      <span className="flex h-6 w-[112px] shrink-0 items-center gap-1.5 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0" title={info.label}>
+        {info.icon}
+        <span className="truncate">{info.label}</span>
+      </span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">{body}</div>
+      <label className={cn("flex h-6 shrink-0 items-center gap-0.5", a.delay > 0 ? "text-armed" : "text-muted-foreground/60")} title="Delay after GO (seconds)">
+        <Timer className="size-3.5" />
+        <NumberInput className="h-6 w-12 px-1 text-[11px]" value={a.delay} min={0} step={0.5} onChange={(v) => onChange({ ...a, delay: v })} />
+        <span>s</span>
+      </label>
+      <Button size="icon-xs" variant="ghost" className="opacity-0 group-hover/action:opacity-100 hover:text-destructive focus-visible:opacity-100" onClick={onRemove} aria-label="Remove action" title="Remove action">
         <X />
       </Button>
     </div>

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { applyPrologueFeel, defaultProject, LION_PROOF_ASSETS, PROLOGUE_ASSETS, PROLOGUE_DEMO, PROLOGUE_FEEL, prologueScenes, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene, SHEPHERD_PHOTOREAL_DEMO, shepherdPhotorealScene } from "@/core/defaultProject";
 import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
-import { cloneComponent, cloneScene, defaultIo, defaultOutput, makeScene } from "@/core/factories";
+import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, HOG_DEFAULT_HOST, makeScene } from "@/core/factories";
 import { loadProjectFile, refreshAssetUrls, saveProjectFile } from "@/core/platform";
 import type { Asset, OutputSettings, Project, Scene, SceneComponent } from "@/core/types";
 
@@ -57,6 +57,9 @@ function migrate(p: Project): Project {
   io.midi = { ...defaultIo().midi, ...(p.io?.midi ?? {}) };
   io.osc = { ...defaultIo().osc, ...(p.io?.osc ?? {}) };
   io.triggers = p.io?.triggers ?? [];
+  io.hogItems = p.io?.hogItems ?? defaultHogItems();
+  // The first build shipped a placeholder console address; point it at the real HogNet default.
+  io.osc.targets = io.osc.targets.map((t) => (t.id === "osc_hog" && t.host === "192.168.1.10" ? { ...t, host: HOG_DEFAULT_HOST } : t));
   const merged: Project = { ...p, output: out, io, effectPresets: p.effectPresets ?? [], assets: p.assets ?? [], demoAdditions: p.demoAdditions ?? [] };
   // Merge new built-in demo content once; if the user later deletes it, it stays deleted.
   if (!merged.demoAdditions!.includes(LION_PROOF_DEMO)) {

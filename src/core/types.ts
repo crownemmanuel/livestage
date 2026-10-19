@@ -606,7 +606,24 @@ export type IoMessage =
   | { type: "midi.pc"; channel: number; program: number }
   /** MIDI Show Control (what lighting consoles listen for). */
   | { type: "msc"; deviceId: number; command: "go" | "stop" | "resume"; cue: string; list: string }
-  | { type: "osc"; target: string | null; address: string; args: (number | string)[] };
+  | { type: "osc"; target: string | null; address: string; args: (number | string)[] }
+  /**
+   * A Hog 4 playback command, sent over OSC to the console target. With `item` set, kind and
+   * number come from the lighting library at send time (so renumbering a list updates every cue);
+   * kind/number here are the fallback and what a custom command uses.
+   */
+  | { type: "hog"; op: HogOp; item: string | null; kind: HogKind; number: string; /** GO only, cuelists only; "" = next cue */ cue: string };
+
+export type HogKind = "cuelist" | "scene" | "macro";
+export type HogOp = "go" | "release" | "halt" | "resume";
+
+/** A named lighting item on the Hog 4, so cues read "Rain lights" instead of "515". */
+export interface HogItem {
+  id: string;
+  name: string;
+  kind: HogKind;
+  number: string;
+}
 
 export type IoMatch =
   | { type: "midi.note"; channel: number | null; note: number }
@@ -666,6 +683,8 @@ export interface IoSettings {
     notify: boolean;
   };
   triggers: IoTrigger[];
+  /** Named Hog cuelists / scenes / macros that cues pick from. */
+  hogItems: HogItem[];
 }
 
 // ---------------------------------------------------------------- runtime

@@ -424,9 +424,27 @@ export function makeRoute(name = "Map Route", partial: Partial<RouteComponent> =
 export function defaultIo(): IoSettings {
   return {
     midi: { enabled: false, input: null, output: null, mscDeviceId: 0, mscAuto: true },
-    osc: { enabled: false, listenPort: 9000, targets: [{ id: "osc_hog", name: "Hog 4", host: "192.168.1.10", port: 7001 }], notifyTarget: "osc_hog", notify: false },
+    osc: { enabled: false, listenPort: 9000, targets: [{ id: "osc_hog", name: "Hog 4", host: HOG_DEFAULT_HOST, port: 7001 }], notifyTarget: "osc_hog", notify: false },
     triggers: [],
+    hogItems: defaultHogItems(),
   };
+}
+
+/** The Hog's factory HogNet address (also this venue's console). */
+export const HOG_DEFAULT_HOST = "172.31.0.1";
+
+/** Cuelists on the venue console's playback bar (2026-10-18), as a starting library. */
+export function defaultHogItems(): import("./types").HogItem[] {
+  const lists: [string, string][] = [
+    ["House Light", "205"],
+    ["Haze", "210"],
+    ["Face Up", "341"],
+    ["Crowd", "111"],
+    ["Grid", "199"],
+    ["Moving Heads", "3"],
+    ["Band Red", "81"],
+  ];
+  return lists.map(([name, number]) => ({ id: `hog_${number}`, name, kind: "cuelist", number }));
 }
 
 export const defaultLook = (): import("./types").LookSettings => ({
