@@ -1,5 +1,5 @@
 // Front-of-house calls that ship with the show: recorded in a movie-trailer voice
-// (ElevenLabs "Movie Trailer Voice") and served from /media/announcements.
+// (ElevenLabs "David - The Movie Trailer", laTmoAT4stwoPzthxjZT) and served from /media/announcements.
 
 import type { Announcement, Asset } from "./types";
 
@@ -18,6 +18,13 @@ const CALLS: [id: string, name: string][] = [
 
 export const FOH_ASSETS: Asset[] = CALLS.map(([id, name]) => ({ id: `asset_foh_${id}`, name: `Announcement · ${name}.mp3`, type: "audio", url: `/media/announcements/${id}.mp3`, builtIn: true }));
 
-export const fohAnnouncements = (): Announcement[] => CALLS.map(([id, name]) => ({ id: `ann_foh_${id}`, name, assetId: `asset_foh_${id}`, volume: 1 }));
+/** The call for when things go wrong: pinned to the top and red, so it is found at once. */
+const URGENT = new Set(["technical"]);
+
+export const fohAnnouncements = (): Announcement[] =>
+  CALLS.map(([id, name]) => ({ id: `ann_foh_${id}`, name, assetId: `asset_foh_${id}`, volume: 1, ...(URGENT.has(id) ? { pinned: true, urgent: true } : {}) }));
+
+/** Pins the technical-difficulties call in shows that got the calls before it was pinned. */
+export const FOH_PIN = "foh-pin-technical-1";
 
 export const FOH_CALLS = "foh-calls-1";

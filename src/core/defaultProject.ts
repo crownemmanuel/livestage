@@ -16,7 +16,7 @@ import {
   defaultTimers,
 } from "./factories";
 import type { Asset, Cue, EffectPreset, Project, Scene } from "./types";
-import { FOH_ASSETS, FOH_CALLS, fohAnnouncements } from "./fohCalls";
+import { FOH_ASSETS, FOH_CALLS, FOH_PIN, fohAnnouncements } from "./fohCalls";
 import { EFFECT_DEFS, num } from "./effects";
 import { uid } from "./ids";
 import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "./showScaffold";
@@ -513,7 +513,7 @@ export function defaultProject(): Project {
     name: "Salvation 2026: The House of David",
     scenes: [...prologue, ...show, s1, proof, s2, photoValley, s3].map((x, i) => ({ ...x, number: i + 1 })),
     assets: [...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS, ...FOH_ASSETS],
-    demoAdditions: [LION_PROOF_DEMO, SHEPHERD_PHOTOREAL_DEMO, PROLOGUE_DEMO, "prologue-tweaks-1", SHOW_SCAFFOLD_DEMO, PROLOGUE_FEEL, FOH_CALLS],
+    demoAdditions: [LION_PROOF_DEMO, SHEPHERD_PHOTOREAL_DEMO, PROLOGUE_DEMO, "prologue-tweaks-1", SHOW_SCAFFOLD_DEMO, PROLOGUE_FEEL, FOH_CALLS, FOH_PIN],
     effectPresets: defaultEffectPresets(),
     output: defaultOutput(),
     timers: defaultTimers(),

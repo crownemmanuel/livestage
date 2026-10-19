@@ -26,6 +26,7 @@ import { InfoTip } from "../kit";
 import { TRANSITIONS } from "../show/ShowMode";
 import { MessageFields, defaultMessage } from "../io/MessageFields";
 import { useSceneCodes } from "../SceneList";
+import { AssetPickerButton } from "./AssetLibrary";
 import { FireField } from "./FireField";
 import { flowNext } from "@/core/groups";
 import { formatClock } from "@/core/timers";
@@ -265,7 +266,6 @@ function AfterLastStep({ scene }: { scene: Scene }) {
 }
 
 function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; scene: Scene; scenes: Scene[]; onChange: (a: CueAction) => void; onRemove: () => void }) {
-  const assets = useProject((s) => s.project.assets);
   const timers = useProject((s) => s.project.timers ?? NO_ITEMS);
   const announcements = useProject((s) => s.project.announcements ?? NO_ITEMS);
   const opt = (kinds: string[]) => scene.components.filter((c) => kinds.includes(c.kind)).map((c) => ({ value: c.id, label: c.name }));
@@ -411,7 +411,7 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
     case "sound":
       body = (
         <>
-          {sel(a.assetId ?? "__none__", [{ value: "__none__", label: "— choose audio —" }, ...assets.filter((x) => x.type === "audio").map((x) => ({ value: x.id, label: x.name }))], (v) => onChange({ ...a, assetId: v === "__none__" ? null : v }), "w-[200px]")}
+          <AssetPickerButton types={["audio"]} value={a.assetId} onChange={(v) => onChange({ ...a, assetId: v })} placeholder="Choose a sound…" title="Choose a sound" className="h-6 w-[220px] text-[11px]" />
           {lbl("vol")}
           <NumberInput className="h-6 w-14" value={a.volume} min={0} max={1} step={0.05} onChange={(v) => onChange({ ...a, volume: v })} />
         </>

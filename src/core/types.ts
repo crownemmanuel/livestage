@@ -675,6 +675,10 @@ export interface Announcement {
   /** An audio asset. */
   assetId: string | null;
   volume: number;
+  /** Kept at the top of the Announce tab. */
+  pinned?: boolean;
+  /** Shown in red (for "technical difficulties" and other emergencies). */
+  urgent?: boolean;
 }
 
 /** A timer's live state: counting toward `endsAt` (wall ms), or paused with `remaining` seconds. */

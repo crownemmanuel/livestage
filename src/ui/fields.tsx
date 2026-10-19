@@ -5,8 +5,8 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { InfoTip } from "./kit";
+import { AssetPickerButton } from "./builder/AssetLibrary";
 import type { AssetType, Vec3 } from "@/core/types";
-import { useProject } from "@/store/project";
 
 export function Field({ label, children, className, hint }: { label: string; children: ReactNode; className?: string; hint?: string }) {
   return (
@@ -156,15 +156,12 @@ export function Vec3Field({ label, value, onChange, step = 0.1 }: { label: strin
   );
 }
 
-const NONE = "__none__";
-
+/** A media setting: opens the asset library to choose (thumbnails, search, None). */
 export function AssetField({ label, type, value, onChange }: { label: string; type: AssetType | AssetType[]; value: string | null; onChange: (id: string | null) => void }) {
   const types = Array.isArray(type) ? type : [type];
-  const assets = useProject((s) => s.project.assets).filter((a) => types.includes(a.type));
-  const options = [{ value: NONE, label: "— none —" }, ...assets.map((a) => ({ value: a.id, label: a.name + (a.ephemeral ? " (session only)" : "") }))];
   return (
     <Field label={label}>
-      <SelectBox value={value && assets.some((a) => a.id === value) ? value : NONE} onChange={(v) => onChange(v === NONE ? null : v)} options={options} />
+      <AssetPickerButton types={types} value={value} onChange={onChange} title={`Choose ${label.toLowerCase()}`} />
     </Field>
   );
 }

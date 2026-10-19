@@ -29,8 +29,8 @@ export interface Voice {
 
 /** Deep trailer voices from the ElevenLabs library that suit house calls. */
 export const TRAILER_VOICES: Voice[] = [
-  { id: "9GVWvaD23xXLseHJlxy8", name: "Movie Trailer Voice", note: "the classic trailer read (used for the built-in calls)" },
-  { id: "laTmoAT4stwoPzthxjZT", name: "David · The Movie Trailer", note: "deep, American" },
+  { id: "laTmoAT4stwoPzthxjZT", name: "David · The Movie Trailer", note: "the show's announcer (built-in calls)" },
+  { id: "9GVWvaD23xXLseHJlxy8", name: "Movie Trailer Voice", note: "the classic trailer read" },
   { id: "JJCR1UICgHnHljtvu5uF", name: "Don · Epic trailer & documentary", note: "deep, powerful" },
   { id: "mq6RH3bgBY9BDzvWeMZk", name: "Flavio · Deep & authoritative", note: "calm, gravelly" },
   { id: "NgBYGKDDq2Z8Hnhatgma", name: "Atlas Pro · Deep narrator", note: "warm, clear" },

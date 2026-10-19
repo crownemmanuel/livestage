@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AudioLines, Box, Film, Image as ImageIcon, Maximize2, Search, Trash2, Upload, X } from "lucide-react";
+import { AudioLines, Box, Check, ChevronDown, Film, Image as ImageIcon, Maximize2, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -111,8 +111,19 @@ const FILTERS: { value: AssetType | "all"; label: string }[] = [
   { value: "model", label: "3D models" },
 ];
 
-/** The library large: a searchable grid of thumbnails; videos play while hovered. */
-function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+/** Choosing media for a field: which kinds fit, what is chosen now, and where the choice goes. */
+export interface AssetPick {
+  types: AssetType[];
+  value: string | null;
+  onPick: (id: string | null) => void;
+  title?: string;
+}
+
+/**
+ * The library large: a searchable grid of thumbnails; videos play while hovered. With `pick`
+ * it is a chooser: only fitting kinds show, a click picks and closes, "None" clears.
+ */
+export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOpenChange: (o: boolean) => void; pick?: AssetPick }) {
   const assets = useProject((s) => s.project.assets);
   const used = useUsedAssets();
   const [busy, doImport] = useImport();
@@ -120,14 +131,20 @@ function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
   const [type, setType] = useState<AssetType | "all">("all");
   const [unusedOnly, setUnusedOnly] = useState(false);
   const query = q.trim().toLowerCase();
-  const shown = assets.filter((a) => (type === "all" || a.type === type) && (!query || a.name.toLowerCase().includes(query)) && (!unusedOnly || !used.has(a.id)));
+  const allowed = (a: Asset) => !pick || pick.types.includes(a.type);
+  const shown = assets.filter((a) => allowed(a) && (type === "all" || a.type === type) && (!query || a.name.toLowerCase().includes(query)) && (!unusedOnly || !used.has(a.id)));
+  const filters = pick ? FILTERS.filter((f) => f.value === "all" || pick.types.includes(f.value)) : FILTERS;
+  const choose = (id: string | null) => {
+    pick?.onPick(id);
+    onOpenChange(false);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[84vh] flex-col sm:max-w-[min(1200px,94vw)]">
         <DialogHeader>
-          <DialogTitle>Asset library</DialogTitle>
-          <DialogDescription>Every picture, video, sound and model in the show. Hover a video to play it.</DialogDescription>
+          <DialogTitle>{pick ? (pick.title ?? "Choose media") : "Asset library"}</DialogTitle>
+          <DialogDescription>{pick ? "Click to choose. Hover a video to play it." : "Every picture, video, sound and model in the show. Hover a video to play it."}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex h-8 w-[260px] items-center gap-2 rounded-md border border-border bg-well px-2 text-muted-foreground focus-within:border-ring">
@@ -140,7 +157,7 @@ function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
             )}
           </label>
           <div className="flex gap-1">
-            {FILTERS.map((f) => (
+            {filters.length > 2 && filters.map((f) => (
               <Button key={f.value} size="xs" variant={type === f.value ? "secondary" : "ghost"} className="h-7" onClick={() => setType(f.value)}>
                 {f.label}
               </Button>
@@ -150,7 +167,12 @@ function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
             Not used yet
           </Button>
           <span className="text-[11.5px] text-muted-foreground">{shown.length} shown</span>
-          <Button size="sm" variant="outline" className="ml-auto" disabled={busy} onClick={() => void doImport()}>
+          {pick && (
+            <Button size="sm" variant="ghost" className="ml-auto" onClick={() => choose(null)}>
+              <X /> None
+            </Button>
+          )}
+          <Button size="sm" variant="outline" className={pick ? "" : "ml-auto"} disabled={busy} onClick={() => void doImport()}>
             <Upload /> {busy ? "Importing…" : "Import"}
           </Button>
         </div>
@@ -160,7 +182,11 @@ function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
               const Icon = TYPE_ICON[a.type];
               const isUsed = used.has(a.id);
               return (
-                <div key={a.id} className="group overflow-hidden rounded-lg border border-border bg-card/50">
+                <div
+                  key={a.id}
+                  className={cn("group overflow-hidden rounded-lg border bg-card/50", pick ? "cursor-pointer hover:border-preview/70" : "", pick?.value === a.id ? "border-preview ring-2 ring-preview/60" : "border-border")}
+                  onClick={pick ? () => choose(a.id) : undefined}
+                >
                   <AssetThumb asset={a} className="aspect-video w-full rounded-none" playOnHover />
                   <div className="flex items-start gap-1.5 p-2">
                     <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
@@ -174,7 +200,8 @@ function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
                         {a.ephemeral && <span className="text-armed">· until reload</span>}
                       </div>
                     </div>
-                    {!isUsed && !a.builtIn && (
+                    {pick?.value === a.id && <Check className="mt-0.5 size-4 shrink-0 text-preview" />}
+                    {!pick && !isUsed && !a.builtIn && (
                       <Button size="icon-xs" variant="ghost" className="opacity-0 hover:text-destructive group-hover:opacity-100" aria-label="Remove asset" title="Remove from the library" onClick={() => useProject.getState().removeAsset(a.id)}>
                         <Trash2 />
                       </Button>
@@ -188,5 +215,25 @@ function AssetBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
         </ScrollArea>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A media field: shows the chosen asset's thumbnail and name; click opens the library to choose. */
+export function AssetPickerButton({ types, value, onChange, placeholder = "Choose media…", className, title }: { types: AssetType[]; value: string | null; onChange: (id: string | null) => void; placeholder?: string; className?: string; title?: string }) {
+  const asset = useProject((s) => (value ? s.project.assets.find((a) => a.id === value) : undefined));
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cn("flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-transparent px-1.5 text-left text-[12px] hover:bg-accent/40", className)}
+      >
+        {asset ? <AssetThumb asset={asset} className="h-6 w-10" /> : <span className="grid h-6 w-10 place-items-center rounded bg-black/40 text-muted-foreground">{types.length === 1 ? (() => { const I = TYPE_ICON[types[0]]; return <I className="size-3.5" />; })() : <Film className="size-3.5" />}</span>}
+        <span className={cn("min-w-0 flex-1 truncate", !asset && "text-muted-foreground")}>{asset ? asset.name : value ? "missing asset" : placeholder}</span>
+        <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+      </button>
+      <AssetBrowser open={open} onOpenChange={setOpen} pick={{ types, value, onPick: onChange, title }} />
+    </>
   );
 }

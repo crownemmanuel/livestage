@@ -2,7 +2,7 @@
 // anything on the wall (standby, any scene) and are also reachable from cues.
 
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, Megaphone, Minus, MonitorUp, Palette, Pause, Pencil, Play, Plus, RotateCcw, Square, Timer, Trash2, Upload, Wand2 } from "lucide-react";
+import { KeyRound, Loader2, Megaphone, Minus, MonitorUp, Palette, Pause, Pencil, Pin, Play, Plus, RotateCcw, Square, Timer, Trash2, TriangleAlert, Upload, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -107,7 +107,7 @@ export function AnnouncementsPanel() {
         </p>
       )}
       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-        {list.map((a) => (
+        {[...list.filter((a) => a.pinned), ...list.filter((a) => !a.pinned)].map((a) => (
           <AnnouncementCard key={a.id} a={a} editing={editing} audio={audio} upd={upd} />
         ))}
       </div>
@@ -136,7 +136,13 @@ function AnnouncementCard({ a, editing, audio, upd }: { a: Announcement; editing
         <div className="flex items-center gap-1.5">
           <span className="text-muted-foreground">Volume</span>
           <NumberInput className="h-7 w-16" value={a.volume} min={0} max={2} step={0.05} onChange={(v) => set((x) => (x.volume = v))} />
-          <Button size="icon-xs" variant="ghost" className="ml-auto hover:text-destructive" aria-label="Delete announcement" onClick={() => upd((l) => l.splice(l.findIndex((y) => y.id === a.id), 1))}>
+          <Button size="icon-xs" variant={a.pinned ? "secondary" : "ghost"} className="ml-auto" title={a.pinned ? "Unpin" : "Pin to the top"} aria-label="Pin" onClick={() => set((x) => (x.pinned = !x.pinned))}>
+            <Pin />
+          </Button>
+          <Button size="icon-xs" variant={a.urgent ? "secondary" : "ghost"} className={a.urgent ? "text-live" : ""} title={a.urgent ? "Not urgent" : "Mark urgent (red)"} aria-label="Urgent" onClick={() => set((x) => (x.urgent = !x.urgent))}>
+            <TriangleAlert />
+          </Button>
+          <Button size="icon-xs" variant="ghost" className="hover:text-destructive" aria-label="Delete announcement" onClick={() => upd((l) => l.splice(l.findIndex((y) => y.id === a.id), 1))}>
             <Trash2 />
           </Button>
         </div>
@@ -145,7 +151,7 @@ function AnnouncementCard({ a, editing, audio, upd }: { a: Announcement; editing
   }
 
   return (
-    <div className={cn("relative overflow-hidden rounded-lg border transition-colors", isOn ? "border-armed/70 bg-armed/10" : "border-border bg-card/60 hover:bg-card")}>
+    <div className={cn("relative overflow-hidden rounded-lg border transition-colors", isOn ? "border-armed/70 bg-armed/10" : a.urgent ? "border-live/60 bg-live/10 hover:bg-live/15" : "border-border bg-card/60 hover:bg-card")}>
       {isOn && dur > 0 && <div className="absolute inset-y-0 left-0 bg-armed/15" style={{ width: `${Math.min(100, (elapsed / dur) * 100)}%` }} />}
       <div className="relative flex items-center gap-2 p-2">
         <button
@@ -153,12 +159,15 @@ function AnnouncementCard({ a, editing, audio, upd }: { a: Announcement; editing
           disabled={!asset}
           onClick={() => playAnnouncement(a.id)}
           title={asset ? `Play “${a.name}” now` : "Pick an audio file (edit)"}
-          className={cn("grid size-10 shrink-0 place-items-center rounded-lg", isOn ? "bg-armed text-black" : "bg-accent text-foreground hover:bg-accent/70", !asset && "opacity-40")}
+          className={cn("grid size-10 shrink-0 place-items-center rounded-lg", isOn ? "bg-armed text-black" : a.urgent ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70", !asset && "opacity-40")}
         >
-          <Megaphone className="size-4.5" />
+          {a.urgent ? <TriangleAlert className="size-4.5" /> : <Megaphone className="size-4.5" />}
         </button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold">{a.name}</div>
+          <div className={cn("flex items-center gap-1 truncate text-[13px] font-semibold", a.urgent && "text-live")}>
+            {a.pinned && <Pin className="size-3 shrink-0 opacity-70" />}
+            <span className="truncate">{a.name}</span>
+          </div>
           <div className="text-[11px] tabular text-muted-foreground">
             {!asset ? "no audio" : isOn ? `${formatClock(elapsed)} / ${formatClock(dur)}` : dur ? formatClock(dur) : "…"}
             {a.volume !== 1 && ` · vol ${Math.round(a.volume * 100)}%`}
