@@ -1,0 +1,51 @@
+[
+  {
+    "created_at": "2026-10-19T12:00:32.993791Z",
+    "display_name": "Seedance 2.5",
+    "id": "5a4d2c47-ed03-4fd3-b928-98bf6f914b52",
+    "job_type": "seedance_2_5",
+    "min_result_url": null,
+    "params": {
+      "aspect_ratio": "21:9",
+      "bitrate_mode": "standard",
+      "draft": false,
+      "draft_job_id": null,
+      "duration": 5,
+      "extension_mode": null,
+      "generate_audio": false,
+      "genre": "auto",
+      "height": 384,
+      "medias": [
+        {
+          "data": {
+            "id": "310bc5e2-51e8-46bf-90c7-9bd67d8f871c",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/310bc5e2-51e8-46bf-90c7-9bd67d8f871c_resize.jpg"
+          },
+          "role": "start_image"
+        },
+        {
+          "data": {
+            "id": "acf86dce-3469-43f2-bf64-5b5fd5689c4b",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/acf86dce-3469-43f2-bf64-5b5fd5689c4b_resize.jpg"
+          },
+          "role": "end_image"
+        }
+      ],
+      "model": "default",
+      "multi_prompt": [],
+      "multi_shot_mode": "custom",
+      "multi_shots": false,
+      "prompt": "The flipping pages slow down and settle open on a glowing painted picture of Bethlehem; the light from the page brightens and the camera glides forward and down toward the open book, the painted page filling more and more of the frame. Keep the 2D hand-drawn storybook animation style of the frames throughout (ink outlines, cel shading, painted textures); it never turns photographic.\nThe frame is letterboxed: solid black bars stay fixed across the top and bottom for the whole clip and nothing ever enters them; all the picture and all the motion stay inside the wide strip in the middle. Smooth, continuous single camera move, no cuts, no text.",
+      "prompt_language": "en",
+      "reference_elements": [],
+      "resolution": "480p",
+      "speedramp": "auto",
+      "width": 896
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120032_5a4d2c47-ed03-4fd3-b928-98bf6f914b52.mp4",
+    "status": "completed",
+    "thumbnail_url": "https://cdn.higgsfield.ai/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120032_5a4d2c47-ed03-4fd3-b928-98bf6f914b52_thumbnail.webp"
+  }
+]

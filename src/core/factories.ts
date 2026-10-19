@@ -208,12 +208,13 @@ export function makeCue(name: string, actions: Cue["actions"] = []): Cue {
 
 export function defaultOutput(): OutputSettings {
   return {
-    canvasWidth: 3840,
-    canvasHeight: 1080,
+    // The show's LED wall: 3072 × 768 (4:1).
+    canvasWidth: 3072,
+    canvasHeight: 768,
     monitorName: null,
     fullscreen: true,
     windowWidth: 1280,
-    windowHeight: 360,
+    windowHeight: 320,
     scaling: "fit",
     targetFps: 60,
     backgroundColor: "#000000",

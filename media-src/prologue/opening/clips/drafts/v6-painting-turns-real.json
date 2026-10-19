@@ -1,0 +1,51 @@
+[
+  {
+    "created_at": "2026-10-19T11:40:18.810092Z",
+    "display_name": "Seedance 2.5",
+    "id": "091a1510-09cf-4ed7-84ee-5c2982332496",
+    "job_type": "seedance_2_5",
+    "min_result_url": null,
+    "params": {
+      "aspect_ratio": "21:9",
+      "bitrate_mode": "standard",
+      "draft": false,
+      "draft_job_id": null,
+      "duration": 4,
+      "extension_mode": null,
+      "generate_audio": false,
+      "genre": "auto",
+      "height": 384,
+      "medias": [
+        {
+          "data": {
+            "id": "47713adc-4227-45e4-8fba-97e576136e25",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/47713adc-4227-45e4-8fba-97e576136e25_resize.jpg"
+          },
+          "role": "start_image"
+        },
+        {
+          "data": {
+            "id": "c0fc7191-ed8c-42e0-a0d8-9f661a30c512",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/c0fc7191-ed8c-42e0-a0d8-9f661a30c512_resize.jpg"
+          },
+          "role": "end_image"
+        }
+      ],
+      "model": "default",
+      "multi_prompt": [],
+      "multi_shot_mode": "custom",
+      "multi_shots": false,
+      "prompt": "Transformation: the camera holds almost still on the pasture at sunrise while the hand-drawn painting turns real. The ink outlines and paint strokes dissolve away from the edges inward, light, depth and real textures flow in, and the picture becomes a real photographic landscape, exactly the last frame. Grass sways gently, sheep graze. No people.\nThe frame is letterboxed: solid black bars stay fixed across the top and bottom for the whole clip and nothing ever enters them; all the picture and all the motion stay inside the wide strip in the middle. Smooth, continuous single camera move, no cuts, no text.",
+      "prompt_language": "en",
+      "reference_elements": [],
+      "resolution": "480p",
+      "speedramp": "auto",
+      "width": 896
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_114018_091a1510-09cf-4ed7-84ee-5c2982332496.mp4",
+    "status": "completed",
+    "thumbnail_url": "https://cdn.higgsfield.ai/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_114018_091a1510-09cf-4ed7-84ee-5c2982332496_thumbnail.webp"
+  }
+]

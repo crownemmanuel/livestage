@@ -10,6 +10,7 @@ import { AssetField, ColorField, Field, NumberInput, Section, SelectBox, SelectF
 
 const PRESETS: [number, number][] = [
   [1920, 1080],
+  [3072, 768],
   [3840, 2160],
   [3840, 1080],
   [4096, 1024],

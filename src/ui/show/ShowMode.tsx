@@ -174,12 +174,25 @@ function Monitors() {
           </MonitorHeader>
           <div className="on-air-frame relative w-full overflow-hidden rounded-md" style={{ aspectRatio: aspect, maxHeight: "36vh" }}>
             <StageView source="program" maxDpr={1.25} showSafeArea />
+            <HeldBadge />
           </div>
+          <Timeline target="program" editable={false} />
           <LiveNextCue />
         </div>
       </div>
       <TakeBar />
     </div>
+  );
+}
+
+/** Over the PROGRAM monitor while the live scene is held, so a hold is never forgotten. */
+function HeldBadge() {
+  const held = useShow((s) => !s.program.standby && s.program.runtime?.clock.pausedAt != null);
+  if (!held) return null;
+  return (
+    <span className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded bg-armed px-1.5 py-0.5 font-key text-[12px] font-bold text-black shadow">
+      <Pause className="size-3 fill-current" /> HELD
+    </span>
   );
 }
 
@@ -547,6 +560,7 @@ function StatusBar() {
             <b>G</b> <span>GO next cue</span>
             <b>⌘ ↵</b> <span>Take the preview live</span>
             <b>⇧ B</b> <span>Blackout on / off</span>
+            <b>P</b> <span>Hold / resume the selected scene (the live wall when it is live)</span>
             <b>Esc</b> <span>Cancel waiting delayed actions</span>
             <b>↑ ↓</b> <span>Previous / next scene in the preview</span>
           </span>

@@ -1,0 +1,48 @@
+[
+  {
+    "created_at": "2026-10-19T06:27:01.110658Z",
+    "display_name": "GPT Image 2.5",
+    "id": "cbb028bc-3828-4763-ae47-b7e0c55ce959",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_062701_cbb028bc-3828-4763-ae47-b7e0c55ce959_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 576,
+      "medias": [
+        {
+          "data": {
+            "id": "0fccb0bd-e4f1-4b13-ae1b-a96ca27c5c16",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/0fccb0bd-e4f1-4b13-ae1b-a96ca27c5c16.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "d27476d0-ddf6-46e8-93b3-4a9ee6d15eb6",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/d27476d0-ddf6-46e8-93b3-4a9ee6d15eb6.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "5efb354d-6075-43d2-8c7a-254be0b9807d",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/5efb354d-6075-43d2-8c7a-254be0b9807d.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "A close view looking down into the open book from the first reference image: the pages have settled, and the double-page spread is a glowing illustration of the dawn town square of Bethlehem from the second reference image (the family of Jesse outside their house, young David leading the sheep out toward the hills), painted right onto the parchment pages. Golden light rises out of the painted page as if the picture is alive and opening into a real world; motes of light drift up; the gilded page edges and the dark room are just visible around the frame. Inviting the viewer to fall into the page. No readable text.\nSTYLE (most important): a 2D hand-drawn illustration in exactly the style of the style reference image (the prophet anointing the kneeling young man): a frame from a hand-drawn epic animated feature film. Confident dark-brown ink outlines around every shape — buildings, stones, trees, pots, figures; simplified, stylised forms; cel-style shading with flat colour areas and soft painted gradients; visible gouache brush texture and a faint warm paper grain; stylised swirling clouds and graphic light rays; warm honey-gold and amber against deep lapis blue. It must clearly read as a drawing and a painting, NOT as a photograph or a 3D render: no photographic detail, no realistic textures, no depth-of-field blur, no lens effects.\nFormat: an ultra-wide letterboxed cinema frame. Solid pure-black bars fill the top 21% and the bottom 21% of the image edge to edge; the picture exists only in the 4:1 panoramic strip between them, and the whole subject, including its top and bottom edges, fits completely inside that strip with a little breathing room. Nothing crosses into the black bars.",
+      "quality": "low",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "1k",
+      "width": 1344
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_062701_cbb028bc-3828-4763-ae47-b7e0c55ce959.png",
+    "status": "completed"
+  }
+]

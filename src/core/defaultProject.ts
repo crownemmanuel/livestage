@@ -434,7 +434,7 @@ function prologueElah(): Scene {
     anchorY,
     matted: true,
     muted: true,
-    // Feet on the bottom of a 32:9 wall, helmet at the top: he fills the frame.
+    // Feet on the bottom of the wall, helmet at the top: he fills the frame (tuned on a 32:9 wall; check on the 4:1 wall).
     layout: { ...defaultActorLayout(), scale: 0.73, x: 0, y: -0.08, pivotX: 0.565, pivotY: 0.9, depthLink: false, horizonY: 0.4, shadow: 0.35 },
   });
   const stone = makeEffect("projectile", {

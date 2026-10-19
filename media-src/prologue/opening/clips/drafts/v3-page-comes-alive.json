@@ -1,0 +1,51 @@
+[
+  {
+    "created_at": "2026-10-19T12:00:32.327198Z",
+    "display_name": "Seedance 2.5",
+    "id": "babbcd9a-941a-4e82-bfc6-431d262d1cc7",
+    "job_type": "seedance_2_5",
+    "min_result_url": null,
+    "params": {
+      "aspect_ratio": "21:9",
+      "bitrate_mode": "standard",
+      "draft": false,
+      "draft_job_id": null,
+      "duration": 5,
+      "extension_mode": null,
+      "generate_audio": false,
+      "genre": "auto",
+      "height": 384,
+      "medias": [
+        {
+          "data": {
+            "id": "95bf2188-e810-4f35-8485-f832d49aeef9",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/95bf2188-e810-4f35-8485-f832d49aeef9_resize.jpg"
+          },
+          "role": "start_image"
+        },
+        {
+          "data": {
+            "id": "5783dcb8-89b7-4672-8d63-7c5136e373cb",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/5783dcb8-89b7-4672-8d63-7c5136e373cb_resize.jpg"
+          },
+          "role": "end_image"
+        }
+      ],
+      "model": "default",
+      "multi_prompt": [],
+      "multi_shot_mode": "custom",
+      "multi_shots": false,
+      "prompt": "The camera dives into the painted page: the edges of the book slide out of frame and the picture on the page becomes a living world, the family square of Bethlehem at dawn. The sun rises, the brothers start to move about their morning, father Jesse steps in his doorway, young David walks with his staff and the sheep. Keep the 2D hand-drawn storybook animation style of the frames throughout (ink outlines, cel shading, painted textures); it never turns photographic.\nThe frame is letterboxed: solid black bars stay fixed across the top and bottom for the whole clip and nothing ever enters them; all the picture and all the motion stay inside the wide strip in the middle. Smooth, continuous single camera move, no cuts, no text.",
+      "prompt_language": "en",
+      "reference_elements": [],
+      "resolution": "480p",
+      "speedramp": "auto",
+      "width": 896
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120032_babbcd9a-941a-4e82-bfc6-431d262d1cc7.mp4",
+    "status": "completed",
+    "thumbnail_url": "https://cdn.higgsfield.ai/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120032_babbcd9a-941a-4e82-bfc6-431d262d1cc7_thumbnail.webp"
+  }
+]

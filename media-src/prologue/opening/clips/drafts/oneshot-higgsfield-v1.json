@@ -1,0 +1,83 @@
+[
+  {
+    "created_at": "2026-10-19T12:07:22.699608Z",
+    "display_name": "Seedance 2.5",
+    "id": "37b80cf2-7743-4000-8276-ffed2458c9a8",
+    "job_type": "seedance_2_5",
+    "min_result_url": null,
+    "params": {
+      "aspect_ratio": "21:9",
+      "bitrate_mode": "standard",
+      "draft": false,
+      "draft_job_id": null,
+      "duration": 30,
+      "extension_mode": null,
+      "generate_audio": false,
+      "genre": "auto",
+      "height": 384,
+      "medias": [
+        {
+          "data": {
+            "id": "6987f0bc-6b09-4cb1-bbb0-ffa6ca57ca35",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/6987f0bc-6b09-4cb1-bbb0-ffa6ca57ca35_resize.jpg"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "e3e61440-7c6e-4dac-a722-99de3d51ccc6",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/e3e61440-7c6e-4dac-a722-99de3d51ccc6_resize.jpg"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "78f45520-ead1-402c-a212-edb629ba5aad",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/78f45520-ead1-402c-a212-edb629ba5aad_resize.jpg"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "e2d4a1f0-2548-4101-b425-6886755b4e7e",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/e2d4a1f0-2548-4101-b425-6886755b4e7e_resize.jpg"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "8516d656-401c-437d-af90-d4e4dc48af5e",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/8516d656-401c-437d-af90-d4e4dc48af5e_resize.jpg"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "9d4eae36-b725-432b-931e-03af8543a526",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/9d4eae36-b725-432b-931e-03af8543a526_resize.jpg"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "default",
+      "multi_prompt": [],
+      "multi_shot_mode": "custom",
+      "multi_shots": false,
+      "prompt": "One continuous 30-second camera take, no cuts, in the 2D hand-drawn storybook animation style of the reference images (ink outlines, cel shading, painted textures, warm golden light). The reference images show, in order, the places the camera passes through.\n\n0–5 s: In a dark room lit by an oil lamp, the camera slowly pushes in across a wooden table toward a closed leather Holy Bible with gold lettering (reference 1). Dust motes drift in the lamplight.\n5–10 s: The cover swings open by itself and the pages flip faster and faster as warm golden light pours up out of the book (reference 2).\n10–14 s: The pages settle on a glowing painting of Bethlehem at dawn (reference 3) and the camera dives down into the page; the edges of the book slide away.\n14–18 s: The painting comes alive as a real place: the town square outside Jesse's house (reference 4). Old Jesse, a Black grey-bearded father, stands in his doorway; his seven tall older sons, Black young men, go about their morning; the youngest, David, a Black shepherd boy in a cream tunic and red sash with a staff, leads the sheep out of the square.\n18–24 s: FPV drone shot: the camera swoops past David and races low and fast through the village, weaving between limestone houses, along narrow lanes, under a vine pergola, past glowing lanterns and clay jars, skimming over the flat rooftops.\n24–27 s: The drone pulls up and climbs high above Bethlehem, revealing the whole hill town and the valley at sunrise (reference 5), birds wheeling below.\n27–30 s: It glides forward and down across the valley, over olive groves and stone walls, and settles at eye level on the golden pasture under the great olive tree with the flock grazing (reference 6).\n\nThe frame is letterboxed like the reference images: solid black bars stay fixed across the top and bottom for the whole clip and nothing enters them; all the picture and motion stay inside the wide strip in the middle. No text, no captions.",
+      "prompt_language": "en",
+      "reference_elements": [],
+      "resolution": "480p",
+      "speedramp": "auto",
+      "width": 896
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120722_37b80cf2-7743-4000-8276-ffed2458c9a8.mp4",
+    "status": "completed",
+    "thumbnail_url": "https://cdn.higgsfield.ai/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120722_37b80cf2-7743-4000-8276-ffed2458c9a8_thumbnail.webp"
+  }
+]

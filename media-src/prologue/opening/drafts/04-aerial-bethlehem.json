@@ -1,0 +1,40 @@
+[
+  {
+    "created_at": "2026-10-19T06:26:24.429875Z",
+    "display_name": "GPT Image 2.5",
+    "id": "c1fef155-aafd-4a50-b01d-486bb3f53b08",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_062624_c1fef155-aafd-4a50-b01d-486bb3f53b08_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 576,
+      "medias": [
+        {
+          "data": {
+            "id": "c082c103-7569-48e5-95ae-4eab64699fdf",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/c082c103-7569-48e5-95ae-4eab64699fdf.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "1757a803-b49e-4143-a93f-66ef76f23614",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/1757a803-b49e-4143-a93f-66ef76f23614.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "Drone shot, high above Bethlehem at sunrise: the camera has risen out of the little hill town (the town and the family square from the first reference image are now below and behind, flat roofs and lanterns, at the right) and looks out over the hills. Along a winding dirt road leading out of town toward the golden shepherds' pastures on the left, the small figure of young David (a Black shepherd boy with dark brown skin, cream tunic and muted red sash, staff in hand) leads his little flock of sheep, tiny from this height. Terraced slopes, olive groves, dark cypress trees, low stone walls, morning mist in the valleys, layered blue hills to the horizon, the sun rising with long golden rays and glowing clouds, birds circling below the camera. Vast, peaceful, epic.\nSTYLE (most important): a 2D hand-drawn illustration in exactly the style of the style reference image (the prophet anointing the kneeling young man): a frame from a hand-drawn epic animated feature film. Confident dark-brown ink outlines around every shape — buildings, stones, trees, pots, figures; simplified, stylised forms; cel-style shading with flat colour areas and soft painted gradients; visible gouache brush texture and a faint warm paper grain; stylised swirling clouds and graphic light rays; warm honey-gold and amber against deep lapis blue. It must clearly read as a drawing and a painting, NOT as a photograph or a 3D render: no photographic detail, no realistic textures, no depth-of-field blur, no lens effects.\nFraming: this picture will be shown on an ultra-wide 4:1 LED wall, cropped to a 4:1 strip through the middle of the image. Keep the whole subject and every important detail inside the central horizontal band (the middle 55% of the height). The top and bottom fifth of the image must hold only simple, uneventful sky, darkness, tabletop or ground that can be cut away. Spread the scene wide rather than tall.",
+      "quality": "low",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "1k",
+      "width": 1344
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_062624_c1fef155-aafd-4a50-b01d-486bb3f53b08.png",
+    "status": "completed"
+  }
+]

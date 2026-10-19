@@ -1,0 +1,40 @@
+[
+  {
+    "created_at": "2026-10-19T06:01:21.057422Z",
+    "display_name": "GPT Image 2.5",
+    "id": "7472cae0-ab61-452e-ad4b-9eb1b4d660c4",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_060121_7472cae0-ab61-452e-ad4b-9eb1b4d660c4_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 576,
+      "medias": [
+        {
+          "data": {
+            "id": "00ccc0a6-2c95-444f-9d09-d4eaa119bad5",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/00ccc0a6-2c95-444f-9d09-d4eaa119bad5.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "f34d96d7-dcb2-4148-8e22-9a7e74cef303",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/f34d96d7-dcb2-4148-8e22-9a7e74cef303.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "The same book, table and oil lamp as the first reference image, same camera angle but a little closer: the cover has swung open and the pages are flipping by themselves as if in a breeze, a fan of turning parchment pages lifting upward, and brilliant golden light pours up out of the open book, rays and sparkling motes streaming into the dark room and lighting the undersides of the pages. Wonder: the story is about to begin. No readable text on the pages.\nStyle: hand-painted epic storybook illustration matching the style reference exactly — rich painterly gouache-and-oil brushwork with visible strokes, fine dark ink linework on figures and edges, subtle parchment paper grain, warm golden-hour glow, honey gold, amber, ochre and crimson with lapis-blue accents, luminous sunlit clouds; the feel of an epic hand-drawn animated feature and a treasured children's Bible come to life. Cinematic 21:9 widescreen composition. No borders, no watermark, no captions.",
+      "quality": "low",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "1k",
+      "width": 1344
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_060121_7472cae0-ab61-452e-ad4b-9eb1b4d660c4.png",
+    "status": "completed"
+  }
+]

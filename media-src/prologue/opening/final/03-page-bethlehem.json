@@ -1,0 +1,40 @@
+[
+  {
+    "created_at": "2026-10-19T11:37:38.26738Z",
+    "display_name": "GPT Image 2.5",
+    "id": "4a39e981-97d1-4010-b5e0-8a36dbb7abe5",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_113738_4a39e981-97d1-4010-b5e0-8a36dbb7abe5_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 1648,
+      "medias": [
+        {
+          "data": {
+            "id": "dbc4759c-c982-443a-a7ec-ff5e27c82585",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/dbc4759c-c982-443a-a7ec-ff5e27c82585.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "4166ef04-191d-44c3-88c9-ee39bdb52db6",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/4166ef04-191d-44c3-88c9-ee39bdb52db6.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "Re-render the first reference image at full detail and quality: keep exactly the same composition, framing, characters, poses, colours and lighting; only add finer line work, brush texture and detail. Use the last reference image for the drawing style.\nA close view looking down into the open book from the first reference image: the pages have settled, and the double-page spread is a glowing illustration of the dawn town square of Bethlehem from the second reference image (the family of Jesse outside their house, young David leading the sheep out toward the hills), painted right onto the parchment pages. Golden light rises out of the painted page as if the picture is alive and opening into a real world; motes of light drift up; the gilded page edges and the dark room are just visible around the frame. Inviting the viewer to fall into the page. No readable text.\nSTYLE (most important): a 2D hand-drawn illustration in exactly the style of the style reference image (the prophet anointing the kneeling young man): a frame from a hand-drawn epic animated feature film. Confident dark-brown ink outlines around every shape — buildings, stones, trees, pots, figures; simplified, stylised forms; cel-style shading with flat colour areas and soft painted gradients; visible gouache brush texture and a faint warm paper grain; stylised swirling clouds and graphic light rays; warm honey-gold and amber against deep lapis blue. It must clearly read as a drawing and a painting, NOT as a photograph or a 3D render: no photographic detail, no realistic textures, no depth-of-field blur, no lens effects.\nFormat: an ultra-wide letterboxed cinema frame. Solid pure-black bars fill the top 21% and the bottom 21% of the image edge to edge; the picture exists only in the 4:1 panoramic strip between them, and the whole subject, including its top and bottom edges, fits completely inside that strip with a little breathing room. Nothing crosses into the black bars.",
+      "quality": "high",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "4k",
+      "width": 3840
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_113738_4a39e981-97d1-4010-b5e0-8a36dbb7abe5.png",
+    "status": "completed"
+  }
+]

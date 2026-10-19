@@ -4,6 +4,7 @@
 
 import { isTauri, windowRole } from "./platform";
 import type { ActorPoses, Asset, OutputSettings, ProgramState } from "./types";
+import type { VideoSyncStat } from "@/render/layers/video";
 
 export interface OutputStatus {
   fps: number;
@@ -12,6 +13,8 @@ export interface OutputStatus {
   dpr: number;
   fullscreen: boolean;
   frameMs: number;
+  /** Sync diagnostics of each playing video in the last second (seeks, rate changes, drift). */
+  video?: VideoSyncStat[];
 }
 
 export type BusMessage =

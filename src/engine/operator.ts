@@ -181,7 +181,9 @@ export function fireCue(target: Target, index: number, auto = false) {
 function pollTimedCues(target: Target, rt: SceneRuntime, wall: number) {
   const t = sceneNow(rt, wall) / 1000;
   rt.scene.cues.forEach((c, i) => {
-    if (c.fire?.mode === "time" && t >= c.fire.at && !rt.fired?.includes(c.id)) fireCue(target, i, true);
+    // A seek counts as passing everything up to where it reached: a cue jumped over waits for GO.
+    const passed = (rt.clock.reached ?? -1) / 1000;
+    if (c.fire?.mode === "time" && t >= c.fire.at && c.fire.at > passed && !rt.fired?.includes(c.id)) fireCue(target, i, true);
   });
 }
 
@@ -386,32 +388,75 @@ export function describeIoAction(a: IoAction): string {
 }
 
 // ---------------------------------------------------------------- media markers
+//
+// Markers fire only during normal playback, for media time actually played past for the first
+// time in this run of the scene. Scrubbing (seek, clip.seek) is a jump: markers in the stretch
+// jumped across do not fire, and after scrubbing back, markers already passed do not fire again
+// on the replay. Holding (freeze) fires nothing. The "already passed" point is stored in the
+// runtime (clock.reached, a clip segment's skip), so a reload of the operator window agrees.
+// Natural loops and fresh starts (new clip, layer restart, background change) fire again.
 
-/** Remembered playback position per media component, to detect marker crossings. */
-const markerPos = new Map<string, { clipId: string | null; t: number }>();
+/** Scene time (ms) of the previous marker poll, per target, for the run it belongs to. */
+const lastPoll: Record<Target, { key: string; t: number } | null> = { program: null, preview: null };
 
-function fireMarkers(fire: (m: MediaMarker) => void, markers: MediaMarker[] | undefined, key: string, clipId: string | null, t: number, duration: number, loop: boolean) {
-  if (!markers?.length) {
-    markerPos.set(key, { clipId, t });
-    return;
+/** After a reload, look back this far for markers (the first frames of a fresh clip still fire). */
+const CATCH_UP_MS = 500;
+
+interface HostState {
+  /** Identity of this playthrough of the media: a change means it (re)started. */
+  run: string;
+  /** Media time (s) for marker purposes. */
+  pos: number;
+  loop: boolean;
+  /** Media seconds that count as passed in this playthrough. */
+  skip: number;
+  markers: MediaMarker[] | undefined;
+}
+
+/** Where a media component is at scene time `t` (ms), or null when it is not playing then. */
+function hostState(rt: SceneRuntime, c: Scene["components"][number], t: number): HostState | null {
+  if (c.kind === "clipActor") {
+    const st = clipStateAt(c, rt.clipActors?.[c.id], t);
+    if (!st.clip || !st.segment) return null;
+    return { run: `${st.clip.id}@${st.segment.at}`, pos: st.localT, loop: !!st.clip.loop, skip: st.segment.skip ?? -1, markers: st.clip.markers };
   }
-  const prev = markerPos.get(key);
-  markerPos.set(key, { clipId, t });
-  if (!prev || prev.clipId !== clipId) {
-    // Fresh clip: anything between its start and now fires (a marker at 0 fires on the first frame).
-    for (const m of markers) if (m.at <= t && m.at >= 0) fire(m);
-    return;
+  if (c.kind === "background" && c.source === "media") {
+    if (rt.background.current !== c.id) return null;
+    const startAt = Math.max(0, rt.background.changedAt);
+    if (t < startAt) return null;
+    const el = mediaElapsed(rt, c.id, startAt, t, c.media.playbackRate);
+    return { run: `${c.media.assetId}@${startAt}`, pos: markerTime(c.media, el), loop: c.media.loop, skip: -1, markers: c.media.markers };
   }
-  if (t >= prev.t) {
-    for (const m of markers) if (m.at > prev.t && m.at <= t) fire(m);
-  } else if (loop && duration > 0) {
-    // Wrapped around the loop boundary.
-    for (const m of markers) if (m.at > prev.t || m.at <= t) fire(m);
+  if (c.kind === "video") {
+    const l = rt.layers[c.id];
+    if (!l?.visible || t < l.startAt) return null;
+    const el = mediaElapsed(rt, c.id, l.startAt, t, c.media.playbackRate);
+    return { run: `${c.media.assetId}@${l.startAt}`, pos: markerTime(c.media, el), loop: c.media.loop, skip: -1, markers: c.media.markers };
   }
+  return null;
+}
+
+/** Markers crossed going from state `a` to state `b` by normal playback. */
+function crossed(a: HostState | null, b: HostState): MediaMarker[] {
+  const ms = b.markers ?? [];
+  if (!ms.length) return [];
+  const live = (m: MediaMarker) => m.at > b.skip;
+  // Fresh playthrough: anything between its start and now (a marker at 0 fires on the first frame).
+  if (!a || a.run !== b.run) return ms.filter((m) => m.at >= 0 && m.at <= b.pos && live(m));
+  if (b.pos >= a.pos) return ms.filter((m) => m.at > a.pos && m.at <= b.pos && live(m));
+  // Wrapped around the loop boundary: a new pass, so a clip's scrub skip no longer applies after the wrap.
+  if (b.loop) return ms.filter((m) => (m.at > a.pos && live(m)) || m.at <= b.pos);
+  return [];
 }
 
 function pollMarkers(target: Target, rt: SceneRuntime, wall: number) {
   const t = sceneNow(rt, wall);
+  const last = lastPoll[target];
+  lastPoll[target] = { key: rt.key, t };
+  const prev = last?.key === rt.key ? last.t : t - CATCH_UP_MS;
+  // Only scene time played for the first time in this run counts.
+  const from = Math.max(prev, rt.clock.reached ?? -Infinity);
+  if (!(t > from)) return;
   const fire = (m: MediaMarker) => {
     if (!m.cueId) {
       // Messages leave the building only from the live show.
@@ -423,22 +468,9 @@ function pollMarkers(target: Target, rt: SceneRuntime, wall: number) {
     else if (target === "program") ioLog("error", `Marker "${m.name}" points at a cue that no longer exists`);
   };
   for (const c of rt.scene.components) {
-    if (c.kind === "clipActor") {
-      const st = clipStateAt(c, rt.clipActors?.[c.id], t);
-      fireMarkers(fire, st.clip?.markers, `${rt.key}:${c.id}`, st.clip?.id ?? null, st.localT, st.clip?.duration ?? 0, !!st.clip?.loop);
-    } else if (c.kind === "background" && c.source === "media" && c.media.markers?.length) {
-      if (rt.background.current !== c.id) continue;
-      const el = mediaElapsed(rt, c.id, Math.max(0, rt.background.changedAt), t, c.media.playbackRate);
-      fireMarkers(fire, c.media.markers, `${rt.key}:${c.id}`, c.media.assetId, markerTime(c.media, el), c.media.endTime ?? 0, c.media.loop);
-    } else if (c.kind === "video" && c.media.markers?.length) {
-      const l = rt.layers[c.id];
-      if (!l?.visible) {
-        markerPos.delete(`${rt.key}:${c.id}`);
-        continue;
-      }
-      const el = mediaElapsed(rt, c.id, l.startAt, t, c.media.playbackRate);
-      fireMarkers(fire, c.media.markers, `${rt.key}:${c.id}`, c.media.assetId, markerTime(c.media, el), c.media.endTime ?? 0, c.media.loop);
-    }
+    const b = hostState(rt, c, t);
+    if (!b?.markers?.length) continue;
+    for (const m of crossed(hostState(rt, c, from), b)) fire(m);
   }
 }
 

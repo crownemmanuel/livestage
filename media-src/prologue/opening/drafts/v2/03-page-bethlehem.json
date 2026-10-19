@@ -1,0 +1,48 @@
+[
+  {
+    "created_at": "2026-10-19T06:11:17.627502Z",
+    "display_name": "GPT Image 2.5",
+    "id": "d951c5d8-6c01-42ac-8310-10cc53205f7a",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_061117_d951c5d8-6c01-42ac-8310-10cc53205f7a_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 576,
+      "medias": [
+        {
+          "data": {
+            "id": "0a7d2931-0d8a-4aac-8e2d-35baeed4ed73",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/0a7d2931-0d8a-4aac-8e2d-35baeed4ed73.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "2862caa5-1e95-4dac-adbb-c4ca474319c3",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/2862caa5-1e95-4dac-adbb-c4ca474319c3.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "94f344a3-89c6-4618-93f4-2908852a6708",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/94f344a3-89c6-4618-93f4-2908852a6708.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "A close view looking down into the open book from the first reference image: the pages have settled, and the double-page spread is a glowing illustration of the dawn landscape from the second reference image (the hill town of Bethlehem, terraced hills, golden pastures and sunrise), painted right onto the parchment pages. Golden light rises out of the painted page as if the picture is alive and opening into a real world; motes of light drift up; the edges of the book, its gilded page edges and the dark room are just visible around the frame. Inviting the viewer to fall into the page. No readable text.\nStyle: hand-painted epic storybook illustration matching the style reference exactly — rich painterly gouache-and-oil brushwork with visible strokes, fine dark ink linework on figures and edges, subtle parchment paper grain, warm golden-hour glow, honey gold, amber, ochre and crimson with lapis-blue accents, luminous sunlit clouds; the feel of an epic hand-drawn animated feature and a treasured children's Bible come to life. Cinematic 21:9 widescreen composition. No borders, no watermark, no captions.\nFormat: an ultra-wide letterboxed cinema frame. Solid pure-black bars fill the top 21% and the bottom 21% of the image edge to edge; the picture exists only in the 4:1 panoramic strip between them, and the whole subject, including its top and bottom edges, fits completely inside that strip with a little breathing room. Nothing crosses into the black bars.",
+      "quality": "low",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "1k",
+      "width": 1344
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_061117_d951c5d8-6c01-42ac-8310-10cc53205f7a.png",
+    "status": "completed"
+  }
+]

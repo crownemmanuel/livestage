@@ -1,0 +1,40 @@
+[
+  {
+    "created_at": "2026-10-19T11:37:39.385317Z",
+    "display_name": "GPT Image 2.5",
+    "id": "d4eb002a-1267-4fdd-a70a-9f8f88acacdc",
+    "job_type": "gpt_image_2_5",
+    "min_result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_113739_d4eb002a-1267-4fdd-a70a-9f8f88acacdc_min.webp",
+    "params": {
+      "aspect_ratio": "21:9",
+      "height": 1648,
+      "medias": [
+        {
+          "data": {
+            "id": "caf79382-7a50-4ff5-9e91-11fdc1f508f1",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/caf79382-7a50-4ff5-9e91-11fdc1f508f1.png"
+          },
+          "role": "image"
+        },
+        {
+          "data": {
+            "id": "f46b378d-3194-4bd7-b452-c0f11c46bd55",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/f46b378d-3194-4bd7-b452-c0f11c46bd55.png"
+          },
+          "role": "image"
+        }
+      ],
+      "model": "sunburst",
+      "prompt": "Re-render the first reference image at full detail and quality: keep exactly the same composition, framing, characters, poses, colours and lighting; only add finer line work, brush texture and detail. Use the last reference image for the drawing style.\nThe same book, table and oil lamp as the first reference image, same camera angle but a little closer: the cover has swung open and the pages are flipping by themselves as if in a breeze, a fan of turning parchment pages lifting upward, and brilliant golden light pours up out of the open book, rays and sparkling motes streaming into the dark room and lighting the undersides of the pages. Wonder: the story is about to begin. No readable text on the pages.\nSTYLE (most important): a 2D hand-drawn illustration in exactly the style of the style reference image (the prophet anointing the kneeling young man): a frame from a hand-drawn epic animated feature film. Confident dark-brown ink outlines around every shape — buildings, stones, trees, pots, figures; simplified, stylised forms; cel-style shading with flat colour areas and soft painted gradients; visible gouache brush texture and a faint warm paper grain; stylised swirling clouds and graphic light rays; warm honey-gold and amber against deep lapis blue. It must clearly read as a drawing and a painting, NOT as a photograph or a 3D render: no photographic detail, no realistic textures, no depth-of-field blur, no lens effects.\nFormat: an ultra-wide letterboxed cinema frame. Solid pure-black bars fill the top 21% and the bottom 21% of the image edge to edge; the picture exists only in the 4:1 panoramic strip between them, and the whole subject, including its top and bottom edges, fits completely inside that strip with a little breathing room. Nothing crosses into the black bars.",
+      "quality": "high",
+      "reference_elements": [],
+      "remove_bg": false,
+      "resolution": "4k",
+      "width": 3840
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_113739_d4eb002a-1267-4fdd-a70a-9f8f88acacdc.png",
+    "status": "completed"
+  }
+]

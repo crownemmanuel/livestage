@@ -1,0 +1,51 @@
+[
+  {
+    "created_at": "2026-10-19T12:00:39.114205Z",
+    "display_name": "Seedance 2.5",
+    "id": "2612fa98-216a-434f-be7e-3fd5b9a02ae6",
+    "job_type": "seedance_2_5",
+    "min_result_url": null,
+    "params": {
+      "aspect_ratio": "21:9",
+      "bitrate_mode": "standard",
+      "draft": false,
+      "draft_job_id": null,
+      "duration": 6,
+      "extension_mode": null,
+      "generate_audio": false,
+      "genre": "auto",
+      "height": 384,
+      "medias": [
+        {
+          "data": {
+            "id": "e37cd9c6-d9e2-48b1-815f-50dadcc657c4",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/e37cd9c6-d9e2-48b1-815f-50dadcc657c4_resize.jpg"
+          },
+          "role": "start_image"
+        },
+        {
+          "data": {
+            "id": "efc27d47-85ac-408e-8905-4fabdf365813",
+            "type": "media_input",
+            "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/efc27d47-85ac-408e-8905-4fabdf365813_resize.jpg"
+          },
+          "role": "end_image"
+        }
+      ],
+      "model": "default",
+      "multi_prompt": [],
+      "multi_shot_mode": "custom",
+      "multi_shots": false,
+      "prompt": "Drone shot continues: the camera glides forward and descends over the olive groves and stone walls, down the hillside and settles at eye level in the golden pasture under the great olive tree, the flock grazing in the middle distance, Bethlehem on its hill beyond. David has walked out of view. Keep the 2D hand-drawn storybook animation style of the frames throughout (ink outlines, cel shading, painted textures); it never turns photographic.\nThe frame is letterboxed: solid black bars stay fixed across the top and bottom for the whole clip and nothing ever enters them; all the picture and all the motion stay inside the wide strip in the middle. Smooth, continuous single camera move, no cuts, no text.",
+      "prompt_language": "en",
+      "reference_elements": [],
+      "resolution": "480p",
+      "speedramp": "auto",
+      "width": 896
+    },
+    "result_url": "https://d8j0ntlcm91z4.cloudfront.net/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120039_2612fa98-216a-434f-be7e-3fd5b9a02ae6.mp4",
+    "status": "completed",
+    "thumbnail_url": "https://cdn.higgsfield.ai/user_2vPrLQRsNi71h7NHQFULpAnfjaU/hf_20261019_120039_2612fa98-216a-434f-be7e-3fd5b9a02ae6_thumbnail.webp"
+  }
+]

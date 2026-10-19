@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { startProgramAudio, unlockAudio } from "@/engine/audio";
 import { cancelPending, cueControl, restoreLiveState, startOperatorServices, takeScene } from "@/engine/operator";
+import { toggleHoldFor } from "@/engine/transport";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
 import { TopBar } from "@/ui/TopBar";
@@ -20,6 +21,8 @@ function syncPreview() {
 
 function isTyping(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
+  // A scrub bar keeps focus after a drag: it owns only its arrow keys, so P and G still work.
+  if (el instanceof HTMLInputElement && el.type === "range") return /^(Arrow|Home|End|Page)/.test(e.key);
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable || el.getAttribute("role") === "slider");
 }
 
@@ -77,6 +80,9 @@ export function OperatorApp() {
         // Same as the cue list's GO next: the live scene when it is selected, otherwise the preview.
         const live = show.program.runtime;
         cueControl.go(live && !show.program.standby && live.scene.id === proj.selectedSceneId ? "program" : "preview");
+      } else if (e.code === "KeyP" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !e.repeat) {
+        // Hold / resume, with the same target rule as G.
+        toggleHoldFor(proj.selectedSceneId);
       } else if (e.code === "KeyB" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.repeat) {
         show.setBlackout(!show.program.blackout?.on);
       } else if (e.code === "Escape") {
