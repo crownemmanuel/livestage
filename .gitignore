@@ -13,3 +13,13 @@ output/
 *.docx
 *.pptx
 ~$*
+# Video files are never committed (sources or show copies). They travel with the show package
+# or cloud sync (docs/SHOW_PACKAGE.md), not through git.
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.webm
+*.m4v
+*.mkv
+*.avi
