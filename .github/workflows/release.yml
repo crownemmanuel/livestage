@@ -93,11 +93,14 @@ jobs:
             fi
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F body=@notes.md > /dev/null
           else
-            pre=""
-            [ "${{ steps.meta.outputs.prerelease }}" = "true" ] && pre="--prerelease"
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag $pre \
-              --title "Salvation Live Studio ${{ steps.meta.outputs.version }}" --notes-file notes.md
-            id="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)"
+            # The id comes from the response: a new draft is not in the release list straight away.
+            id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" -f name="Salvation Live Studio ${{ steps.meta.outputs.version }}" -F body=@notes.md \
+              -F draft=true -F prerelease=${{ steps.meta.outputs.prerelease }} --jq .id)"
+          fi
+          if [ -z "$id" ]; then
+            echo "::error::Could not find or create the release for $TAG."
+            exit 1
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
