@@ -91,7 +91,7 @@ jobs:
               echo "::error::The release for $TAG is already published. Cut a new version instead (pnpm release patch)."
               exit 1
             fi
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F body=@notes.md > /dev/null
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -f tag_name="$TAG" -F body=@notes.md > /dev/null
           else
             # The id comes from the response: a new draft is not in the release list straight away.
             id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
@@ -146,6 +146,7 @@ jobs:
       - name: Build, sign and upload
         uses: tauri-apps/tauri-action@v1
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -160,10 +161,15 @@ jobs:
     name: Publish the release
     needs: [prepare, build]
     runs-on: ubuntu-latest
+    env:
+      # A draft cannot be found by its tag: work on the release by id.
+      RELEASE: repos/${{ github.repository }}/releases/${{ needs.prepare.outputs.release_id }}
     steps:
       - name: latest.json covers Windows and macOS
         run: |
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir .
+          url="$(gh api "$RELEASE" --jq '.assets[] | select(.name == "latest.json") | .url')"
+          [ -n "$url" ] || { echo "::error::The release has no latest.json."; exit 1; }
+          gh api -H "Accept: application/octet-stream" "$url" > latest.json
           jq -e '.platforms["windows-x86_64"].signature and .platforms["darwin-aarch64"].signature' latest.json > /dev/null || {
             echo "::error::latest.json is missing a platform (two builds may have uploaded it at once). Re-run the failed or last build job."
             cat latest.json
@@ -173,7 +179,8 @@ jobs:
       - name: Publish
         run: |
           if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+            gh api -X PATCH "$RELEASE" -f tag_name="$TAG" -F draft=false -F prerelease=true > /dev/null
           else
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+            gh api -X PATCH "$RELEASE" -f tag_name="$TAG" -F draft=false -F prerelease=false -f make_latest=true > /dev/null
           fi
+          gh api "$RELEASE" --jq '"Published " + .html_url' 
