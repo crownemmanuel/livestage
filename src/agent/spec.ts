@@ -224,7 +224,7 @@ export const AGENT_COMMANDS = {
 
   // ------------------------------------------------ build
   scene_create: {
-    description: "Add a new scene. Returns its id. It is selected (preview), not taken.",
+    description: "Add a new scene (environment none = flat media plates; or a 3D environment). Returns it. It is not selected or taken: use select_scene to see it in the preview.",
     params: args({
       name: str("Scene name."),
       after: str("Put it right after this scene (ref); default: end of the show."),

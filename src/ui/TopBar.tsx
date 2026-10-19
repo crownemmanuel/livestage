@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  Bot,
   Cable,
   Check,
   Clapperboard,
@@ -36,6 +37,7 @@ import { RoundToggle, Tip, ToolbarButton } from "./kit";
 import { useSceneCodes } from "./SceneList";
 import { now } from "@/core/clock";
 import { formatClock, timerLeft } from "@/core/timers";
+import { useAgent } from "@/agent/bridge";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -189,6 +191,7 @@ export function TopBar() {
             </span>
           </Tip>
         )}
+        <AgentBadge />
         <Tip label={saveError ? `Save failed: ${saveError}` : dirty ? "Saving…" : savedAt ? `Saved ${new Date(savedAt).toLocaleTimeString()}` : "Saved"} side="bottom">
           <span className={cn("grid size-6 place-items-center", saveError ? "text-destructive" : "text-muted-foreground")}>
             {saveError ? <AlertTriangle className="size-4" /> : dirty ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
@@ -223,6 +226,26 @@ export function TopBar() {
         </DialogContent>
       </Dialog>
     </header>
+  );
+}
+
+/** An AI agent (MCP) is connected, or agent control is switched off. Click to switch it on/off. */
+function AgentBadge() {
+  const { enabled, connected, last, commands } = useAgent();
+  if (enabled && !connected) return null;
+  const tip = !enabled
+    ? "Agent control is off: AI agents cannot connect. Click to allow."
+    : `An AI agent is connected and can control the app (${commands} change${commands === 1 ? "" : "s"}${last ? `, last: ${last.method}${last.ok ? "" : " (failed)"}` : ""}). Click to disconnect it and switch agent control off.`;
+  return (
+    <Tip label={tip} side="bottom">
+      <button
+        type="button"
+        onClick={() => useAgent.getState().setEnabled(!enabled)}
+        className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-semibold", enabled ? "border-preview/60 text-preview" : "border-border text-muted-foreground line-through")}
+      >
+        <Bot className="size-3.5" /> Agent
+      </button>
+    </Tip>
   );
 }
 

@@ -142,5 +142,7 @@ src/store/      zustand stores: project (operator only), show (both windows), mo
 src/engine/     operator services (sim loop, cues, keyboard, broadcast, watchdog, markers), program audio, io (MIDI/OSC), persist (live state)
 src/render/     StageView (slots, transitions, standby, guides), SceneCanvas (compositor, camera rig), env/, actors/, layers/ (media, clip actors, text, names, route), effects/ (rain/snow, overlays, atmos, impact)
 src/ui/         TopBar, SceneList, OutputSettings, show/ (Show Mode), builder/ (Scene Builder)
+src/agent/      agent control: command catalogue (spec), handlers, path edits, WebSocket bridge to mcp/server.ts
+mcp/            MCP server for AI agents (stdio ⇄ WebSocket bridge), smoke test; see AGENT_CONTROL.md
 src-tauri/      Rust shell: plugins, native output-window creation, app lifecycle, MIDI (midir) and OSC (rosc) I/O
 ```

@@ -9,6 +9,7 @@ import { ShowMode } from "@/ui/show/ShowMode";
 import { BuilderMode } from "@/ui/builder/BuilderMode";
 import { ErrorBoundary, installGlobalErrorLog } from "@/ui/ErrorBoundary";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
+import { startAgentBridge } from "@/agent/bridge";
 
 function syncPreview() {
   const { project, selectedSceneId } = useProject.getState();
@@ -30,6 +31,8 @@ export function OperatorApp() {
     preloadPhotoAssets();
     // Services first, so the restored program is broadcast and persisted from the first moment.
     const stopServices = startOperatorServices();
+    // AI agents (MCP) drive the app through the same stores and engine as the operator.
+    const stopAgent = startAgentBridge();
     void useProject
       .getState()
       .load()
@@ -87,6 +90,7 @@ export function OperatorApp() {
     window.addEventListener("pointerdown", unlockAudio, { once: true });
     return () => {
       stopServices();
+      stopAgent();
       stopAudio();
       unsub();
       window.removeEventListener("keydown", onKey);

@@ -25,6 +25,7 @@ import { Rain } from "./effects/Rain";
 import { DissolveMask, FogOverlay, HazeOverlay, LightningOverlay, TravelHaze } from "./effects/Overlays";
 import { GlowOverlay, HeatOverlay, LightsOverlay, StarsOverlay } from "./effects/Atmos";
 import { recordError } from "@/ui/ErrorBoundary";
+import { serveSnaps } from "./snap";
 
 export interface SceneCanvasProps {
   role: SlotRole;
@@ -229,7 +230,7 @@ function CameraRig() {
 
 /** Renders back layers, the 3D world, front layers and overlays in order. */
 function Compositor({ back, front, fx, children, background, onCapture, look }: { back: ReactNode; front: ReactNode; fx: ReactNode; children: ReactNode; background: string; onCapture?: (d: string) => void; look?: LookSettings }) {
-  const { canvasW, canvasH, frame } = useStage();
+  const { canvasW, canvasH, frame, role } = useStage();
   const post = useMemo(() => new PostFX(), []);
   useEffect(() => () => post.dispose(), [post]);
   const bufSize = useMemo(() => new THREE.Vector2(), []);
@@ -271,6 +272,7 @@ function Compositor({ back, front, fx, children, background, onCapture, look }: 
     }
     gl.render(scenes.front, ortho);
     gl.render(scenes.fx, ortho);
+    serveSnaps(role, gl.domElement, canvasW, canvasH);
     if (onCapture && !captured.current && performance.now() - mountedAt > 1800) {
       captured.current = true;
       try {

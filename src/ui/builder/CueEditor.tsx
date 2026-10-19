@@ -34,7 +34,7 @@ import { formatClock } from "@/core/timers";
 /** "hog" is a Send action preset to a Hog 4 message; it gets its own menu entry because it is the common case. */
 type MenuType = CueActionType | "hog";
 
-const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> = {
+export const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> = {
   hog: { label: "Lighting (Hog 4)", icon: <Lightbulb className="text-armed" /> },
   send: { label: "MIDI / OSC", icon: <Radio /> },
   blackout: { label: "Blackout / lights up", icon: <Power /> },
@@ -72,7 +72,7 @@ const infoFor = (a: CueAction) => ACTION_INFO[a.type === "send" && a.message.typ
 
 const LAYER_KINDS = ["video", "image", "model", "procedural", "text", "names", "route"];
 
-function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]): CueAction {
+export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]): CueAction {
   const actor = scene.components.find((c) => c.kind === "actor")?.id ?? "";
   const marker = Object.keys(scene.markers)[0] ?? "center";
   switch (type) {
