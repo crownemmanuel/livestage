@@ -76,16 +76,17 @@ export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 
 
 // ---------------------------------------------------------------- preview
 
-/** The preview runtime, cut down to one component when Build isolates it. */
-function useSoloRuntime(rt: SceneRuntime | null, solo: string | null) {
+/** The preview runtime, cut down to one component when Build isolates it, or without the ones it hides. */
+function useSoloRuntime(rt: SceneRuntime | null, solo: string | null, hidden: string[]) {
   const scene = rt?.scene;
   const filtered = useMemo(() => {
+    if (scene && !solo && hidden.length) return { ...scene, components: scene.components.filter((c) => !hidden.includes(c.id)) };
     if (!scene || !solo || !scene.components.some((c) => c.id === solo)) return null;
     const comp = scene.components.find((c) => c.id === solo)!;
     // A media plate on its own shows on black; an environment look keeps its world.
     const keepWorld = comp.kind === "background" && comp.source === "environment";
     return { ...scene, components: [comp], environment: keepWorld ? scene.environment : ("none" as const) };
-  }, [scene, solo]);
+  }, [scene, solo, hidden]);
   // Only the scene matters to the canvas (it reads live state through getRt), so rebuild on scene changes, not every tick.
   const soloRt = useMemo(() => (rt && filtered ? { ...rt, scene: filtered } : null), [rt?.key, filtered]); // eslint-disable-line react-hooks/exhaustive-deps
   return soloRt ?? rt;
@@ -94,7 +95,8 @@ function useSoloRuntime(rt: SceneRuntime | null, solo: string | null) {
 function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: number; onCapture?: (sceneId: string, d: string) => void }) {
   const fullRt = useShow((s) => s.preview);
   const solo = useShow((s) => s.solo);
-  const rt = useSoloRuntime(fullRt, solo);
+  const hidden = useShow((s) => s.hidden);
+  const rt = useSoloRuntime(fullRt, solo, hidden);
   const key = rt?.key;
   const assets = useShow((s) => s.assets);
   const targetFps = useShow((s) => s.output.targetFps);
@@ -106,12 +108,12 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
   }, []);
   const getTransition = useCallback(() => null, []);
   // No thumbnails from an isolated view: they would not show the scene.
-  const capture = useCallback((d: string) => rt && !solo && onCapture?.(rt.scene.id, d), [rt, solo, onCapture]);
+  const capture = useCallback((d: string) => rt && !solo && !hidden.length && onCapture?.(rt.scene.id, d), [rt, solo, hidden, onCapture]);
   if (!rt) return <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">No scene selected</div>;
   return (
     <ErrorBoundary name="preview canvas" retryAfter={1500} fallback={null}>
     <SceneCanvas
-      key={`${key}:${solo ?? ""}`}
+      key={`${key}:${solo ?? ""}:${hidden.join(",")}`}
       role="preview"
       runtime={rt}
       getRt={getRt}

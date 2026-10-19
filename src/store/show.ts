@@ -30,6 +30,8 @@ interface ShowStore {
   previewPosesAt: number;
   /** Component shown on its own in the preview (Build's isolate); null = the whole scene. */
   solo: string | null;
+  /** Components hidden from the preview while building (the show itself is unchanged). */
+  hidden: string[];
 
   assets: Asset[];
   output: OutputSettings;
@@ -46,6 +48,7 @@ interface ShowStore {
 
   setPreview(scene: Scene | null, opts?: { keepState?: boolean }): void;
   setSolo(id: string | null): void;
+  toggleHidden(id: string): void;
   restartPreview(): void;
   take(scene: Scene, spec: TransitionSpec): void;
   finishTransition(takeCount: number): void;
@@ -78,6 +81,7 @@ export const useShow = create<ShowStore>((set, get) => ({
   previewPoses: {},
   previewPosesAt: 0,
   solo: null,
+  hidden: [],
   assets: [],
   output: defaultOutput(),
   outputStatus: null,
@@ -88,11 +92,12 @@ export const useShow = create<ShowStore>((set, get) => ({
   lionControl: { armed: false, actorId: null, target: "program" },
 
   setSolo: (id) => set({ solo: id }),
+  toggleHidden: (id) => set({ hidden: get().hidden.includes(id) ? get().hidden.filter((x) => x !== id) : [...get().hidden, id] }),
 
   setPreview(scene, opts) {
     const cur = get().preview;
-    // Isolating is per scene: another scene comes up whole.
-    if (get().solo && cur?.scene.id !== scene?.id) set({ solo: null });
+    // Isolating and hiding are per scene: another scene comes up whole.
+    if ((get().solo || get().hidden.length) && cur?.scene.id !== scene?.id) set({ solo: null, hidden: [] });
     if (!scene) return set({ preview: null, previewPoses: {} });
     if (opts?.keepState && cur && cur.scene.id === scene.id) {
       const rt = reconcileRuntime(cur, scene);

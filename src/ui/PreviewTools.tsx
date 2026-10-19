@@ -2,7 +2,7 @@
 // which is what TAKE LIVE starts from) and a scrubber for the videos in the scene.
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { ChevronRight, Clock, Crosshair, Film, Flag, Focus, Pause, Play, Plus, Scan, Send, X, Zap } from "lucide-react";
+import { ChevronRight, Clock, Crosshair, Eye, Film, Flag, Focus, MousePointer2, Pause, Play, Plus, Scan, Send, X, Zap, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
@@ -11,7 +11,9 @@ import { playableUrl } from "@/core/platform";
 import { NO_FRAMING, clampFraming, evalFraming, mediaElapsed, type Command } from "@/core/runtime";
 import { uid } from "@/core/ids";
 import { markerHosts, setHostMarkers } from "@/core/markers";
-import type { Asset, Framing, MediaMarker, SceneRuntime } from "@/core/types";
+import { defaultActorLayout } from "@/core/factories";
+import type { Asset, Framing, MediaMarker, Scene, SceneComponent, SceneRuntime } from "@/core/types";
+import { fitFrame } from "@/render/layers/MediaLayers";
 import { describeMessage } from "@/engine/io";
 import { previewAtStep, probeDuration } from "@/engine/operator";
 import { useProject } from "@/store/project";
@@ -20,6 +22,7 @@ import { SelectBox } from "./fields";
 import { defaultMessage } from "./io/MessageFields";
 import { MarkersEditor } from "./io/MarkersEditor";
 import { useSceneCodes } from "./SceneList";
+import { assetAspect } from "./assetThumbs";
 
 function useTick(ms: number) {
   const [, force] = useState(0);
@@ -265,6 +268,7 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart
 export function PreviewHeader() {
   const rt = useShow((s) => s.preview);
   const solo = useShow((s) => s.solo);
+  const hidden = useShow((s) => s.hidden);
   const codes = useSceneCodes();
   if (!rt) return null;
   const comp = solo ? rt.scene.components.find((c) => c.id === solo) : null;
@@ -281,6 +285,15 @@ export function PreviewHeader() {
           </span>
           <Button size="xs" variant="ghost" className="h-6" onClick={() => useShow.getState().setSolo(null)}>
             <X /> Show whole scene
+          </Button>
+        </>
+      ) : hidden.length ? (
+        <>
+          <span className="min-w-0 truncate text-muted-foreground">
+            Scene <span className="font-key font-semibold">{codes.get(rt.scene.id)}</span> with {hidden.length} hidden
+          </span>
+          <Button size="xs" variant="ghost" className="h-6" onClick={() => useShow.setState({ hidden: [] })}>
+            <Eye /> Show all
           </Button>
         </>
       ) : (
@@ -521,6 +534,185 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
           <MarkersEditor markers={markers} onChange={setMarkers} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Build: select and move
+
+/** Build's preview tool: select-and-move components, or zoom / frame the view. */
+export const usePreviewTool = create<{ tool: "select" | "frame" }>(() => ({ tool: "select" }));
+
+export function ToolToggle() {
+  const tool = usePreviewTool((s) => s.tool);
+  const btn = (t: "select" | "frame", icon: React.ReactNode, title: string) => (
+    <Button size="icon-xs" variant={tool === t ? "secondary" : "ghost"} className="size-6" title={title} aria-label={title} aria-pressed={tool === t} onClick={() => usePreviewTool.setState({ tool: t })}>
+      {icon}
+    </Button>
+  );
+  return (
+    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">
+      {btn("select", <MousePointer2 />, "Select and move (V): click an item in the preview, drag to move it")}
+      {btn("frame", <ZoomIn />, "Zoom and frame (Z): drag to reposition the view, scroll to zoom")}
+    </div>
+  );
+}
+
+/** A movable item's box in picture coordinates (0..1, y down). */
+interface Box {
+  id: string;
+  name: string;
+  rank: number;
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+}
+
+function itemBoxes(scene: Scene, rt: SceneRuntime, W: number, H: number, skip: (id: string) => boolean): Box[] {
+  const out: Box[] = [];
+  scene.components.forEach((c, i) => {
+    if (skip(c.id)) return;
+    if ((c.kind === "video" || c.kind === "image") && c.placement !== "world") {
+      if (!rt.layers[c.id]?.visible) return;
+      const cw = 1 - c.crop.left - c.crop.right;
+      const ch = 1 - c.crop.top - c.crop.bottom;
+      const aspect = ((assetAspect(c.kind === "image" ? c.assetId : c.media.assetId) ?? 16 / 9) * Math.max(0.01, cw)) / Math.max(0.01, ch);
+      const w = c.screen.width;
+      out.push({ id: c.id, name: c.name, rank: (c.placement === "front" ? 20 : 0) + i / 1000, cx: c.screen.x, cy: c.screen.y, w, h: (w * W) / aspect / H });
+    } else if (c.kind === "text") {
+      if (!rt.layers[c.id]?.visible) return;
+      const lines = c.text.split("\n");
+      const longest = Math.max(1, ...lines.map((l) => l.length));
+      const w = c.width > 0 ? c.width : Math.min(1, (longest * c.size * H * 0.55) / W);
+      out.push({ id: c.id, name: c.name, rank: 30 + i / 1000, cx: c.x, cy: c.y, w, h: lines.length * c.size * Math.max(1, c.lineHeight) });
+    } else if (c.kind === "clipActor" && c.matted) {
+      const { w, h, cy } = fitFrame(c.fit, c.frameAspect, W, H, c.anchorY ?? 0.5);
+      const L = c.layout ?? defaultActorLayout();
+      const s = Math.max(0.05, L.scale);
+      const tv = (L.depthLink ? L.horizonY + (L.pivotY - L.horizonY) * s : L.pivotY) + L.y;
+      const tu = L.pivotX + L.x;
+      const offU = (L.mirror ? 0.5 - L.pivotX : L.pivotX - 0.5) * w * s;
+      const X = (tu - 0.5) * w - offU;
+      const Y = cy + (0.5 - tv) * h - (0.5 - L.pivotY) * h * s;
+      out.push({ id: c.id, name: c.name, rank: 10 + i / 1000, cx: 0.5 + X / W, cy: 0.5 - Y / H, w: (w * s) / W, h: (h * s) / H });
+    }
+  });
+  return out;
+}
+
+/** Move one component by (du, dv) in picture units, from its value when the drag began. */
+function moveComponent(start: SceneComponent, du: number, dv: number, W: number, H: number): (c: SceneComponent) => void {
+  return (c) => {
+    if ((c.kind === "video" || c.kind === "image") && (start.kind === "video" || start.kind === "image")) {
+      c.screen.x = start.screen.x + du;
+      c.screen.y = start.screen.y + dv;
+    } else if (c.kind === "text" && start.kind === "text") {
+      c.x = start.x + du;
+      c.y = start.y + dv;
+    } else if (c.kind === "clipActor" && start.kind === "clipActor") {
+      const { w, h } = fitFrame(start.fit, start.frameAspect, W, H, start.anchorY ?? 0.5);
+      const L = start.layout ?? defaultActorLayout();
+      c.layout = { ...L, x: L.x + (du * W) / w, y: L.y + (dv * H) / h };
+    }
+  };
+}
+
+/** Select tool over the Build preview: hover outlines movable items, click selects, drag moves. */
+export function SelectOverlay() {
+  const ref = useRef<HTMLDivElement>(null);
+  const rt = useShow((s) => s.preview);
+  const solo = useShow((s) => s.solo);
+  const hidden = useShow((s) => s.hidden);
+  const output = useShow((s) => s.output);
+  const selectedId = useProject((s) => s.selectedComponentId);
+  const scene = useProject((s) => (rt ? s.project.scenes.find((x) => x.id === rt.scene.id) : undefined));
+  const [hover, setHover] = useState<string | null>(null);
+  const drag = useRef<{ id: string; u0: number; v0: number; start: SceneComponent; moved: boolean; last: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  useTick(250);
+  if (!rt || !scene) return null;
+  const W = Math.max(16, output.canvasWidth);
+  const H = Math.max(16, output.canvasHeight);
+  const f = evalFraming(rt.framing, sceneNow(rt));
+  const boxes = itemBoxes(scene, rt, W, H, (id) => hidden.includes(id) || (!!solo && id !== solo));
+  // Picture coords of a pointer (undoing the preview's zoom).
+  const pic = (e: { clientX: number; clientY: number }) => {
+    const r = ref.current!.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width;
+    const py = (e.clientY - r.top) / r.height;
+    return { u: f.x + (px - 0.5) / f.zoom, v: f.y + (py - 0.5) / f.zoom };
+  };
+  const hit = (u: number, v: number) =>
+    boxes.filter((b) => Math.abs(u - b.cx) <= b.w / 2 && Math.abs(v - b.cy) <= b.h / 2).sort((a, b) => b.rank - a.rank)[0] ?? null;
+  const toScreen = (b: Box) => ({
+    left: `${((b.cx - b.w / 2 - f.x) * f.zoom + 0.5) * 100}%`,
+    top: `${((b.cy - b.h / 2 - f.y) * f.zoom + 0.5) * 100}%`,
+    width: `${b.w * f.zoom * 100}%`,
+    height: `${b.h * f.zoom * 100}%`,
+  });
+  const commit = (id: string, start: SceneComponent, du: number, dv: number) => useProject.getState().updateComponent(scene.id, id, moveComponent(start, du, dv, W, H));
+  const shown = boxes.filter((b) => b.id === selectedId || b.id === hover);
+
+  return (
+    <div
+      ref={ref}
+      className={cn("absolute inset-0 z-10 select-none overflow-hidden", dragging ? "cursor-grabbing" : hover ? "cursor-move" : "cursor-default")}
+      onPointerMove={(e) => {
+        const { u, v } = pic(e);
+        const d = drag.current;
+        if (!d) return setHover(hit(u, v)?.id ?? null);
+        const du = u - d.u0;
+        const dv = v - d.v0;
+        if (!d.moved && Math.hypot(du, dv) < 0.004) return;
+        d.moved = true;
+        // Every move clones the show; ~25 updates a second is smooth enough and cheap.
+        if (performance.now() - d.last > 40) {
+          d.last = performance.now();
+          commit(d.id, d.start, du, dv);
+        }
+      }}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        const { u, v } = pic(e);
+        const b = hit(u, v);
+        useProject.getState().selectComponent(b?.id ?? null);
+        if (!b) return;
+        try {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          /* synthetic or already-released pointer */
+        }
+        const start = structuredClone(scene.components.find((c) => c.id === b.id)!);
+        drag.current = { id: b.id, u0: u, v0: v, start, moved: false, last: 0 };
+        setDragging(true);
+      }}
+      onPointerUp={(e) => {
+        const d = drag.current;
+        if (d?.moved) {
+          const { u, v } = pic(e);
+          commit(d.id, d.start, u - d.u0, v - d.v0);
+        }
+        drag.current = null;
+        setDragging(false);
+      }}
+      onPointerLeave={() => !drag.current && setHover(null)}
+      onWheel={(e) => {
+        // Scroll still zooms, as with the frame tool.
+        const r = ref.current!.getBoundingClientRect();
+        const px = (e.clientX - r.left) / r.width;
+        const py = (e.clientY - r.top) / r.height;
+        const zoom = Math.min(6, Math.max(1, f.zoom * Math.exp(-e.deltaY * 0.0015)));
+        const ux = f.x + (px - 0.5) / f.zoom;
+        const uy = f.y + (py - 0.5) / f.zoom;
+        commitFraming({ zoom, x: ux - (px - 0.5) / zoom, y: uy - (py - 0.5) / zoom });
+      }}
+    >
+      {shown.map((b) => (
+        <div key={b.id} className={cn("pointer-events-none absolute rounded-[2px] border", b.id === selectedId ? "border-2 border-sky-400" : "border-dashed border-sky-300/70")} style={toScreen(b)}>
+          <span className="absolute -top-5 left-0 whitespace-nowrap rounded bg-sky-500 px-1 text-[10px] font-medium text-white">{b.name}</span>
+        </div>
+      ))}
     </div>
   );
 }
