@@ -6,7 +6,7 @@ import { OutputApp } from "@/app/OutputApp";
 import { OperatorApp } from "@/app/OperatorApp";
 
 document.documentElement.classList.add("dark");
-document.title = windowRole === "output" ? "Salvation Live Studio — Output" : "Salvation Live Studio";
+document.title = windowRole === "output" ? "Live Studio — Output" : "Live Studio";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>{windowRole === "output" ? <OutputApp /> : <OperatorApp />}</StrictMode>,

@@ -50,9 +50,9 @@ What a release contains:
 
 | File | For |
 | --- | --- |
-| `Salvation.Live.Studio_<version>_x64-setup.exe` (+ `.sig`) | Windows installer, and the file the Windows app updates from |
-| `Salvation.Live.Studio_<version>_aarch64.dmg` | macOS (Apple silicon) installer |
-| `Salvation.Live.Studio_<version>_aarch64.app.tar.gz` (+ `.sig`) | The file the Mac app updates from |
+| `Live.Studio_<version>_x64-setup.exe` (+ `.sig`) | Windows installer, and the file the Windows app updates from |
+| `Live.Studio_<version>_aarch64.dmg` | macOS (Apple silicon) installer |
+| `Live.Studio_<version>_aarch64.app.tar.gz` (+ `.sig`) | The file the Mac app updates from |
 | `latest.json` | What installed apps read: version, notes, download links and signatures |
 
 Each installer is big (over 150 MB today, and growing with the media) because the release build carries `public/media` inside the app.
@@ -89,7 +89,7 @@ Every update is signed, and the app installs only files signed with the key whos
 The installers are not code-signed with a Windows certificate or an Apple Developer ID yet (the update signature above is separate and always there):
 
 - **Windows**: the first install may show "Windows protected your PC": **More info → Run anyway**. Updates installed from inside the app do not show it.
-- **macOS**: after dragging the app to Applications, run once: `xattr -cr "/Applications/Salvation Live Studio.app"`.
+- **macOS**: after dragging the app to Applications, run once: `xattr -cr "/Applications/Live Studio.app"`.
 
 Code signing can be added later without changing anything above: a Windows signing certificate (or Azure Trusted Signing) and an Apple Developer ID with notarization, each as more secrets for the workflow ([Tauri distribution guides](https://v2.tauri.app/distribute/)).
 

@@ -153,7 +153,7 @@ export async function readPackage(dir: string, migrate: (p: Project) => Project)
   const { invoke } = await import("@tauri-apps/api/core");
   const raw = await invoke<{ show: string; manifest: string }>("package_read", { dir });
   const manifest = JSON.parse(raw.manifest) as PackageManifest;
-  if (manifest.format !== PACKAGE_FORMAT) throw new Error("This folder is not a Salvation Live Studio show package");
+  if (manifest.format !== PACKAGE_FORMAT) throw new Error("This folder is not a Live Studio show package");
   if (manifest.formatVersion > PACKAGE_FORMAT_VERSION) throw new Error("This package was made by a newer version of the app; update this computer first");
   const show = JSON.parse(raw.show) as Project;
   if (!Array.isArray(show.scenes)) throw new Error("The package's show.json has no scenes");

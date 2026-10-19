@@ -21,7 +21,7 @@ async fn ensure_output_window(app: tauri::AppHandle, x: f64, y: f64, width: f64,
     }
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(&app, "output", WebviewUrl::App("output.html".into()))
-        .title("Salvation Live Studio — Audience Output")
+        .title("Live Studio — Audience Output")
         .decorations(false)
         .resizable(true)
         .focused(false)
@@ -88,5 +88,5 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running Salvation Live Studio");
+        .expect("error while running Live Studio");
 }

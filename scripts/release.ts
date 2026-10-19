@@ -101,7 +101,7 @@ if (!notes) {
   const log = git("log", "--no-merges", "--format=- %s", "-n", "30", ...(last ? [`${last}..HEAD`] : []));
   notes = log || "Maintenance release.";
 }
-const message = `Salvation Live Studio ${next}\n\n${notes}\n`;
+const message = `Live Studio ${next}\n\n${notes}\n`;
 
 console.log(`${current} → ${next} (tag ${tag})\n\n${message}`);
 if (dry) {

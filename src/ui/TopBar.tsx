@@ -87,7 +87,7 @@ export function TopBar() {
           <Clapperboard className="size-4" />
         </span>
         <div className="hidden leading-tight xl:block">
-          <div className="font-key text-[14px] font-bold">Salvation Live</div>
+          <div className="font-key text-[14px] font-bold">Live Studio</div>
           <div className="max-w-[180px] truncate text-[11px] text-muted-foreground">{name}</div>
         </div>
       </div>

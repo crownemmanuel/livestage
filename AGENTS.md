@@ -2,7 +2,7 @@
 
 Guidance for AI coding agents working in this repository (Claude Code reads it through `CLAUDE.md`).
 
-Salvation Live Studio is a Tauri 2 + React + Three.js show-control app for an LED wall. Start with [README.md](README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The app runs a real show: stability matters more than new visuals.
+Live Studio is a Tauri 2 + React + Three.js show-control app for an LED wall. Start with [README.md](README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The app runs a real show: stability matters more than new visuals.
 
 ## The MCP must stay compatible with the app
 

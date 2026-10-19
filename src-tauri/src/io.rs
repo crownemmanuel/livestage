@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
-const CLIENT: &str = "Salvation Live Studio";
+const CLIENT: &str = "Live Studio";
 
 #[derive(Default)]
 pub struct IoState {

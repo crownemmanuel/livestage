@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Salvation Live Studio",
+  "productName": "Live Studio",
   "version": "../package.json",
   "identifier": "org.salvation.livestudio",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Salvation Live Studio",
+        "title": "Live Studio",
         "width": 1600,
         "height": 960,
         "minWidth": 1280,

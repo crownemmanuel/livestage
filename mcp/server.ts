@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Salvation Live Studio MCP server: lets an AI agent (Claude Code, Claude Desktop, any MCP client)
+// Live Studio MCP server: lets an AI agent (Claude Code, Claude Desktop, any MCP client)
 // control the running app. Tools come from src/agent/spec.ts; the operator window runs them.
 //
 //   agent ⇄ (stdio, MCP) ⇄ this server ⇄ (WebSocket 127.0.0.1:1431) ⇄ operator window
@@ -31,7 +31,7 @@ const log = (...a: unknown[]) => console.error("[sls-mcp]", ...a);
 const APP_ORIGIN = /^(tauri:\/\/localhost|https?:\/\/tauri\.localhost|https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?)$/;
 
 const NOT_CONNECTED =
-  "The Salvation Live Studio app is not connected. Start it (`pnpm dev` then open http://localhost:1430, or `pnpm tauri dev`) and check that the Agent badge in the top bar is not switched off. It connects within a few seconds.";
+  "The Live Studio app is not connected. Start it (`pnpm dev` then open http://localhost:1430, or `pnpm tauri dev`) and check that the Agent badge in the top bar is not switched off. It connects within a few seconds.";
 
 // ---------------------------------------------------------------- hub (host or relay)
 
@@ -307,7 +307,7 @@ const mcp = new Server(
   {
     capabilities: { tools: {} },
     instructions: [
-      "Controls Salvation Live Studio, the LED-wall show-control app, while it runs.",
+      "Controls Live Studio, the LED-wall show-control app, while it runs.",
       "Call `status` first. The PREVIEW is the rehearsal monitor; PROGRAM is the live wall the audience sees. Tools marked [LIVE] reach the audience or the lighting console: during a show, only use them when the operator asked.",
       "Build with scene_*/component_*/cue_* tools; `schema` shows the shapes and defaults; `get`/`patch`/`upsert`/`remove` reach any field. Edits change the show file and the preview at once; the live wall keeps its copy until `update_live_scene` or the next take.",
       "Check visual changes with `screenshot`.",

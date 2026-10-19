@@ -1,4 +1,4 @@
-// Serializable data model for Salvation Live Studio.
+// Serializable data model for Live Studio.
 // Everything here must survive JSON round-trips: it is saved to disk and
 // broadcast between the operator and output windows.
 
