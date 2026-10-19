@@ -14,6 +14,7 @@ import type { MergeChoice } from "@/core/showMerge";
 import { CloudAheadError, listCloudShows, loadCloudSettings } from "@/core/cloud";
 import type { ImportPreview, IncomingPackage } from "@/core/showPackage";
 import { cloudOpen, cloudPush, exportShowPackage, isLive, openShowPackage, takeInShowPackage } from "@/engine/showTransfer";
+import { applyUpdate, checkForUpdate, downloadUpdate, installBlocker, useUpdater } from "@/engine/updater";
 import * as runtime from "@/core/runtime";
 import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
 import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
@@ -892,6 +893,26 @@ export const handlers: Record<AgentCommand, Handler> = {
   async cloud_pull(a) {
     if (!isTauri) throw new Error("Cloud sync runs in the desktop app");
     return takeInIncoming(await cloudOpen(a.showId ? String(a.showId) : undefined), a);
+  },
+
+  async update_check() {
+    if (!isTauri) throw new Error("Updates are for the desktop app");
+    const available = await checkForUpdate();
+    const s = useUpdater.getState();
+    const blocker = available ? installBlocker() : null;
+    return { current: s.current, developmentBuild: import.meta.env.DEV, available, downloaded: s.phase === "ready", canInstall: !!available && !blocker, ...(blocker ? { blocker } : {}) };
+  },
+
+  async update_install(a) {
+    if (!isTauri) throw new Error("Updates are for the desktop app");
+    if (!a.version) throw new Error("version is required: the one update_check reported");
+    if (!useUpdater.getState().available) await checkForUpdate();
+    await downloadUpdate(String(a.version));
+    const blocker = installBlocker();
+    if (blocker) return { installed: false, downloaded: true, reason: blocker };
+    // Answer first: on Windows the installer closes the app, so a later reply would never arrive.
+    setTimeout(() => void applyUpdate().catch(() => {}), 500);
+    return { installing: a.version, note: "The app closes, installs the update and opens again. Reopen the output window afterwards (output_window)." };
   },
 
   async call_action(a) {

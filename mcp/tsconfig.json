@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["*.ts", "../src/agent/spec.ts"]
+  "include": ["*.ts", "../src/agent/spec.ts", "../scripts/*.ts"]
 }

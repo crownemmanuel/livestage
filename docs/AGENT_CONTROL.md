@@ -77,6 +77,8 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `cloud_status` | Cloud sync (Firebase): set up, account, local and cloud versions |
 | `cloud_push` [LIVE] | Push this show as the next cloud version (refused when the cloud is ahead, unless `force`) |
 | `cloud_pull` | Take in the cloud's latest version, like `package_import` |
+| `update_check` | This app's version and whether a newer release is published on GitHub, with its notes ([RELEASES.md](RELEASES.md)) |
+| `update_install` [LIVE] | Only when the operator asks: download the update, install it and restart the app (the output window closes); refused while a scene is live and in development builds |
 | `call_action` | Call any store action by name (escape hatch) |
 | `eval` | Development builds: run JavaScript in the operator window |
 

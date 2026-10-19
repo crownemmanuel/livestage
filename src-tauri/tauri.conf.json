@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Salvation Live Studio",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "org.salvation.livestudio",
   "build": {
     "frontendDist": "../dist",
@@ -37,6 +37,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "category": "Entertainment",
     "shortDescription": "Real-time visual production and show control for theatrical LED walls",
     "icon": [
@@ -46,5 +47,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVENkY0QUM4QzE0NzY3QzkKUldUSlowZkJ5RXB2N2QzbFdBeWYrcGt1emNaU1c2ZnJWU1ZkQ3lFMURxNHl2a1JyWElyU3BGR1AK",
+      "endpoints": ["https://github.com/crownemmanuel/livestage/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

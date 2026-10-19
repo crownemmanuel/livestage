@@ -1,0 +1,176 @@
+# Builds Salvation Live Studio for Windows (the show computer) and macOS on Apple silicon (the build
+# computer), signs the update files and publishes a GitHub Release with the installers and
+# latest.json, which installed apps read under More → Check for updates. See docs/RELEASES.md.
+#
+# - Push a tag v1.2.3 (made with `pnpm release 1.2.3`) → build, then publish the release.
+#   A tag with a suffix (v1.2.3-beta.1) is published as a pre-release: apps do not offer it.
+# - Actions → Release → Run workflow → rebuild an existing tag whose release is still a draft.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, e.g. v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  prepare:
+    name: Check versions, create the draft release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      release_id: ${{ steps.release.outputs.id }}
+      notes: ${{ steps.meta.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Signing key is set
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets (docs/RELEASES.md)."
+            exit 1
+          fi
+
+      - name: Tag matches the app version
+        run: node scripts/release.ts --check "$TAG"
+
+      - name: Release notes from the tag message
+        id: meta
+        run: |
+          # actions/checkout can leave a lightweight copy of the tag: fetch the annotated one.
+          git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          version="${TAG#v}"
+          notes="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:body)' | sed -e '/^-----BEGIN PGP SIGNATURE-----/,$d')"
+          [ -n "$(echo "$notes" | tr -d '[:space:]')" ] || notes="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:subject)')"
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            if [[ "$version" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi
+            echo "notes<<NOTES_EOF"
+            echo "$notes"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$notes" > notes.md
+          cat >> notes.md <<'EOF'
+
+          ### Install
+          - **Windows** (show computer): `Salvation.Live.Studio_*_x64-setup.exe`. The installer is not code-signed yet: if SmartScreen says "Windows protected your PC", choose *More info → Run anyway*. Installed copies update themselves from *More → Check for updates*.
+          - **macOS** (Apple silicon): `.dmg`. Not notarized yet: after dragging the app to Applications, run `xattr -cr "/Applications/Salvation Live Studio.app"` once.
+          EOF
+
+      - name: Create the draft release
+        id: release
+        run: |
+          id="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)"
+          if [ -n "$id" ]; then
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" --jq .draft)" != "true" ]; then
+              echo "::error::The release for $TAG is already published. Cut a new version instead (pnpm release patch)."
+              exit 1
+            fi
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F body=@notes.md > /dev/null
+          else
+            pre=""
+            [ "${{ steps.meta.outputs.prerelease }}" = "true" ] && pre="--prerelease"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag $pre \
+              --title "Salvation Live Studio ${{ steps.meta.outputs.version }}" --notes-file notes.md
+            id="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)"
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: --bundles nsis
+          - name: macOS Apple silicon
+            os: macos-latest
+            args: --target aarch64-apple-darwin --bundles app,dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build, sign and upload
+        uses: tauri-apps/tauri-action@v1
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          # The release notes the app's update dialog shows (latest.json).
+          releaseBody: ${{ needs.prepare.outputs.notes }}
+          updaterJsonPreferNsis: true
+          retryAttempts: 1
+          args: ${{ matrix.args }}
+
+  publish:
+    name: Publish the release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: latest.json covers Windows and macOS
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir .
+          jq -e '.platforms["windows-x86_64"].signature and .platforms["darwin-aarch64"].signature' latest.json > /dev/null || {
+            echo "::error::latest.json is missing a platform (two builds may have uploaded it at once). Re-run the failed or last build job."
+            cat latest.json
+            exit 1
+          }
+
+      - name: Publish
+        run: |
+          if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi

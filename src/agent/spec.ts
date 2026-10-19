@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 3;
+export const AGENT_SPEC_VERSION = 4;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -431,6 +431,19 @@ export const AGENT_COMMANDS = {
       dryRun: bool("Only return the plan."),
       allowLive: bool("Take it in even though a scene is live on the wall (the operator confirmed)."),
     }),
+  },
+  update_check: {
+    readOnly: true,
+    description:
+      "App updates from the project's GitHub releases: this app's version and whether a newer one is published (with its release notes). Downloads and installs nothing. Desktop app only.",
+    params: args({}),
+  },
+  update_install: {
+    live: true,
+    destructive: true,
+    description:
+      "Only when the operator asked: download the update update_check found, install it and restart the app. The audience output window closes with the app and has to be reopened (output_window). Refused while a scene is live on the wall, and in development builds. The app answers before it restarts; call status again after a minute or two.",
+    params: args({ version: str("The version update_check reported; refused if the available update is a different one.") }, ["version"]),
   },
   call_action: {
     description:

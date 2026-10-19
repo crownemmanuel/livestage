@@ -65,6 +65,11 @@ if (status.error) {
   ok("io_log", Array.isArray((await call("io_log", { limit: 5 })).json));
   const cloud = await call("cloud_status");
   ok("cloud_status", typeof cloud.json?.configured === "boolean", cloud.error ?? (cloud.json?.configured ? `${cloud.json.project}, signed in: ${cloud.json.signedIn}` : "not set up"));
+  if (status.json.app.desktop) {
+    // Asks GitHub; before the first published release it must still explain itself.
+    const upd = await call("update_check");
+    ok("update_check", typeof upd.json?.current === "string" || /release/i.test(upd.error ?? ""), upd.error ?? (upd.json?.available ? `${upd.json.current} → ${upd.json.available.version}` : `${upd.json?.current}, up to date`));
+  }
 
   if (build) {
     const before = status.json.selected?.scene?.id ?? null;

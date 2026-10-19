@@ -4,6 +4,7 @@ import {
   Bot,
   Cable,
   Check,
+  CircleArrowUp,
   Clapperboard,
   Cloud,
   FileDown,
@@ -43,6 +44,8 @@ import { useSceneCodes } from "./SceneList";
 import { now } from "@/core/clock";
 import { formatClock, timerLeft } from "@/core/timers";
 import { useAgent } from "@/agent/bridge";
+import { openUpdates, useUpdater } from "@/engine/updater";
+import { UpdateDialog } from "./Updates";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -75,6 +78,7 @@ export function TopBar() {
   const codes = useSceneCodes();
   const ioOn = midiStatus === "open" || oscStatus === "listening";
   const blackout = !!program.blackout?.on;
+  const updateVersion = useUpdater((s) => s.available?.version ?? null);
 
   return (
     <header className="flex h-[60px] shrink-0 items-center gap-2 border-b border-border bg-card px-2">
@@ -135,9 +139,10 @@ export function TopBar() {
         />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="flex h-12 min-w-[50px] flex-col items-center justify-center gap-0.5 rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-[18px]">
+            <button type="button" className="relative flex h-12 min-w-[50px] flex-col items-center justify-center gap-0.5 rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-[18px]">
               <MoreHorizontal />
               <span className="leading-none">More</span>
+              {updateVersion && <span className="absolute right-2.5 top-2 size-2 rounded-full bg-preview" aria-label={`Version ${updateVersion} is available`} />}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -176,6 +181,10 @@ export function TopBar() {
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setConfirmReset(true)}>
               <RotateCcw /> Reset to demo show…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={openUpdates}>
+              <CircleArrowUp className={cn(updateVersion && "text-preview")} /> {updateVersion ? `Update to version ${updateVersion}…` : "Check for updates…"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -221,6 +230,7 @@ export function TopBar() {
       <IoDialog open={io} onOpenChange={setIo} />
       <ShowPackageDialog />
       <CloudSyncDialog open={cloud} onOpenChange={setCloud} />
+      <UpdateDialog />
       <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
         <DialogContent>
           <DialogHeader>

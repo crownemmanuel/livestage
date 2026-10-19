@@ -10,6 +10,7 @@ import { BuilderMode } from "@/ui/builder/BuilderMode";
 import { ErrorBoundary, installGlobalErrorLog } from "@/ui/ErrorBoundary";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
 import { startAgentBridge } from "@/agent/bridge";
+import { startUpdateChecks } from "@/engine/updater";
 
 function syncPreview() {
   const { project, selectedSceneId } = useProject.getState();
@@ -33,6 +34,8 @@ export function OperatorApp() {
     const stopServices = startOperatorServices();
     // AI agents (MCP) drive the app through the same stores and engine as the operator.
     const stopAgent = startAgentBridge();
+    // Installed app only: look for a new version on GitHub (never downloads or installs by itself).
+    const stopUpdates = startUpdateChecks();
     void useProject
       .getState()
       .load()
@@ -91,6 +94,7 @@ export function OperatorApp() {
     return () => {
       stopServices();
       stopAgent();
+      stopUpdates();
       stopAudio();
       unsub();
       window.removeEventListener("keydown", onKey);

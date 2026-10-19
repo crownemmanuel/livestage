@@ -33,11 +33,13 @@ pnpm install
 pnpm tauri dev
 ```
 
-To build an installer (`.msi`/`.exe` on Windows, `.dmg` on macOS):
+To build an installer on this computer (`.msi`/`.exe` on Windows, `.dmg` on macOS):
 
 ```bash
-pnpm tauri build
+pnpm build:installer
 ```
+
+Releases for the show computer are built by GitHub Actions from a version tag, and the installed app updates itself from them when the operator says so (More → Check for updates). See [docs/RELEASES.md](docs/RELEASES.md).
 
 UI-only development in a browser (no Rust needed) also works:
 
@@ -76,6 +78,7 @@ The right-hand panel always shows a banner saying what it controls:
 - [docs/SHOW_CONTROL.md](docs/SHOW_CONTROL.md): MIDI / OSC / Hog 4 set-up, built-in commands, time markers.
 - [docs/RECOVERY.md](docs/RECOVERY.md): what survives a reload, crash or GPU reset, and the pre-show checklist.
 - [docs/SHOW_PACKAGE.md](docs/SHOW_PACKAGE.md): moving the show and its media to the show computer (show packages, optional Firebase cloud sync), with versions and per-scene conflict choices.
+- [docs/RELEASES.md](docs/RELEASES.md): cutting a release (version, tag, push), the GitHub Actions build, the signing key, and how the show computer updates.
 - [docs/AGENT_CONTROL.md](docs/AGENT_CONTROL.md): the MCP server that lets an AI agent run and build the show (`.mcp.json`, tools, safety).
 - [docs/PROLOGUE.md](docs/PROLOGUE.md): the prologue's cues, voiceover sync points, media pipeline and how to swap in HQ renders.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how playback stays in sync across windows, the rendering pipeline and the data model.
