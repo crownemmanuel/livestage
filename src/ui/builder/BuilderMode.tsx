@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Box, Clapperboard, Copy, Eye, EyeOff, Film, Focus, Image as ImageIcon, Layers, ListOrdered, Mountain, Plus, Repeat, Settings2, Sparkles, Trash2, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route, Video } from "lucide-react";
+import { Box, Clapperboard, Copy, Eye, EyeOff, Film, Focus, Timer, Image as ImageIcon, Layers, ListOrdered, Mountain, Plus, Repeat, Settings2, Sparkles, Trash2, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -188,6 +188,9 @@ function ComponentList() {
               <DropdownMenuLabel className="text-[11px]">Titles &amp; storybook</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => add(makeText("Title"))}>
                 <Type /> Title / caption / verse
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => add(makeText("Countdown", { text: "THE SHOW BEGINS IN\n{time}", timerId: useProject.getState().project.timers?.[0]?.id ?? null, size: 0.12, glow: 0.5 }))}>
+                <Timer /> Countdown (show timer)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => add(makeNames("Family Tree"))}>
                 <TreeDeciduous /> Family tree / names

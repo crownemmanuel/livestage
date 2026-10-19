@@ -299,6 +299,23 @@ export async function importAssets(only?: AssetType): Promise<Asset[]> {
   });
 }
 
+/** Store generated media (e.g. a text-to-speech MP3) in the library like an imported file. */
+export async function saveGeneratedAsset(bytes: Uint8Array, name: string, type: AssetType): Promise<Asset> {
+  const id = uid("asset");
+  if (isTauri) {
+    const fs = await import("@tauri-apps/plugin-fs");
+    const { appDataDir, join } = await import("@tauri-apps/api/path");
+    const { convertFileSrc } = await import("@tauri-apps/api/core");
+    const dir = await join(await appDataDir(), "assets");
+    await fs.mkdir(dir, { recursive: true }).catch(() => {});
+    const dest = await join(dir, `${id}_${name.replace(/[\\/:*?"<>|]/g, "-")}`);
+    await fs.writeFile(dest, bytes);
+    return { id, name, type, url: convertFileSrc(dest), path: dest };
+  }
+  const blob = new Blob([bytes as BlobPart], { type: type === "audio" ? "audio/mpeg" : "application/octet-stream" });
+  return { id, name, type, url: URL.createObjectURL(blob), ephemeral: true };
+}
+
 function guessAlpha(name: string) {
   const n = name.toLowerCase();
   return n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".webm") || n.includes("alpha");

@@ -1,17 +1,22 @@
 // Shared helpers for layers drawn with Canvas 2D and uploaded as textures
 // (titles, the family tree, map routes).
 import * as THREE from "three";
-import type { TextFont } from "@/core/types";
+import type { BuiltInFont, TextFont } from "@/core/types";
 
-export const FONT_STACK: Record<TextFont, string> = {
+export const FONT_STACK: Record<BuiltInFont, string> = {
   serif: `"Cormorant Garamond", "Palatino Linotype", Palatino, "Book Antiqua", "Hoefler Text", Georgia, serif`,
   sans: `Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif`,
   display: `"Cinzel", "Trajan Pro", "Palatino Linotype", "Hoefler Text", Georgia, serif`,
   mono: `ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace`,
 };
 
+/** CSS font-family for a built-in stack or an installed family (falling back to sans). */
+export function fontFamily(font: TextFont): string {
+  return font in FONT_STACK ? FONT_STACK[font as BuiltInFont] : `"${font.replace(/["\\]/g, "")}", ${FONT_STACK.sans}`;
+}
+
 export function fontString(font: TextFont, weight: number, px: number, italic = false) {
-  return `${italic ? "italic " : ""}${weight} ${px.toFixed(1)}px ${FONT_STACK[font]}`;
+  return `${italic ? "italic " : ""}${weight} ${px.toFixed(1)}px ${fontFamily(font)}`;
 }
 
 export interface CanvasTex {

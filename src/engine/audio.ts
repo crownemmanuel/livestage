@@ -81,6 +81,36 @@ async function playFile(url: string, when: number, volume: number) {
   src.start(Math.max(ac.currentTime, when));
 }
 
+/** The announcement on the speakers now (one at a time). */
+let announcing: { key: string; src: AudioBufferSourceNode; gain: GainNode } | null = null;
+
+function fadeOutAnnouncement(seconds = 0.8) {
+  const a = announcing;
+  if (!a) return;
+  announcing = null;
+  const ac = audio();
+  a.gain.gain.cancelScheduledValues(ac.currentTime);
+  a.gain.gain.setValueAtTime(a.gain.gain.value, ac.currentTime);
+  a.gain.gain.linearRampToValueAtTime(0.0001, ac.currentTime + seconds);
+  a.src.stop(ac.currentTime + seconds + 0.05);
+}
+
+async function startAnnouncement(key: string, url: string, volume: number) {
+  fadeOutAnnouncement(0.3);
+  const ac = audio();
+  const buf = await loadBuffer(url);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const gain = ac.createGain();
+  gain.gain.value = volume;
+  src.connect(gain).connect(ac.destination);
+  src.onended = () => {
+    if (announcing?.src === src) announcing = null;
+  };
+  src.start();
+  announcing = { key, src, gain };
+}
+
 export function startProgramAudio(isHost: () => boolean): () => void {
   const heard = new Set<string>();
   // Events that existed before this window started are history, not new sounds.
@@ -127,7 +157,25 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     }
   };
 
+  // An announcement already under way when this window started is not replayed.
+  const ann0 = useShow.getState().program.announce;
+  if (ann0) heard.add(ann0.key);
+
+  const handleAnnounce = (a: NonNullable<ReturnType<typeof useShow.getState>["program"]["announce"]>) => {
+    if (a.stoppedAt) {
+      if (announcing?.key === a.key) fadeOutAnnouncement();
+      return;
+    }
+    if (heard.has(a.key)) return;
+    heard.add(a.key);
+    if (!isHost() || now() - a.at > 2000) return;
+    const asset = useShow.getState().assets.find((x) => x.id === a.assetId);
+    if (asset) void startAnnouncement(a.key, asset.url, a.volume).catch((e) => console.warn("announcement failed", e));
+  };
+
   return useShow.subscribe((s, prev) => {
+    const ann = s.program.announce;
+    if (ann && ann !== prev.program.announce) handleAnnounce(ann);
     const a = s.program.runtime?.strikes;
     if (a && a !== prev.program.runtime?.strikes) handleStrikes(a);
     const b = s.program.runtime?.sounds;

@@ -34,6 +34,8 @@ import {
   Video,
   Volume2,
   X,
+  Megaphone,
+  Timer,
   Zap,
   Cable,
   Check,
@@ -58,6 +60,7 @@ import { flowNext } from "@/core/groups";
 import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 import { MediaPanel } from "./MediaPanel";
+import { AnnouncementsPanel, TimersPanel } from "./ShowTools";
 
 export const TRANSITIONS: { value: TransitionKind; label: string }[] = [
   { value: "cut", label: "Cut" },
@@ -340,6 +343,8 @@ const ACTION_ICON: Record<CueAction["type"], typeof Play> = {
   clock: Snowflake,
   sound: Volume2,
   send: Send,
+  timer: Timer,
+  announce: Megaphone,
   names: TreeDeciduous,
   route: Route,
   "media.speed": Gauge,
@@ -367,8 +372,9 @@ function ActionIcons({ actions }: { actions: CueAction[] }) {
 
 function CueList() {
   const { target, rt } = useControlTarget();
-  const [tab, setTab] = useState<"cues" | "media">("cues");
+  const [tab, setTab] = useState<"cues" | "media" | "announce" | "timers">("cues");
   useTick(400);
+  const runningTimers = useShow((s) => Object.values(s.program.timers ?? {}).filter((r) => r.running).length);
   if (!rt) return null;
   const cues = rt.scene.cues;
   const live = target === "program";
@@ -376,15 +382,16 @@ function CueList() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="flex rounded-lg bg-well p-0.5">
-          {(["cues", "media"] as const).map((k) => (
+          {(["cues", "media", "announce", "timers"] as const).map((k) => (
             <button
               key={k}
               onClick={() => setTab(k)}
               className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold", tab === k ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}
             >
-              {k === "cues" ? <ListOrdered className="size-3.5" /> : <Images className="size-3.5" />}
-              {k === "cues" ? "Cues" : "Media"}
+              {k === "cues" ? <ListOrdered className="size-3.5" /> : k === "media" ? <Images className="size-3.5" /> : k === "announce" ? <Megaphone className="size-3.5" /> : <Timer className="size-3.5" />}
+              {k === "cues" ? "Cues" : k === "media" ? "Media" : k === "announce" ? "Announce" : "Timers"}
               {k === "cues" && <span className="text-muted-foreground">{cues.length}</span>}
+              {k === "timers" && runningTimers > 0 && <span className="size-2 rounded-full bg-preview" />}
             </button>
           ))}
         </div>
@@ -399,6 +406,10 @@ function CueList() {
       <ScrollArea className="min-h-0 flex-1">
         {tab === "media" ? (
           <MediaPanel />
+        ) : tab === "announce" ? (
+          <AnnouncementsPanel />
+        ) : tab === "timers" ? (
+          <TimersPanel />
         ) : (
           <ol className="space-y-1.5 px-3 pb-3">
             {cues.map((c, i) => {
@@ -581,6 +592,14 @@ export function describeAction(a: import("@/core/types").CueAction): string {
       return `sound${d}`;
     case "send":
       return `send ${describeMessage(a.message)}${d}`;
+    case "timer": {
+      const t = useProject.getState().project.timers?.find((x) => x.id === a.timerId);
+      return `${a.op} timer ${t ? `“${t.name}”` : "(missing)"}${d}`;
+    }
+    case "announce": {
+      const x = useProject.getState().project.announcements?.find((y) => y.id === a.announcementId);
+      return `announce ${x ? `“${x.name}”` : "(missing)"}${d}`;
+    }
     case "names":
       return `names: ${a.op}${a.op === "set" ? ` ${a.value}` : ""}${d}`;
     case "route":

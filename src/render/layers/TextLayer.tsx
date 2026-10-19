@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { clamp, easeOut } from "@/core/clock";
+import { clamp, easeOut, now } from "@/core/clock";
+import { countdownText, formatClock, timerLeft } from "@/core/timers";
+import { useShow } from "@/store/show";
 import type { TextComponent } from "@/core/types";
 import { NOISE_GLSL, QUAD_VERT } from "../glsl";
 import { useStage } from "../frame";
@@ -259,4 +261,19 @@ export function TextLayer({ comp }: { comp: TextComponent }) {
   });
 
   return <primitive object={mesh} />;
+}
+
+/** A title linked to a show timer: redrawn once a second with "{time}" filled in. */
+export function CountdownLayer({ comp }: { comp: TextComponent }) {
+  const run = useShow((s) => (comp.timerId ? s.program.timers?.[comp.timerId] : undefined));
+  const [clock, setClock] = useState(() => formatClock(timerLeft(run, 0, now())));
+  useEffect(() => {
+    const tick = () => setClock(formatClock(timerLeft(run, 0, now())));
+    tick();
+    if (!run?.running) return;
+    const h = setInterval(tick, 200);
+    return () => clearInterval(h);
+  }, [run]);
+  const shown = useMemo(() => ({ ...comp, text: countdownText(comp.text, clock) }), [comp, clock]);
+  return <TextLayer comp={shown} />;
 }

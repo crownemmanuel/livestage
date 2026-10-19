@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, CornerDownRight, Crop, Eye, Footprints, Gauge, Image, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, X } from "lucide-react";
+import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, CornerDownRight, Megaphone, Timer as TimerIcon, Crop, Eye, Footprints, Gauge, Image, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -20,7 +20,7 @@ function currentPreviewFraming() {
   const r = (n: number) => Math.round(n * 1000) / 1000;
   return { zoom: r(f.zoom), x: r(f.x), y: r(f.y) };
 }
-import { useProject } from "@/store/project";
+import { useProject, NO_ITEMS } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
 import { TRANSITIONS } from "../show/ShowMode";
@@ -28,6 +28,7 @@ import { MessageFields, defaultMessage } from "../io/MessageFields";
 import { useSceneCodes } from "../SceneList";
 import { FireField } from "./FireField";
 import { flowNext } from "@/core/groups";
+import { formatClock } from "@/core/timers";
 
 /** "hog" is a Send action preset to a Hog 4 message; it gets its own menu entry because it is the common case. */
 type MenuType = CueActionType | "hog";
@@ -37,6 +38,8 @@ const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> = {
   send: { label: "MIDI / OSC", icon: <Radio /> },
   blackout: { label: "Blackout / lights up", icon: <Power /> },
   sound: { label: "Play sound", icon: <Volume2 /> },
+  announce: { label: "Announcement", icon: <Megaphone /> },
+  timer: { label: "Show timer", icon: <TimerIcon /> },
   clip: { label: "Video clip", icon: <Clapperboard /> },
   layer: { label: "Layer / title", icon: <Layers /> },
   background: { label: "Background", icon: <Image /> },
@@ -57,10 +60,10 @@ const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> = {
 };
 
 const MENU: { group: string; types: MenuType[] }[] = [
-  { group: "Lighting & sound", types: ["hog", "blackout", "sound", "send"] },
+  { group: "Lighting & sound", types: ["hog", "blackout", "sound", "announce", "send"] },
   { group: "Picture", types: ["clip", "layer", "background", "effect", "effect.param", "media.speed", "timeOfDay", "names", "route"] },
   { group: "Camera", types: ["camera", "framing"] },
-  { group: "Show", types: ["takeScene", "clock"] },
+  { group: "Show", types: ["takeScene", "timer", "clock"] },
   { group: "Lion", types: ["lion", "lion.moveTo", "lion.place", "actor.visible"] },
 ];
 
@@ -104,6 +107,10 @@ function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]): CueA
       return { type, assetId: null, volume: 1, delay: 0 };
     case "send":
       return { type, message: defaultMessage("osc"), delay: 0 };
+    case "timer":
+      return { type, timerId: useProject.getState().project.timers?.[0]?.id ?? "", op: "restart", delay: 0 };
+    case "announce":
+      return { type, announcementId: useProject.getState().project.announcements?.[0]?.id ?? "", delay: 0 };
     case "names":
       return { type, layerId: scene.components.find((c) => c.kind === "names")?.id ?? "", op: "next", value: 0, duration: 6, delay: 0 };
     case "route":
@@ -259,6 +266,8 @@ function AfterLastStep({ scene }: { scene: Scene }) {
 
 function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; scene: Scene; scenes: Scene[]; onChange: (a: CueAction) => void; onRemove: () => void }) {
   const assets = useProject((s) => s.project.assets);
+  const timers = useProject((s) => s.project.timers ?? NO_ITEMS);
+  const announcements = useProject((s) => s.project.announcements ?? NO_ITEMS);
   const opt = (kinds: string[]) => scene.components.filter((c) => kinds.includes(c.kind)).map((c) => ({ value: c.id, label: c.name }));
   const markers = Object.keys(scene.markers).map((m) => ({ value: m, label: m }));
   const sel = (value: string, options: { value: string; label: string }[], set: (v: string) => void, w = "w-[130px]") => (
@@ -410,6 +419,17 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       break;
     case "send":
       body = <MessageFields compact hideType={a.message.type === "hog"} m={a.message} onChange={(message) => onChange({ ...a, message })} />;
+      break;
+    case "timer":
+      body = (
+        <>
+          {sel(a.op, [{ value: "restart", label: "start from the top" }, { value: "start", label: "start / resume" }, { value: "pause", label: "pause" }, { value: "reset", label: "reset (stopped)" }], (v) => onChange({ ...a, op: v as typeof a.op }), "w-[150px]")}
+          {sel(a.timerId, timers.map((t) => ({ value: t.id, label: `${t.name} (${formatClock(t.duration)})` })), (v) => onChange({ ...a, timerId: v }), "w-[170px]")}
+        </>
+      );
+      break;
+    case "announce":
+      body = announcements.length ? sel(a.announcementId, announcements.map((x) => ({ value: x.id, label: x.name })), (v) => onChange({ ...a, announcementId: v }), "w-[200px]") : <span className="text-muted-foreground">Add announcements in Show Mode → Announce first.</span>;
       break;
     case "names":
       body = (

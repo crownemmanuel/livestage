@@ -9,7 +9,7 @@ import { LION_KEYMAP, LION_MOVE_KEYS } from "@/core/lion";
 import { isOutputOpen, openOutputWindow, outputClosedByUs } from "@/core/platform";
 import { mediaElapsed } from "@/core/runtime";
 import { stepActors, type ActorInput } from "@/core/sim";
-import type { Cue, CueAction, IoAction, MediaMarker, MediaSettings, Scene, SceneRuntime, TransitionSpec } from "@/core/types";
+import type { Cue, CueAction, IoAction, MediaMarker, MediaSettings, Scene, SceneRuntime, TimerOp, TransitionSpec } from "@/core/types";
 import { flowNext } from "@/core/groups";
 import { useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
@@ -111,6 +111,15 @@ function execAction(target: Target, a: CueAction) {
   if (a.type === "send") {
     // Messages leave the building only from the live show.
     if (target === "program") void sendMessage(a.message);
+    return;
+  }
+  if (a.type === "timer") {
+    // Timers are show-wide; rehearsing a cue in the preview leaves them alone.
+    if (target === "program") runTimer(a.timerId, a.op);
+    return;
+  }
+  if (a.type === "announce") {
+    if (target === "program") playAnnouncement(a.announcementId);
     return;
   }
   useShow.getState().dispatch(target, a);
@@ -237,6 +246,38 @@ export const cueControl = {
     useShow.getState().dispatch(target, { type: "cuePointer", index });
   },
 };
+
+// ---------------------------------------------------------------- timers and announcements
+
+export function runTimer(id: string, op: TimerOp | "add", seconds?: number) {
+  const def = useProject.getState().project.timers?.find((t) => t.id === id);
+  if (!def) return ioLog("error", "A cue points at a timer that no longer exists");
+  useShow.getState().timer(id, op, { duration: def.duration, seconds });
+}
+
+export function playAnnouncement(id: string) {
+  const a = useProject.getState().project.announcements?.find((x) => x.id === id);
+  if (!a?.assetId) return ioLog("error", `Announcement ${a ? `"${a.name}" has no audio` : "no longer exists"}`);
+  useShow.getState().announce({ id: a.id, assetId: a.assetId, volume: a.volume });
+}
+
+export function stopAnnouncement() {
+  useShow.getState().announce(null);
+}
+
+/** Timers that just reached 0:00: stop them there and play their end announcement. */
+function pollTimers(wall: number) {
+  const s = useShow.getState();
+  const runs = s.program.timers;
+  if (!runs) return;
+  for (const [id, r] of Object.entries(runs)) {
+    if (!r.running || r.endsAt > wall) continue;
+    s.timer(id, "pause", { duration: 0 });
+    const def = useProject.getState().project.timers?.find((t) => t.id === id);
+    ioLog("info", `Timer "${def?.name ?? id}" reached 0:00`);
+    if (def?.endAnnouncementId) playAnnouncement(def.endAnnouncementId);
+  }
+}
 
 // ---------------------------------------------------------------- outgoing notifications
 
@@ -518,6 +559,7 @@ export function startOperatorServices(): () => void {
     const dt = Math.min(0.1, (t - last) / 1000);
     last = t;
     const s = useShow.getState();
+    pollTimers(t);
     const input = currentInput();
     const lc = s.lionControl;
     const inputsFor = (target: Target) => (lc.armed && lc.actorId && lc.target === target ? { [lc.actorId]: input } : {});
@@ -559,6 +601,9 @@ export function startOperatorServices(): () => void {
   };
   syncProject();
   cleanups.push(useProject.subscribe(syncProject));
+  const syncTimers = () => useShow.getState().syncTimers(useProject.getState().project.timers ?? []);
+  syncTimers();
+  cleanups.push(useProject.subscribe((p, prev) => p.project.timers !== prev.project.timers && syncTimers()));
 
   // Broadcast program state on change (coalesced to ~30 Hz so a live slider cannot flood IPC), poses at ≤30 Hz.
   const sendProject = () => {

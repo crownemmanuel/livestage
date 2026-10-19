@@ -4,6 +4,7 @@ import type { ScalingMode, SceneRuntime } from "@/core/types";
 import { useShow } from "@/store/show";
 import { ErrorBoundary } from "@/ui/ErrorBoundary";
 import { SceneCanvas } from "./SceneCanvas";
+import { TimerOverlay } from "./TimerOverlay";
 import type { SlotRole, TransitionView } from "./frame";
 
 interface StageViewProps {
@@ -66,6 +67,7 @@ export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 
           ) : (
             <PreviewSlot W={W} H={H} dpr={dpr} onCapture={onCapture} />
           )}
+          {source === "program" && <TimerOverlay h={rect.h} />}
           {output.testPattern && (source === "program" || !isOutput) && <TestPattern W={W} H={H} />}
           {showSafeArea && output.safeArea.enabled && <SafeArea W={W} H={H} pct={output.safeArea.marginPct} />}
         </div>

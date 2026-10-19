@@ -10,6 +10,8 @@ import type {
   ProgramState,
   Scene,
   SceneRuntime,
+  TimerOp,
+  TimerRun,
   TransitionSpec,
 } from "@/core/types";
 
@@ -58,6 +60,13 @@ interface ShowStore {
   setPoses(target: Target, poses: ActorPoses, at: number): void;
   setNextTransition(t: TransitionSpec | null): void;
   setLionControl(p: Partial<ShowStore["lionControl"]>): void;
+  /** Show timers (global, not per scene). `duration` is the timer's full length, for reset. */
+  timer(id: string, op: TimerOp | "add", opts: { duration: number; seconds?: number }): void;
+  /** Make sure every defined timer has a live state, and drop ones that were deleted. */
+  syncTimers(defs: { id: string; duration: number }[]): void;
+  announce(a: { id: string; assetId: string; volume: number } | null): void;
+  /** Put a show timer on screen over everything (null takes it off). */
+  setTimerOverlay(o: { timerId: string; label: string } | null): void;
   /** Bring a saved program back after a reload/crash; the scene clock keeps running from where it was. */
   restoreProgram(program: ProgramState, poses: ActorPoses): void;
   /** The live scene was edited and saved: push the new definition without restarting it. */
@@ -131,6 +140,10 @@ export const useShow = create<ShowStore>((set, get) => ({
         takeCount: program.takeCount + 1,
         // a TAKE in the dark stays dark until the operator brings the lights up
         blackout: program.blackout,
+        // show timers and the announcement playing are show-wide: a TAKE must not reset them
+        timers: program.timers,
+        announce: program.announce,
+        timerOverlay: program.timerOverlay,
       },
       programPoses: createPoses(scene),
       fromPoses: instant ? null : programPoses,
@@ -187,6 +200,59 @@ export const useShow = create<ShowStore>((set, get) => ({
 
   setNextTransition: (t) => set({ nextTransition: t }),
   setLionControl: (p) => set({ lionControl: { ...get().lionControl, ...p } }),
+
+  timer(id, op, { duration, seconds = 60 }) {
+    const { program } = get();
+    const cur = program.timers?.[id] ?? { running: false, endsAt: 0, remaining: duration };
+    const t = now();
+    const left = cur.running ? Math.max(0, (cur.endsAt - t) / 1000) : cur.remaining;
+    let next: TimerRun;
+    switch (op) {
+      case "start":
+        // Starting a finished timer starts it over.
+        next = cur.running ? cur : { running: true, endsAt: t + (left > 0 ? left : duration) * 1000, remaining: left > 0 ? left : duration };
+        break;
+      case "pause":
+        next = { running: false, endsAt: 0, remaining: left };
+        break;
+      case "reset":
+        next = { running: false, endsAt: 0, remaining: duration };
+        break;
+      case "restart":
+        next = { running: true, endsAt: t + duration * 1000, remaining: duration };
+        break;
+      case "add":
+        next = cur.running ? { ...cur, endsAt: Math.max(t, cur.endsAt + seconds * 1000) } : { ...cur, remaining: Math.max(0, cur.remaining + seconds) };
+        break;
+    }
+    set({ program: { ...program, timers: { ...(program.timers ?? {}), [id]: next } } });
+  },
+
+  syncTimers(defs) {
+    const { program } = get();
+    const cur = program.timers ?? {};
+    const ids = new Set(defs.map((d) => d.id));
+    let changed = Object.keys(cur).some((id) => !ids.has(id));
+    const next: Record<string, TimerRun> = {};
+    for (const d of defs) {
+      next[d.id] = cur[d.id] ?? { running: false, endsAt: 0, remaining: d.duration };
+      if (!cur[d.id]) changed = true;
+    }
+    if (changed) set({ program: { ...program, timers: next } });
+  },
+
+  announce(a) {
+    const { program } = get();
+    if (!a) {
+      if (program.announce && !program.announce.stoppedAt) set({ program: { ...program, announce: { ...program.announce, stoppedAt: now() } } });
+      return;
+    }
+    set({ program: { ...program, announce: { key: `${a.id}:${now()}`, id: a.id, assetId: a.assetId, volume: a.volume, at: now() } } });
+  },
+
+  setTimerOverlay(o) {
+    set({ program: { ...get().program, timerOverlay: o } });
+  },
 
   restoreProgram(program, poses) {
     // A transition that was running when we went down is over by now.

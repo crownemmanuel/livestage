@@ -17,7 +17,7 @@ import { Lion } from "./actors/Lion";
 import { MediaBackground, MediaLayer } from "./layers/MediaLayers";
 import { ModelLayer } from "./layers/ModelLayer";
 import { ClipActorLayer } from "./layers/ClipActor";
-import { TextLayer } from "./layers/TextLayer";
+import { CountdownLayer, TextLayer } from "./layers/TextLayer";
 import { NamesLayer } from "./layers/NamesLayer";
 import { RouteLayer } from "./layers/RouteLayer";
 import { ProjectileOverlay, ShakeDriver } from "./effects/Impact";
@@ -324,7 +324,7 @@ function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntim
       {comps.map((c) => ((c.kind === "video" || c.kind === "image") && c.placement === "front" ? <MediaLayer key={c.id} comp={c} /> : null))}
       {comps.map((c) => (c.kind === "route" ? <RouteLayer key={c.id} comp={c} /> : null))}
       {comps.map((c) => (c.kind === "names" ? <NamesLayer key={c.id} comp={c} /> : null))}
-      {comps.map((c) => (c.kind === "text" ? <TextLayer key={c.id} comp={c} /> : null))}
+      {comps.map((c) => (c.kind === "text" ? c.timerId ? <CountdownLayer key={c.id} comp={c} /> : <TextLayer key={c.id} comp={c} /> : null))}
       {comps.map((c) => (c.kind === "effect" && c.effect === "projectile" ? <ProjectileOverlay key={c.id} comp={c} /> : null))}
     </>
   );

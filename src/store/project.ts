@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { applyPrologueFeel, defaultProject, LION_PROOF_ASSETS, PROLOGUE_ASSETS, PROLOGUE_DEMO, PROLOGUE_FEEL, prologueScenes, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene, SHEPHERD_PHOTOREAL_DEMO, shepherdPhotorealScene } from "@/core/defaultProject";
 import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
-import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, HOG_DEFAULT_HOST, makeGroup, makeScene } from "@/core/factories";
+import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, defaultTimers, HOG_DEFAULT_HOST, makeGroup, makeScene } from "@/core/factories";
 import { autoGroup, normalizeGroups } from "@/core/groups";
+import { FOH_ASSETS, FOH_CALLS, fohAnnouncements } from "@/core/fohCalls";
 import { loadProjectFile, refreshAssetUrls, saveProjectFile } from "@/core/platform";
 import type { Asset, OutputSettings, Project, Scene, SceneComponent, SceneGroup } from "@/core/types";
 
@@ -63,6 +64,7 @@ function migrate(p: Project): Project {
   const out = { ...defaultOutput(), ...p.output };
   out.safeArea = { ...defaultOutput().safeArea, ...p.output?.safeArea };
   out.standby = { ...defaultOutput().standby, ...p.output?.standby };
+  out.timerOverlay = { ...defaultOutput().timerOverlay, ...p.output?.timerOverlay };
   const io = { ...defaultIo(), ...(p.io ?? {}) };
   io.midi = { ...defaultIo().midi, ...(p.io?.midi ?? {}) };
   io.osc = { ...defaultIo().osc, ...(p.io?.osc ?? {}) };
@@ -167,8 +169,16 @@ function migrate(p: Project): Project {
     merged.demoAdditions = [...merged.demoAdditions!, SCENE_GROUPS];
   }
   renumber(merged);
+  merged.timers ??= defaultTimers();
+  merged.announcements ??= [];
+  if (!merged.demoAdditions!.includes(FOH_CALLS)) {
+    // The recorded front-of-house calls: library assets plus a ready announcement button each.
+    merged.assets = [...merged.assets, ...FOH_ASSETS.filter((a) => !merged.assets.some((x) => x.id === a.id))];
+    merged.announcements = [...merged.announcements, ...fohAnnouncements().filter((a) => !merged.announcements!.some((x) => x.id === a.id))];
+    merged.demoAdditions = [...merged.demoAdditions!, FOH_CALLS];
+  }
   // Built-in assets ship with the app: keep their definitions in step with the code.
-  const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS].map((a) => [a.id, a]));
+  const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS, ...FOH_ASSETS].map((a) => [a.id, a]));
   merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)! } : a));
   return merged;
 }
@@ -401,6 +411,9 @@ export const useProject = create<ProjectStore>((set, get) => ({
     set({ project: { ...p, scenes }, dirty: true });
   },
 }));
+
+/** Stable empty list for selectors: a fresh `[]` each read makes React re-render forever. */
+export const NO_ITEMS: never[] = Object.freeze([]) as never[];
 
 export const selectedScene = (s: ProjectStore) => s.project.scenes.find((x) => x.id === s.selectedSceneId) ?? null;
 

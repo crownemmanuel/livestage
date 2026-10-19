@@ -1,3 +1,4 @@
+mod fonts;
 mod io;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -46,7 +47,8 @@ pub fn run() {
             io::midi_open,
             io::midi_send,
             io::osc_listen,
-            io::osc_send
+            io::osc_send,
+            fonts::system_fonts
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

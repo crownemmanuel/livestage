@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { uid } from "@/core/ids";
 import type { HogKind, HogOp, IoMessage } from "@/core/types";
 import { HOG_KIND_LABEL, HOG_OP_LABEL, oscWantsText, sendMessage, type HogMessage } from "@/engine/io";
-import { useProject } from "@/store/project";
+import { useProject, NO_ITEMS } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 
 export const MESSAGE_TYPES: { value: IoMessage["type"]; label: string }[] = [
@@ -67,7 +67,7 @@ function Labeled({ label, children }: { label: string; children: ReactNode }) {
 
 /** Compact editor for an outgoing MIDI / OSC message, with a test button. */
 export function MessageFields({ m, onChange, compact = false, hideType = false }: { m: IoMessage; onChange: (m: IoMessage) => void; compact?: boolean; /** The row already says what kind it is (a cue's Lighting action). */ hideType?: boolean }) {
-  const targets = useProject((s) => s.project.io?.osc.targets ?? []);
+  const targets = useProject((s) => s.project.io?.osc.targets ?? NO_ITEMS);
   const cls = compact ? "h-6 text-[11px]" : "h-7 text-[12px]";
   const num = (v: number, set: (n: number) => void, w = "w-14", min?: number, max?: number, step = 1) => <NumberInput className={`${cls} ${w}`} value={v} min={min} max={max} step={step} onChange={set} />;
   return (
@@ -150,7 +150,7 @@ const CUSTOM = "custom:";
 
 /** GO / release / halt a named lighting item (or a typed-in number) on the Hog. */
 function HogFields({ m, onChange, cls }: { m: HogMessage; onChange: (m: IoMessage) => void; cls: string }) {
-  const items = useProject((s) => s.project.io?.hogItems ?? []);
+  const items = useProject((s) => s.project.io?.hogItems ?? NO_ITEMS);
   const item = m.item ? items.find((i) => i.id === m.item) : undefined;
   const kind = item?.kind ?? m.kind;
   const [naming, setNaming] = useState(false);

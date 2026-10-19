@@ -25,7 +25,7 @@ import type {
 
 /** Immediate operator commands. Cue actions are commands with a delay. */
 export type Command =
-  | Exclude<CueAction, { type: "takeScene" } | { type: "blackout" } | { type: "send" } | { type: "clock" } | { type: "effect.param" }>
+  | Exclude<CueAction, { type: "takeScene" } | { type: "blackout" } | { type: "send" } | { type: "timer" } | { type: "announce" } | { type: "clock" } | { type: "effect.param" }>
   | { type: "effect.param"; effectId: string; key: string; value: number | string | boolean; delay?: number }
   | { type: "clock"; op: "pause" | "resume" | "toggle"; delay?: number }
   /** Jump the scene clock to scene time t (ms): scrubbing. */

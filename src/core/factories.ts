@@ -221,8 +221,20 @@ export function defaultOutput(): OutputSettings {
     testPattern: false,
     standby: { text: "SALVATION 2026", subtext: "The House of David", assetId: null, color: "#000000" },
     audioHost: "output",
+    timerOverlay: defaultTimerOverlay(),
   };
 }
+
+export const defaultTimerOverlay = (): import("./types").TimerOverlayStyle => ({
+  position: "bottom-right",
+  size: 0.09,
+  font: "display",
+  color: "#ffffff",
+  background: "#000000",
+  backgroundOpacity: 0.55,
+  showLabel: true,
+  margin: 0.05,
+});
 
 /** Deep copy a component with fresh ids (used by duplicate). */
 export function cloneComponent<T extends SceneComponent>(c: T): T {
@@ -478,4 +490,31 @@ export const GROUP_HEX: Record<import("./types").GroupColor, string> = {
 
 export function makeGroup(name: string, color: import("./types").GroupColor = "amber"): import("./types").SceneGroup {
   return { id: uid("grp"), name, color, flow: true };
+}
+
+// ---------------------------------------------------------------- timers and announcements
+
+export function makeTimer(name: string, duration: number): import("./types").ShowTimer {
+  return { id: uid("tmr"), name, duration, endAnnouncementId: null };
+}
+
+/** Every show starts with a pre-show and an intermission clock. */
+export function defaultTimers(): import("./types").ShowTimer[] {
+  return [
+    { id: "tmr_preshow", name: "Pre-show", duration: 5 * 60, endAnnouncementId: null },
+    { id: "tmr_intermission", name: "Intermission", duration: 15 * 60, endAnnouncementId: null },
+  ];
+}
+
+export function makeAnnouncement(name: string, assetId: string | null): import("./types").Announcement {
+  return { id: uid("ann"), name, assetId, volume: 1 };
+}
+
+/** A holding scene with a big countdown, started by its first cue. */
+export function makeIntermissionScene(timerId: string): Scene {
+  const title = makeText("Countdown", { text: "WE'LL BE BACK IN\n{time}", timerId, initiallyVisible: true, size: 0.12, y: 0.5, glow: 0.5 });
+  const s = makeScene(0, "Intermission", { components: [title], transition: { ...defaultTransition(), kind: "crossfade", duration: 2 } });
+  s.cues = [makeCue("Start the intermission clock", [{ type: "timer", timerId, op: "restart", delay: 0 }])];
+  s.cues[0].notes = "GO as the house lights come up.";
+  return s;
 }

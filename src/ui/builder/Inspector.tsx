@@ -27,11 +27,11 @@ import type {
   SceneComponent,
   TextAnim,
   TextComponent,
-  TextFont,
   VideoLayerComponent,
 } from "@/core/types";
 import { useModelInfo } from "@/store/modelInfo";
-import { selectedScene, useProject } from "@/store/project";
+import { selectedScene, useProject, NO_ITEMS } from "@/store/project";
+import { FontPicker } from "../FontPicker";
 import { AssetField, ColorField, Field, NumberField, NumberInput, Section, SelectBox, SelectField, SliderField, SwitchField, TextField, Vec3Field } from "../fields";
 
 type Updater<T> = (fn: (c: T) => void) => void;
@@ -73,13 +73,6 @@ export function Inspector() {
   );
 }
 
-const FONTS: { value: TextFont; label: string }[] = [
-  { value: "serif", label: "Serif (storybook)" },
-  { value: "display", label: "Display capitals" },
-  { value: "sans", label: "Sans (simple white letters)" },
-  { value: "mono", label: "Mono" },
-];
-
 const TEXT_ANIMS: { value: TextAnim; label: string }[] = [
   { value: "fade", label: "Fade" },
   { value: "rise", label: "Rise" },
@@ -91,9 +84,17 @@ const TEXT_ANIMS: { value: TextAnim; label: string }[] = [
 ];
 
 function TextForm({ c, up }: { c: TextComponent; up: Updater<TextComponent> }) {
+  const timers = useProject((s) => s.project.timers ?? NO_ITEMS);
   return (
     <>
       <Section title="Text">
+        <SelectField
+          label="Countdown"
+          value={c.timerId ?? "__none__"}
+          onChange={(v) => up((x) => (x.timerId = v === "__none__" ? null : v))}
+          options={[{ value: "__none__", label: "— plain text —" }, ...timers.map((t) => ({ value: t.id, label: `Show timer: ${t.name}` }))]}
+        />
+        {c.timerId && <p className="text-[10.5px] leading-snug text-muted-foreground">Write {"{time}"} where the clock goes, e.g. “WE'LL BE BACK IN {"{time}"}”. Run the timer from Show Mode → Timers or a cue.</p>}
         <Field label="Text">
           <textarea
             className="h-16 w-full resize-none rounded-md border border-input bg-transparent px-2 py-1 text-[12px]"
@@ -102,7 +103,9 @@ function TextForm({ c, up }: { c: TextComponent; up: Updater<TextComponent> }) {
             onBlur={(e) => e.target.value !== c.text && up((x) => (x.text = e.target.value))}
           />
         </Field>
-        <SelectField<TextFont> label="Font" value={c.font} onChange={(v) => up((x) => (x.font = v))} options={FONTS} />
+        <Field label="Font">
+          <FontPicker value={c.font} onChange={(v) => up((x) => (x.font = v))} />
+        </Field>
         <SliderField label="Weight" value={c.weight} min={300} max={900} step={100} onChange={(v) => up((x) => (x.weight = v))} />
         <SwitchField label="Capitals" value={c.uppercase} onChange={(v) => up((x) => (x.uppercase = v))} />
         <SwitchField label="Italic" value={c.italic} onChange={(v) => up((x) => (x.italic = v))} />
@@ -160,7 +163,9 @@ function NamesForm({ c, up }: { c: NamesComponent; up: Updater<NamesComponent> }
           ]}
         />
         <TextField label="Crown text" value={c.crown} onChange={(v) => up((x) => (x.crown = v))} placeholder="e.g. FOREVER or JESUS" />
-        <SelectField<TextFont> label="Font" value={c.font} onChange={(v) => up((x) => (x.font = v))} options={FONTS} />
+        <Field label="Font">
+          <FontPicker value={c.font} onChange={(v) => up((x) => (x.font = v))} />
+        </Field>
         <SliderField label="Size" value={c.size} min={0.02} max={0.2} step={0.002} onChange={(v) => up((x) => (x.size = v))} />
         <ColorField label="Gold" value={c.color} onChange={(v) => up((x) => (x.color = v))} />
         <ColorField label="Branches" value={c.branchColor} onChange={(v) => up((x) => (x.branchColor = v))} />

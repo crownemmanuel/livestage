@@ -18,13 +18,14 @@ import {
   RotateCcw,
   Save,
   TvMinimalPlay,
+  Timer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { closeOutputWindow, exportProject, importProject, openOutputWindow } from "@/core/platform";
-import { useProject } from "@/store/project";
+import { useProject, NO_ITEMS } from "@/store/project";
 import { useShow } from "@/store/show";
 import { useIo } from "@/engine/io";
 import { clearLiveState } from "@/engine/persist";
@@ -33,6 +34,8 @@ import { IoDialog } from "./io/IoDialog";
 import { getErrors, onErrors } from "./ErrorBoundary";
 import { RoundToggle, Tip, ToolbarButton } from "./kit";
 import { useSceneCodes } from "./SceneList";
+import { now } from "@/core/clock";
+import { formatClock, timerLeft } from "@/core/timers";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -191,6 +194,7 @@ export function TopBar() {
             {saveError ? <AlertTriangle className="size-4" /> : dirty ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
           </span>
         </Tip>
+        <RunningTimers />
         <span className="font-key w-[70px] text-right text-[15px] font-semibold tabular text-foreground/80">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
       </div>
 
@@ -219,5 +223,35 @@ export function TopBar() {
         </DialogContent>
       </Dialog>
     </header>
+  );
+}
+
+/** Running show timers, readable from anywhere in the app. */
+function RunningTimers() {
+  const runs = useShow((s) => s.program.timers);
+  const defs = useProject((s) => s.project.timers ?? NO_ITEMS);
+  const [, force] = useState(0);
+  const running = defs.filter((d) => runs?.[d.id]?.running);
+  useEffect(() => {
+    if (!running.length) return;
+    const h = setInterval(() => force((n) => n + 1), 250);
+    return () => clearInterval(h);
+  }, [running.length]);
+  if (!running.length) return null;
+  return (
+    <>
+      {running.map((d) => {
+        const left = timerLeft(runs?.[d.id], d.duration, now());
+        return (
+          <Tip key={d.id} label={`${d.name} timer (Show Mode → Timers)`} side="bottom">
+            <span className={cn("flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]", left <= 60 ? "border-armed/60 text-armed" : "border-preview/50 text-preview")}>
+              <Timer className="size-3.5" />
+              <span className="max-w-[90px] truncate">{d.name}</span>
+              <span className="font-key font-bold tabular">{formatClock(left)}</span>
+            </span>
+          </Tip>
+        );
+      })}
+    </>
   );
 }

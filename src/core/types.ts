@@ -46,6 +46,25 @@ export interface OutputSettings {
   standby: { text: string; subtext: string; assetId: string | null; color: string };
   /** Which window plays program audio (thunder, transition audio, layer audio). */
   audioHost: "output" | "operator";
+  /** How a show timer looks when it is put on screen over everything. */
+  timerOverlay: TimerOverlayStyle;
+}
+
+export type OverlayPosition = "top-left" | "top" | "top-right" | "left" | "center" | "right" | "bottom-left" | "bottom" | "bottom-right";
+
+export interface TimerOverlayStyle {
+  position: OverlayPosition;
+  /** Clock height as a fraction of the wall's height. */
+  size: number;
+  font: TextFont;
+  color: string;
+  /** Box behind the clock (opacity 0 = none). */
+  background: string;
+  backgroundOpacity: number;
+  /** Show the timer's name above the clock. */
+  showLabel: boolean;
+  /** Distance from the edge, fraction of the wall's height. */
+  margin: number;
 }
 
 // ---------------------------------------------------------------- scene
@@ -353,7 +372,10 @@ export interface ActorLayout {
   shadow: number;
 }
 
-export type TextFont = "serif" | "sans" | "display" | "mono";
+/** The show's own font stacks. */
+export type BuiltInFont = "serif" | "sans" | "display" | "mono";
+/** A built-in stack, or the family name of a font installed on the show computer. */
+export type TextFont = BuiltInFont | (string & {});
 export type TextAnim = "cut" | "fade" | "rise" | "letters" | "words" | "burn" | "typewriter";
 
 /** Titles, captions and verses drawn on the wall ("A FEW WEEKS LATER", FOREVER, Romans 10:13). */
@@ -365,6 +387,8 @@ export interface TextComponent extends ComponentBase {
   weight: number;
   italic: boolean;
   uppercase: boolean;
+  /** Countdown: show this show timer; "{time}" in the text is replaced by its mm:ss. */
+  timerId?: string | null;
   /** Line height as a fraction of canvas height. */
   size: number;
   color: string;
@@ -517,6 +541,10 @@ export type CueAction =
   | { type: "sound"; assetId: string | null; volume: number; delay: number }
   /** Send MIDI / OSC to a console or another machine. */
   | { type: "send"; message: IoMessage; delay: number }
+  /** Show timers are global (the Timers tab); a cue can start, pause or reset one. */
+  | { type: "timer"; timerId: string; op: TimerOp; delay: number }
+  /** Play a front-of-house announcement (the Announcements tab). */
+  | { type: "announce"; announcementId: string; delay: number }
   /** Drive a names component: reveal the next name, burn the tree, bloom it… */
   | { type: "names"; layerId: string; op: "next" | "prev" | "reset" | "all" | "set" | "burn" | "restore" | "bloom"; value: number; duration: number; delay: number }
   /** Draw / reset a map route. */
@@ -624,6 +652,36 @@ export interface Project {
   io?: IoSettings;
   /** Scene groups, in no particular order (their scenes' order sets the running order). */
   groups?: SceneGroup[];
+  /** Show timers (pre-show, intermission …), run from the Timers tab or by cues. */
+  timers?: ShowTimer[];
+  /** Front-of-house announcements ("the show will begin in 5 minutes"). */
+  announcements?: Announcement[];
+}
+
+export type TimerOp = "start" | "pause" | "reset" | "restart";
+
+export interface ShowTimer {
+  id: string;
+  name: string;
+  /** Seconds it counts down from. */
+  duration: number;
+  /** Announcement played when it reaches 0:00 (null = none). */
+  endAnnouncementId: string | null;
+}
+
+export interface Announcement {
+  id: string;
+  name: string;
+  /** An audio asset. */
+  assetId: string | null;
+  volume: number;
+}
+
+/** A timer's live state: counting toward `endsAt` (wall ms), or paused with `remaining` seconds. */
+export interface TimerRun {
+  running: boolean;
+  endsAt: number;
+  remaining: number;
 }
 
 // ---------------------------------------------------------------- show control I/O
@@ -871,4 +929,10 @@ export interface ProgramState {
   takeCount: number;
   /** Lights-out: the whole wall fades to black (wall-clock ms of the change). */
   blackout?: { on: boolean; at: number; fade: number };
+  /** Show timers by id (kept here so the wall shows them and they survive a reload). */
+  timers?: Record<string, TimerRun>;
+  /** A show timer put on screen over everything (the label travels with it for the output window). */
+  timerOverlay?: { timerId: string; label: string } | null;
+  /** The announcement playing (or last played); `stoppedAt` set when it was stopped early. */
+  announce?: { key: string; id: string; assetId: string; volume: number; at: number; stoppedAt?: number };
 }

@@ -2,7 +2,7 @@ import { ListOrdered, Plus, Radio, Timer, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { uid } from "@/core/ids";
 import type { MediaMarker } from "@/core/types";
-import { selectedScene, useProject } from "@/store/project";
+import { selectedScene, useProject, NO_ITEMS } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
 import { MessageFields, defaultMessage } from "./MessageFields";
@@ -11,7 +11,7 @@ const SEND = "__send__";
 
 /** Time markers on a clip: when live playback passes a time, run a cue of the scene or send to the console. */
 export function MarkersEditor({ markers, onChange }: { markers: MediaMarker[] | undefined; onChange: (m: MediaMarker[]) => void }) {
-  const cues = useProject((s) => selectedScene(s)?.cues ?? []);
+  const cues = useProject((s) => selectedScene(s)?.cues ?? NO_ITEMS);
   const list = markers ?? [];
   const upd = (id: string, fn: (m: MediaMarker) => MediaMarker) => onChange(list.map((m) => (m.id === id ? fn(m) : m)));
   const add = () => onChange([...list, { id: uid("mk"), name: `Marker ${list.length + 1}`, at: 2.5, message: defaultMessage("hog"), cueId: null }]);
