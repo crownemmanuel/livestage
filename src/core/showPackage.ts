@@ -3,8 +3,8 @@
 // happen natively (src-tauri/src/package.rs), so the desktop app is needed to write or take in media.
 
 import { uid } from "./ids";
-import { isTauri } from "./platform";
-import { applyMerge, planMerge, replaceWithIncoming, showUnits, stampOutgoing, type MergeChoice, type MergePlan, type MergeResult, type ReceiveInfo, type UnitInfo } from "./showMerge";
+import { bundledOnDisk, isTauri } from "./platform";
+import { applyMerge, outgoingShow, planMerge, replaceWithIncoming, showUnits, stampOutgoing, type MergeChoice, type MergePlan, type MergeResult, type ReceiveInfo, type UnitInfo } from "./showMerge";
 import type { Asset, Project } from "./types";
 
 export const PACKAGE_FORMAT = "salvation-show-package";
@@ -25,6 +25,9 @@ export interface PackageManifest {
   showName: string;
   /** Counts up each time the show is sent out (package or cloud push). */
   version: number;
+  /** Unique id of this version, and the ids it descends from (its own last). Absent in the first packages. */
+  versionId?: string;
+  ancestry?: string[];
   createdAt: string;
   /** The kind of computer it was made on ("Mac", "Windows PC"). */
   from: string;
@@ -108,15 +111,17 @@ export async function exportPackage(project: Project, dir: string): Promise<Expo
   const { appDataDir } = await import("@tauri-apps/api/path");
   const root = await appDataDir();
   const sep = root.includes("\\") ? "\\" : "/";
-  const { project: stamped, version } = stampOutgoing(project, () => uid("show"));
+  const { project: stamped, version, versionId, ancestry } = stampOutgoing(project, uid);
   const { assets, files, unpackable } = portableAssets(stamped.assets, root.replace(/[\\/]+$/, ""), (...p) => p.join(sep));
-  const show: Project = { ...stamped, assets };
+  const show: Project = { ...outgoingShow(stamped), assets };
   const manifest: Omit<PackageManifest, "files" | "missing"> = {
     format: PACKAGE_FORMAT,
     formatVersion: PACKAGE_FORMAT_VERSION,
     showId: stamped.lineage!.showId,
     showName: stamped.name,
     version,
+    versionId,
+    ancestry,
     createdAt: new Date().toISOString(),
     from: machineName(),
     units: showUnits(stamped),
@@ -133,10 +138,14 @@ export async function exportPackage(project: Project, dir: string): Promise<Expo
 // ---------------------------------------------------------------- import
 
 export interface IncomingPackage {
+  /** The package folder (or a description of where a cloud version lives). */
   dir: string;
   manifest: PackageManifest;
   /** The packaged show, migrated to this app's format. */
   show: Project;
+  via?: "package" | "cloud";
+  /** How the media gets here (default: copied from the package folder). */
+  copyFiles?: (files: { key: string; sha256: string }[]) => Promise<{ copied: string[]; skipped: string[]; failed: [string, string][] }>;
 }
 
 export async function readPackage(dir: string, migrate: (p: Project) => Project): Promise<IncomingPackage> {
@@ -162,10 +171,12 @@ export interface ImportPreview {
 }
 
 export function previewImport(local: Project, pkg: IncomingPackage): ImportPreview {
-  const plan = planMerge(local, pkg.show);
+  const plan = planMerge(local, pkg.show, pkg.manifest.ancestry);
   const sameShow = local.lineage?.showId === pkg.manifest.showId;
   const localVersion = sameShow ? Math.max(local.lineage?.received?.version ?? 0, local.lineage?.sent ?? 0) || null : null;
-  return { plan, unrelated: plan.unrelated, older: localVersion !== null && pkg.manifest.version <= localVersion, localVersion, incomingVersion: pkg.manifest.version };
+  // Already part of this show's history (sent from here, or taken in before).
+  const older = sameShow && (pkg.manifest.versionId ? !!local.lineage?.history?.includes(pkg.manifest.versionId) : localVersion !== null && pkg.manifest.version <= localVersion);
+  return { plan, unrelated: plan.unrelated, older, localVersion, incomingVersion: pkg.manifest.version };
 }
 
 export interface ImportOptions {
@@ -182,6 +193,8 @@ export interface ImportResult {
   failed: { key: string; error: string }[];
   /** Assets whose file is not in the package. */
   missing: string[];
+  /** Development build: bundled media in this computer's public/ folder that differs from the incoming file (kept). */
+  keptOwnDiffering: string[];
 }
 
 export function mergeIncoming(local: Project, incoming: Project, plan: MergePlan, opts: ImportOptions, info: ReceiveInfo): MergeResult {
@@ -196,21 +209,36 @@ export function mergeIncoming(local: Project, incoming: Project, plan: MergePlan
 /** Merge (or replace) and copy the media the result needs into this machine's show media folder. */
 export async function importPackage(local: Project, pkg: IncomingPackage, opts: ImportOptions): Promise<ImportResult> {
   const { invoke } = await import("@tauri-apps/api/core");
-  const plan = planMerge(local, pkg.show);
-  const merged = mergeIncoming(local, pkg.show, plan, opts, { version: pkg.manifest.version, via: "package", from: pkg.manifest.from });
+  const plan = planMerge(local, pkg.show, pkg.manifest.ancestry);
+  const merged = mergeIncoming(local, pkg.show, plan, opts, { version: pkg.manifest.version, via: pkg.via ?? "package", from: pkg.manifest.from, versionId: pkg.manifest.versionId, ancestry: pkg.manifest.ancestry });
   const inPackage = new Map(pkg.manifest.files.map((f) => [f.key, f]));
+  // The build computer's own media (public/ in a development build) is never replaced by a copy.
+  const own = await bundledOnDisk(merged.assets.flatMap((a) => [a.url, a.macUrl]));
   const keys = new Set<string>();
+  const kept = new Set<string>();
   const missing: string[] = [];
   for (const a of merged.assets) {
-    for (const k of [a.file, a.macFile]) {
+    for (const [k, url] of [[a.file, a.url], [a.macFile, a.macUrl]] as const) {
       if (!k) continue;
-      if (inPackage.has(k)) keys.add(k);
-      else if (!isBundled(k === a.file ? a.url : a.macUrl)) missing.push(a.name);
+      if (url && own.has(url)) kept.add(k);
+      else if (inPackage.has(k)) keys.add(k);
+      else if (!isBundled(url)) missing.push(a.name);
     }
   }
+  // Say so when this computer's own copy differs from the incoming one (it is kept either way).
+  const differ: string[] = [];
+  const check = [...kept].filter((k) => inPackage.has(k));
+  if (check.length) {
+    const own = await invoke<(PackageFile | null)[]>("cloud_hash_sources", { files: check.map((k) => ({ key: k, bundled: `/${k}` })) });
+    check.forEach((k, i) => own[i] && own[i]!.sha256 !== inPackage.get(k)!.sha256 && differ.push(k));
+  }
   const files = [...keys].map((k) => ({ key: k, sha256: inPackage.get(k)!.sha256 }));
-  const res = await invoke<{ copied: string[]; skipped: string[]; failed: [string, string][] }>("package_import_files", { dir: pkg.dir, files });
-  return { project: merged.project, copied: res.copied.length, skipped: res.skipped.length, failed: res.failed.map(([key, error]) => ({ key, error })), missing };
+  const res = !files.length
+    ? { copied: [], skipped: [], failed: [] }
+    : pkg.copyFiles
+      ? await pkg.copyFiles(files)
+      : await invoke<{ copied: string[]; skipped: string[]; failed: [string, string][] }>("package_import_files", { dir: pkg.dir, files });
+  return { project: merged.project, copied: res.copied.length, skipped: res.skipped.length + kept.size, failed: res.failed.map(([key, error]) => ({ key, error })), missing, keptOwnDiffering: differ };
 }
 
 /** Progress of a package copy (export or import), from the native side. */

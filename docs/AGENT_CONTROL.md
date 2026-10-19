@@ -74,6 +74,9 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `project` | Save, export/import a show file, reset to the demo, rename |
 | `package_export` | Write a show package (show file, versioned manifest, every media file) for another computer; desktop app ([SHOW_PACKAGE.md](SHOW_PACKAGE.md)) |
 | `package_import` | Take in a show package: `dryRun` for the plan, per-conflict `choices` (`incoming`, `local`, `media`, `both`) or `resolve`; refuses while live unless `allowLive` |
+| `cloud_status` | Cloud sync (Firebase): set up, account, local and cloud versions |
+| `cloud_push` [LIVE] | Push this show as the next cloud version (refused when the cloud is ahead, unless `force`) |
+| `cloud_pull` | Take in the cloud's latest version, like `package_import` |
 | `call_action` | Call any store action by name (escape hatch) |
 | `eval` | Development builds: run JavaScript in the operator window |
 

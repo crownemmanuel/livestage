@@ -669,19 +669,22 @@ export interface Project {
 }
 
 /**
- * Version history between machines (see docs/SHOW_PACKAGE.md). Each package or cloud push gets the next
- * version number; the receiving machine remembers, per scene and per setting, the content hash it last took
- * in (the merge base), so a later version only asks about what was changed on both sides.
+ * Version history between machines (see docs/SHOW_PACKAGE.md). Every package or cloud push is a version with
+ * a unique id and the ids it descends from. Each machine keeps the content hashes of the versions it sent or
+ * took in; taking a version in compares against the newest version both sides share (the merge base), so only
+ * what was changed on both sides is asked about.
  */
 export interface ShowLineage {
   /** The same show on every machine. */
   showId: string;
-  /** Last version this machine sent out (package export or cloud push). */
+  /** Number of the last version this machine sent out (package export or cloud push). */
   sent?: number;
   /** Last version this machine took in. */
-  received?: { version: number; at: number; via: "package" | "cloud"; from: string };
-  /** Merge base: unit key ("scene:<id>", "order", "output" …) → content hash as last exchanged. */
-  base?: Record<string, string>;
+  received?: { version: number; id?: string; at: number; via: "package" | "cloud"; from: string };
+  /** Ids of the versions this show's content descends from, oldest first. */
+  history?: string[];
+  /** Version id → unit key ("scene:<id>", "order", "output" …) → content hash, for versions sent or taken in here. */
+  bases?: Record<string, Record<string, string>>;
 }
 
 export type TimerOp = "start" | "pause" | "reset" | "restart";

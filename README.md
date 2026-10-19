@@ -75,7 +75,7 @@ The right-hand panel always shows a banner saying what it controls:
 - [docs/SHOW_MAP.md](docs/SHOW_MAP.md): every LED cue in the script, the scene that serves it, and the media still to generate.
 - [docs/SHOW_CONTROL.md](docs/SHOW_CONTROL.md): MIDI / OSC / Hog 4 set-up, built-in commands, time markers.
 - [docs/RECOVERY.md](docs/RECOVERY.md): what survives a reload, crash or GPU reset, and the pre-show checklist.
-- [docs/SHOW_PACKAGE.md](docs/SHOW_PACKAGE.md): moving the show and its media to the show computer, with versions and per-scene conflict choices.
+- [docs/SHOW_PACKAGE.md](docs/SHOW_PACKAGE.md): moving the show and its media to the show computer (show packages, optional Firebase cloud sync), with versions and per-scene conflict choices.
 - [docs/AGENT_CONTROL.md](docs/AGENT_CONTROL.md): the MCP server that lets an AI agent run and build the show (`.mcp.json`, tools, safety).
 - [docs/PROLOGUE.md](docs/PROLOGUE.md): the prologue's cues, voiceover sync points, media pipeline and how to swap in HQ renders.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how playback stays in sync across windows, the rendering pipeline and the data model.

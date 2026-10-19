@@ -1,3 +1,4 @@
+mod cloud;
 mod fonts;
 mod io;
 mod package;
@@ -54,7 +55,12 @@ pub fn run() {
             package::package_export,
             package::package_read,
             package::package_import_files,
-            package::hash_files
+            package::hash_files,
+            package::bundled_on_disk,
+            cloud::cloud_http,
+            cloud::cloud_hash_sources,
+            cloud::cloud_upload,
+            cloud::cloud_download
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

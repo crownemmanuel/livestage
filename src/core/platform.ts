@@ -323,6 +323,15 @@ function guessAlpha(name: string) {
   return n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".webm") || n.includes("alpha");
 }
 
+/** Bundled media URLs ("/media/…") that are files in the repo's public/ folder (development builds; else none). */
+export async function bundledOnDisk(urls: (string | undefined)[]): Promise<Set<string>> {
+  const list = [...new Set(urls.filter((u): u is string => !!u && u.startsWith("/media/")))];
+  if (!isTauri || !list.length) return new Set();
+  const { invoke } = await import("@tauri-apps/api/core");
+  const found = await invoke<boolean[]>("bundled_on_disk", { urls: list });
+  return new Set(list.filter((_, i) => found[i]));
+}
+
 /** The portable key of a library file from its absolute path (show files from before keys existed). */
 function legacyKey(path: string, root: string): string {
   const norm = (x: string) => x.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -341,6 +350,8 @@ function legacyKey(path: string, root: string): string {
 export async function resolveAssetUrls(assets: Asset[]): Promise<Asset[]> {
   if (!isTauri) return assets;
   const { convertFileSrc } = await import("@tauri-apps/api/core");
+  // On the build computer (development build) media in the repo's public/ folder wins over local copies.
+  const onDisk = await bundledOnDisk(assets.flatMap((a) => [a.url, a.macUrl]));
   const { appDataDir, join } = await import("@tauri-apps/api/path");
   const fs = await import("@tauri-apps/plugin-fs");
   const root = await appDataDir();
@@ -352,7 +363,7 @@ export async function resolveAssetUrls(assets: Asset[]): Promise<Asset[]> {
   return Promise.all(
     assets.map(async (a) => {
       const file = a.file ?? (a.path ? legacyKey(a.path, root) : undefined);
-      const [p, mp] = await Promise.all([local(file), local(a.macFile)]);
+      const [p, mp] = await Promise.all([onDisk.has(a.url) ? null : local(file), a.macUrl && onDisk.has(a.macUrl) ? null : local(a.macFile)]);
       const out: Asset = { ...a };
       if (file) out.file = file;
       if (p) {

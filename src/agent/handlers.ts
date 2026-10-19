@@ -11,7 +11,9 @@ import { normalizeGroups, sceneCodes, sceneRows } from "@/core/groups";
 import { uid } from "@/core/ids";
 import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, saveGeneratedAsset } from "@/core/platform";
 import type { MergeChoice } from "@/core/showMerge";
-import { exportShowPackage, isLive, openShowPackage, takeInShowPackage } from "@/engine/showTransfer";
+import { CloudAheadError, listCloudShows, loadCloudSettings } from "@/core/cloud";
+import type { ImportPreview, IncomingPackage } from "@/core/showPackage";
+import { cloudOpen, cloudPush, exportShowPackage, isLive, openShowPackage, takeInShowPackage } from "@/engine/showTransfer";
 import * as runtime from "@/core/runtime";
 import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
 import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
@@ -230,6 +232,36 @@ async function importAsset(a: Args): Promise<Asset> {
   }
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: MIME[ext] ?? "application/octet-stream" }));
   return { id: uid("asset"), name, type, url, ephemeral: true, hasAlpha };
+}
+
+// ---------------------------------------------------------------- show packages and cloud versions
+
+/** Plan, then (unless a dry run or an unanswered conflict) take in a package or cloud version. */
+async function takeInIncoming({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview }, a: Args) {
+  const mode: "merge" | "replace" = a.mode === "merge" || a.mode === "replace" ? a.mode : preview.unrelated ? "replace" : "merge";
+  const choices: Record<string, MergeChoice> = { ...(isObj(a.choices) ? (a.choices as Record<string, MergeChoice>) : {}) };
+  const conflicts = preview.plan.items.filter((x) => x.state === "conflict");
+  for (const c of conflicts) if (!choices[c.key] && (a.resolve === "local" || a.resolve === "incoming")) choices[c.key] = a.resolve;
+  const plan = {
+    show: pkg.manifest.showName,
+    version: pkg.manifest.version,
+    from: pkg.manifest.from,
+    createdAt: pkg.manifest.createdAt,
+    localVersion: preview.localVersion,
+    older: preview.older || undefined,
+    mode,
+    conflicts: conflicts.map((x) => ({ key: x.key, label: x.label, here: x.here, incoming: x.upstream, options: x.options })),
+    incoming: preview.plan.items.filter((x) => x.state === "incoming").map((x) => ({ key: x.key, label: x.label, change: x.upstream })),
+    keptLocal: preview.plan.items.filter((x) => x.state === "local").map((x) => ({ key: x.key, label: x.label, change: x.here })),
+    unchanged: preview.plan.items.filter((x) => x.state === "same").length,
+    files: pkg.manifest.files.length,
+    missingInSource: pkg.manifest.missing.length ? pkg.manifest.missing : undefined,
+  };
+  if (a.dryRun) return { applied: false, plan };
+  const open = mode === "merge" ? conflicts.filter((c) => !choices[c.key]) : [];
+  if (open.length) return { applied: false, reason: `${open.length} conflict(s) need a choice (choices or resolve)`, plan };
+  if (isLive() && !a.allowLive) throw new Error("A scene is live on the wall. Ask the operator, then pass allowLive: true to take it in anyway.");
+  return { applied: true, plan, result: await takeInShowPackage(pkg, { mode, choices, allowLive: !!a.allowLive }) };
 }
 
 // ---------------------------------------------------------------- the handlers
@@ -828,31 +860,38 @@ export const handlers: Record<AgentCommand, Handler> = {
 
   async package_import(a) {
     if (!isTauri) throw new Error("Show packages are opened by the desktop app");
-    const { pkg, preview } = await openShowPackage(String(a.dir ?? ""));
-    const mode: "merge" | "replace" = a.mode === "merge" || a.mode === "replace" ? a.mode : preview.unrelated ? "replace" : "merge";
-    const choices: Record<string, MergeChoice> = { ...(isObj(a.choices) ? (a.choices as Record<string, MergeChoice>) : {}) };
-    const conflicts = preview.plan.items.filter((x) => x.state === "conflict");
-    for (const c of conflicts) if (!choices[c.key] && (a.resolve === "local" || a.resolve === "incoming")) choices[c.key] = a.resolve;
-    const plan = {
-      show: pkg.manifest.showName,
-      version: pkg.manifest.version,
-      from: pkg.manifest.from,
-      createdAt: pkg.manifest.createdAt,
-      localVersion: preview.localVersion,
-      older: preview.older || undefined,
-      mode,
-      conflicts: conflicts.map((x) => ({ key: x.key, label: x.label, here: x.here, incoming: x.upstream, options: x.options })),
-      incoming: preview.plan.items.filter((x) => x.state === "incoming").map((x) => ({ key: x.key, label: x.label, change: x.upstream })),
-      keptLocal: preview.plan.items.filter((x) => x.state === "local").map((x) => ({ key: x.key, label: x.label, change: x.here })),
-      unchanged: preview.plan.items.filter((x) => x.state === "same").length,
-      files: pkg.manifest.files.length,
-      missingInPackage: pkg.manifest.missing.length ? pkg.manifest.missing : undefined,
-    };
-    if (a.dryRun) return { applied: false, plan };
-    const open = mode === "merge" ? conflicts.filter((c) => !choices[c.key]) : [];
-    if (open.length) return { applied: false, reason: `${open.length} conflict(s) need a choice (choices or resolve)`, plan };
-    if (isLive() && !a.allowLive) throw new Error("A scene is live on the wall. Ask the operator, then pass allowLive: true to take the package in anyway.");
-    return { applied: true, plan, result: await takeInShowPackage(pkg, { mode, choices, allowLive: !!a.allowLive }) };
+    return takeInIncoming(await openShowPackage(String(a.dir ?? "")), a);
+  },
+
+  async cloud_status() {
+    const s = await loadCloudSettings();
+    const lin = P().project.lineage;
+    const local = { showId: lin?.showId ?? null, sent: lin?.sent ?? null, received: lin?.received ?? null };
+    if (!s) return { configured: false, local, note: "Cloud sync is off until the operator enters the Firebase keys (More → Cloud sync)." };
+    const out: Record<string, unknown> = { configured: true, project: s.projectId, bucket: s.storageBucket, emulator: s.emulator, account: s.email ?? null, signedIn: !!s.refreshToken, local };
+    if (s.refreshToken) {
+      try {
+        out.cloud = await listCloudShows(s);
+      } catch (e) {
+        out.cloudError = String(e);
+      }
+    }
+    return out;
+  },
+
+  async cloud_push(a) {
+    if (!isTauri) throw new Error("Cloud sync runs in the desktop app");
+    try {
+      return await cloudPush({ allowLive: !!a.allowLive, force: !!a.force });
+    } catch (e) {
+      if (e instanceof CloudAheadError) return { pushed: false, reason: e.message, cloud: e.latest };
+      throw e;
+    }
+  },
+
+  async cloud_pull(a) {
+    if (!isTauri) throw new Error("Cloud sync runs in the desktop app");
+    return takeInIncoming(await cloudOpen(a.showId ? String(a.showId) : undefined), a);
   },
 
   async call_action(a) {

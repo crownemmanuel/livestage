@@ -52,8 +52,8 @@ export async function startPackageImport(dir?: string) {
   }
 }
 
-/** Show the review (versions, conflicts, choices) for an incoming version that is already read. */
-export function reviewIncoming(pkg: IncomingPackage) {
+/** Show the review (versions, conflicts, choices) for an incoming version that is already read (a package or a cloud version). */
+export function showIncoming(pkg: IncomingPackage) {
   useDialog.getState().set({ kind: "review", pkg, preview: previewImport(useProject.getState().project, pkg) });
 }
 
@@ -70,7 +70,7 @@ function what(it: MergeItem) {
   return `Here: ${s(it.here)} · incoming: ${s(it.upstream)}`;
 }
 
-function Progress() {
+export function PackageProgress() {
   const [p, setP] = useState<{ done: number; total: number; key: string } | null>(null);
   useEffect(() => {
     let off = () => {};
@@ -92,6 +92,7 @@ function Progress() {
 
 function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview }) {
   const set = useDialog((s) => s.set);
+  const here = useProject((s) => s.project.lineage);
   const [mode, setMode] = useState<"merge" | "replace">(preview.unrelated ? "replace" : "merge");
   const [choices, setChoices] = useState<Record<string, MergeChoice>>({});
   const [allowLive, setAllowLive] = useState(false);
@@ -105,7 +106,7 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
   const mb = Math.round(m.files.reduce((n, f) => n + f.size, 0) / 1e5) / 10;
 
   const go = async () => {
-    set({ kind: "working", title: "Copying media and taking in the show…" });
+    set({ kind: "working", title: pkg.via === "cloud" ? "Downloading media and taking in the show…" : "Copying media and taking in the show…" });
     try {
       set({ kind: "imported", result: await takeInShowPackage(pkg, { mode, choices, allowLive }) });
     } catch (e) {
@@ -120,14 +121,16 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
           Take in “{m.showName}” v{m.version}
         </DialogTitle>
         <DialogDescription>
-          Made on a {m.from}, {new Date(m.createdAt).toLocaleString()}. {m.files.length} media files, {mb} MB.{" "}
-          {preview.localVersion ? `This computer has v${preview.localVersion}.` : "This computer's show has never taken in a version of this show."}
+          {pkg.via === "cloud" ? "From the cloud. " : ""}Made on a {m.from}, {new Date(m.createdAt).toLocaleString()}. {m.files.length} media files, {mb} MB.{" "}
+          {here?.showId === m.showId && (here.received || here.sent)
+            ? `This computer ${[here.received && `last took in v${here.received.version}`, here.sent && `last sent v${here.sent}`].filter(Boolean).join(" and ")}.`
+            : "This computer's show has never taken in a version of this show."}
         </DialogDescription>
       </DialogHeader>
 
       {preview.older && (
         <p className="flex gap-2 rounded-md border border-armed/40 bg-armed/10 p-2 text-[12px]">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-armed" /> This package is not newer than what this computer already has (v{preview.localVersion}).
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-armed" /> This computer already has this version (it was sent from here or taken in before).
         </p>
       )}
       {m.missing.length > 0 && (
@@ -148,7 +151,7 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
 
       {mode === "replace" ? (
         <p className="text-[12px] text-muted-foreground">
-          Every scene, cue and setting is replaced by the package{preview.unrelated ? "" : `, including ${local.length + conflicts.length} change(s) made on this computer`}. This computer's
+          Every scene, cue and setting is replaced by the incoming version{preview.unrelated ? "" : `, including ${local.length + conflicts.length} change(s) made on this computer`}. This computer's
           output display and MIDI ports stay as they are.
         </p>
       ) : (
@@ -178,7 +181,7 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
           )}
           {incoming.length > 0 && (
             <div>
-              <div className="font-semibold">Updated from the package ({incoming.length})</div>
+              <div className="font-semibold">Updated from the {pkg.via === "cloud" ? "cloud" : "package"} ({incoming.length})</div>
               <div className="text-muted-foreground">{incoming.map((x) => `${x.label}${x.upstream === "removed" ? " (removed)" : x.upstream === "added" ? " (new)" : ""}`).join(" · ")}</div>
             </div>
           )}
@@ -195,7 +198,7 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
       {live && (
         <label className="flex items-start gap-2 rounded-md border border-live/50 bg-live/10 p-2 text-[12px]">
           <input type="checkbox" className="mt-0.5" checked={allowLive} onChange={(e) => setAllowLive(e.target.checked)} />
-          <span>A scene is live on the wall. Media it is playing may be replaced. Take in the package anyway.</span>
+          <span>A scene is live on the wall. Media it is playing may be replaced. Take it in anyway.</span>
         </label>
       )}
 
@@ -225,7 +228,7 @@ export function ShowPackageDialog() {
               </DialogTitle>
               <DialogDescription>Large video takes a while. Keep the app open.</DialogDescription>
             </DialogHeader>
-            <Progress />
+            <PackageProgress />
           </>
         )}
         {state.kind === "review" && <Review pkg={state.pkg} preview={state.preview} />}
@@ -257,10 +260,10 @@ export function ShowPackageDialog() {
                 <CheckCircle2 className="size-4 text-preview" /> Took in v{state.result.version}
               </DialogTitle>
               <DialogDescription>
-                {state.result.scenes} scenes. {state.result.copied} media files copied, {state.result.alreadyHere} already here.
+                {state.result.scenes} scenes. {state.result.copied} media files {state.result.via === "cloud" ? "downloaded" : "copied"}, {state.result.alreadyHere} already here.
               </DialogDescription>
             </DialogHeader>
-            {(state.result.failed.length > 0 || state.result.missing.length > 0) && (
+            {(state.result.failed.length > 0 || state.result.missing.length > 0 || state.result.keptOwnDiffering.length > 0) && (
               <div className="space-y-1 text-[12px] text-armed">
                 {state.result.failed.map((f) => (
                   <div key={f.key}>
@@ -268,6 +271,12 @@ export function ShowPackageDialog() {
                   </div>
                 ))}
                 {state.result.missing.length > 0 && <div>Not in the package: {state.result.missing.join(", ")}</div>}
+                {state.result.keptOwnDiffering.length > 0 && (
+                  <div>
+                    Kept this computer's own version of {state.result.keptOwnDiffering.length} media file(s) in public/media, which differ from the incoming ones (a development build uses its repo's media):{" "}
+                    {state.result.keptOwnDiffering.join(", ")}
+                  </div>
+                )}
               </div>
             )}
             <DialogFooter>

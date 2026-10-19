@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 2;
+export const AGENT_SPEC_VERSION = 3;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -403,6 +403,34 @@ export const AGENT_COMMANDS = {
       },
       ["dir"],
     ),
+  },
+  cloud_status: {
+    readOnly: true,
+    description:
+      "Cloud sync (Firebase, off until the operator enters keys and signs in under More → Cloud sync): whether it is set up, the signed-in account, this show's sent/received versions and the cloud's latest version. Sign-in is only done by the operator in the app.",
+    params: args({}),
+  },
+  cloud_push: {
+    live: true,
+    description:
+      "Send this show to the cloud as the next version (uploads only media the cloud does not have, by SHA-256). Refuses if the cloud has a version this computer has not taken in (pull first, or force), and while a scene is live unless allowLive. Desktop app only.",
+    params: args({
+      force: bool("Push even though the cloud has a newer version this computer has not taken in (the other computer will merge it)."),
+      allowLive: bool("Push even though a scene is live (the operator confirmed)."),
+    }),
+  },
+  cloud_pull: {
+    destructive: true,
+    description:
+      "Take in the cloud's latest version: same plan, conflict choices and rules as package_import (dryRun for the plan; choices or resolve for conflicts; nothing changes while a conflict has no choice; allowLive when a scene is live). Downloads only media that is missing or different here. Desktop app only.",
+    params: args({
+      showId: str("Which show in the cloud (default: this show, or the only one there)."),
+      mode: oneOf(["merge", "replace"], "As for package_import."),
+      choices: obj('Conflict key → "incoming" | "local" | "media" | "both".'),
+      resolve: oneOf(["local", "incoming"], "Choice for conflicts not listed in choices."),
+      dryRun: bool("Only return the plan."),
+      allowLive: bool("Take it in even though a scene is live on the wall (the operator confirmed)."),
+    }),
   },
   call_action: {
     description:

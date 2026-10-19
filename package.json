@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "mcp": "node mcp/server.ts",
-    "mcp:check": "node mcp/check.ts"
+    "mcp:check": "node mcp/check.ts",
+    "cloud:emulator": "cd firebase && npx -y firebase-tools@15.34.0 emulators:start --only auth,storage --project demo-sls"
   },
   "dependencies": {
     "@fontsource/barlow": "^5.3.0",

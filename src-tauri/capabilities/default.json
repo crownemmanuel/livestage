@@ -28,6 +28,7 @@
     "fs:allow-mkdir",
     "fs:allow-exists",
     "fs:allow-rename",
+    "fs:allow-remove",
     "fs:allow-appdata-read-recursive",
     "fs:allow-appdata-write-recursive"
   ]

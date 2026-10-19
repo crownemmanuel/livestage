@@ -23,7 +23,7 @@ pub struct HashCache(Mutex<HashMap<PathBuf, (u64, SystemTime, String)>>);
 
 #[derive(Deserialize)]
 pub struct ExportFile {
-    key: String,
+    pub(crate) key: String,
     /// A file on disk (app library, or a local copy of packaged media).
     path: Option<String>,
     /// Media that ships with the app, by URL ("/media/prologue/p1.mp4").
@@ -32,9 +32,45 @@ pub struct ExportFile {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct FileEntry {
-    key: String,
-    size: u64,
-    sha256: String,
+    pub(crate) key: String,
+    pub(crate) size: u64,
+    pub(crate) sha256: String,
+}
+
+/// Where a file's bytes come from on this machine.
+pub(crate) enum Source {
+    File(PathBuf),
+    /// Media embedded in a release build.
+    Bytes(Vec<u8>),
+}
+
+/// Find a file to export. In a development build the repo's public/ folder is where media is made, so it comes
+/// first; then the path given (app library, or a local copy from a package or sync); then media embedded in a release.
+pub(crate) fn find_source(app: &tauri::AppHandle, f: &ExportFile) -> Option<Source> {
+    let rel_url = f.bundled.as_deref().map(|u| u.trim_start_matches('/'));
+    if let Some(p) = rel_url.and_then(|u| dev_public_dir().map(|d| d.join(u))).filter(|p| p.is_file()) {
+        return Some(Source::File(p));
+    }
+    if let Some(p) = f.path.as_deref().filter(|p| Path::new(p).is_file()) {
+        return Some(Source::File(PathBuf::from(p)));
+    }
+    app.asset_resolver().get(rel_url?.to_string()).map(|a| Source::Bytes(a.bytes))
+}
+
+/// Which bundled media URLs ("/media/…") are files in the repo's public/ folder (development builds only).
+/// Those are the source of truth on the build computer: never shadowed by copies from a package or sync.
+#[tauri::command]
+pub fn bundled_on_disk(urls: Vec<String>) -> Vec<bool> {
+    let dir = dev_public_dir();
+    urls.iter().map(|u| dir.as_ref().is_some_and(|d| d.join(u.trim_start_matches('/')).is_file())).collect()
+}
+
+/// Size and SHA-256 of a source.
+pub(crate) fn hash_source(cache: &HashCache, src: &Source) -> Result<(u64, String), String> {
+    match src {
+        Source::File(p) => hash_path(cache, p),
+        Source::Bytes(b) => Ok((b.len() as u64, hex(&Sha256::digest(b)))),
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -72,7 +108,7 @@ pub struct ImportResult {
 }
 
 /// A key may only name a file below the package / app data folder.
-fn safe_key(key: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe_key(key: &str) -> Result<PathBuf, String> {
     let p = Path::new(key);
     if key.is_empty() || key.contains('\\') || p.is_absolute() {
         return Err(format!("bad file key {key:?}"));
@@ -92,7 +128,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Copy `src` to `dest` (through a temp file), returning size and SHA-256.
-fn copy_hashed(src: &mut dyn Read, dest: &Path) -> Result<(u64, String), String> {
+pub(crate) fn copy_hashed(src: &mut dyn Read, dest: &Path) -> Result<(u64, String), String> {
     if let Some(dir) = dest.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -165,7 +201,6 @@ fn export_blocking(app: &tauri::AppHandle, dir: String, show: String, manifest: 
         fs::remove_dir_all(&partial).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(partial.join("files")).map_err(|e| e.to_string())?;
-    let public = dev_public_dir();
     let mut out: Vec<FileEntry> = Vec::new();
     let mut missing = Vec::new();
     let total = files.len();
@@ -176,19 +211,10 @@ fn export_blocking(app: &tauri::AppHandle, dir: String, show: String, manifest: 
             continue;
         }
         let target = partial.join("files").join(&rel);
-        let res = if let Some(p) = f.path.as_deref().filter(|p| Path::new(p).is_file()) {
-            File::open(p).map_err(|e| e.to_string()).and_then(|mut r| copy_hashed(&mut r, &target))
-        } else if let Some(url) = f.bundled.as_deref() {
-            let rel_url = url.trim_start_matches('/');
-            match public.as_ref().map(|d| d.join(rel_url)).filter(|p| p.is_file()) {
-                Some(p) => File::open(&p).map_err(|e| e.to_string()).and_then(|mut r| copy_hashed(&mut r, &target)),
-                None => match app.asset_resolver().get(rel_url.to_string()) {
-                    Some(asset) => copy_hashed(&mut asset.bytes.as_slice(), &target),
-                    None => Err("not found".into()),
-                },
-            }
-        } else {
-            Err("not found".into())
+        let res = match find_source(app, &f) {
+            Some(Source::File(p)) => File::open(&p).map_err(|e| e.to_string()).and_then(|mut r| copy_hashed(&mut r, &target)),
+            Some(Source::Bytes(b)) => copy_hashed(&mut b.as_slice(), &target),
+            None => Err("not found".into()),
         };
         match res {
             Ok((size, sha256)) => out.push(FileEntry { key: f.key, size, sha256 }),

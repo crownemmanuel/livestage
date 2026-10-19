@@ -5,6 +5,7 @@ import {
   Cable,
   Check,
   Clapperboard,
+  Cloud,
   FileDown,
   FileUp,
   History,
@@ -35,6 +36,7 @@ import { clearLiveState } from "@/engine/persist";
 import { OutputSettingsDialog } from "./OutputSettings";
 import { IoDialog } from "./io/IoDialog";
 import { ShowPackageDialog, startPackageExport, startPackageImport } from "./ShowPackage";
+import { CloudSyncDialog } from "./CloudSync";
 import { getErrors, onErrors } from "./ErrorBoundary";
 import { RoundToggle, Tip, ToolbarButton } from "./kit";
 import { useSceneCodes } from "./SceneList";
@@ -59,6 +61,7 @@ export function TopBar() {
   const ioErr = useIo((s) => s.midiStatus === "error" || s.oscStatus === "error");
   const [settings, setSettings] = useState(false);
   const [io, setIo] = useState(false);
+  const [cloud, setCloud] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [errCount, setErrCount] = useState(() => getErrors().length);
   useEffect(() => onErrors(() => setErrCount(getErrors().length)), []);
@@ -159,6 +162,9 @@ export function TopBar() {
             <DropdownMenuItem onClick={() => void startPackageImport()}>
               <PackageOpen /> Import show package…
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setCloud(true)}>
+              <Cloud /> Cloud sync…
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => {
@@ -214,6 +220,7 @@ export function TopBar() {
       <OutputSettingsDialog open={settings} onOpenChange={setSettings} />
       <IoDialog open={io} onOpenChange={setIo} />
       <ShowPackageDialog />
+      <CloudSyncDialog open={cloud} onOpenChange={setCloud} />
       <Dialog open={confirmReset} onOpenChange={setConfirmReset}>
         <DialogContent>
           <DialogHeader>

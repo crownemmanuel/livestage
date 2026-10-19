@@ -63,6 +63,8 @@ if (status.error) {
   ok("get path", typeof width.json === "number", String(width.json));
   ok("bad path explains", !!(await call("get", { path: "project/nope/x" })).error);
   ok("io_log", Array.isArray((await call("io_log", { limit: 5 })).json));
+  const cloud = await call("cloud_status");
+  ok("cloud_status", typeof cloud.json?.configured === "boolean", cloud.error ?? (cloud.json?.configured ? `${cloud.json.project}, signed in: ${cloud.json.signedIn}` : "not set up"));
 
   if (build) {
     const before = status.json.selected?.scene?.id ?? null;

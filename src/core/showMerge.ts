@@ -1,8 +1,9 @@
 // Taking in another machine's version of the show (a show package or a cloud sync) without silently
 // losing what was changed here. The show is split into units: each scene, the running order, and each
-// show-wide setting. Every unit has a content hash; the machine remembers the hashes it last took in
-// (`lineage.base`). A unit changed only upstream is taken, one changed only here is kept, and one changed
-// on both sides is a conflict the operator decides. The asset library merges by adding.
+// show-wide setting. Every unit has a content hash. Each version carries the ids of the versions it descends
+// from, and each machine keeps the hashes of the versions it sent or took in (`lineage.bases`); the newest
+// version both sides share is the merge base. A unit changed only upstream is taken, one changed only here
+// is kept, and one changed on both sides is a conflict the operator decides. The asset library merges by adding.
 // See docs/SHOW_PACKAGE.md.
 
 import { cloneScene } from "./factories";
@@ -128,11 +129,19 @@ function side(now: string | undefined, base: string | undefined) {
   return base === undefined ? ("added" as const) : ("changed" as const);
 }
 
-export function planMerge(local: Project, incoming: Project): MergePlan {
+/** The newest version in the incoming version's ancestry that this machine also has: its unit hashes. */
+export function mergeBase(local: Project, incoming: Project, ancestry: string[] | undefined): Record<string, string> | null {
+  const lin = local.lineage;
+  if (!lin?.showId || lin.showId !== incoming.lineage?.showId || !lin.bases || !ancestry) return null;
+  for (let i = ancestry.length - 1; i >= 0; i--) if (lin.bases[ancestry[i]]) return lin.bases[ancestry[i]];
+  return null;
+}
+
+/** `ancestry`: the incoming version's history (its own id last), from its manifest. */
+export function planMerge(local: Project, incoming: Project, ancestry?: string[]): MergePlan {
   const L = showUnits(local);
   const I = showUnits(incoming);
-  const sameShow = !!local.lineage?.showId && local.lineage.showId === incoming.lineage?.showId;
-  const B = sameShow ? (local.lineage?.base ?? {}) : {};
+  const B = mergeBase(local, incoming, ancestry) ?? {};
   const hasBase = Object.keys(B).length > 0;
   const keys = [...new Set([...Object.keys(I), ...Object.keys(L)])];
   const items: MergeItem[] = [];
@@ -156,7 +165,7 @@ export function planMerge(local: Project, incoming: Project): MergePlan {
   // Running order first, then scenes in show order, then the other settings.
   const rank = (it: MergeItem) => (it.key === "order" ? 0 : it.kind === "scene" ? 1 : 2);
   items.sort((a, b) => rank(a) - rank(b));
-  return { items, conflicts: items.filter((x) => x.state === "conflict").length, unrelated: !sameShow || !hasBase };
+  return { items, conflicts: items.filter((x) => x.state === "conflict").length, unrelated: !hasBase };
 }
 
 // ---------------------------------------------------------------- applying
@@ -174,6 +183,18 @@ export interface ReceiveInfo {
   version: number;
   via: "package" | "cloud";
   from: string;
+  /** The incoming version's id and history (absent in packages made before version ids). */
+  versionId?: string;
+  ancestry?: string[];
+}
+
+const MAX_HISTORY = 200;
+const MAX_BASES = 40;
+
+/** Keep the newest bases (object keys keep insertion order). */
+function trimBases(b: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
+  const keys = Object.keys(b);
+  return keys.length <= MAX_BASES ? b : Object.fromEntries(keys.slice(-MAX_BASES).map((k) => [k, b[k]]));
 }
 
 export interface MergeResult {
@@ -197,11 +218,20 @@ export function replaceWithIncoming(local: Project | null, incoming: Project, in
 }
 
 function received(local: Project | null, incoming: Project, info: ReceiveInfo): ShowLineage {
+  const showId = incoming.lineage?.showId ?? local?.lineage?.showId ?? "";
+  const mine = local?.lineage?.showId === showId ? local.lineage : undefined;
+  const history = [...new Set([...(mine?.history ?? []), ...(info.ancestry ?? [])])].slice(-MAX_HISTORY);
+  const bases = { ...(mine?.bases ?? {}) };
+  if (info.versionId) {
+    delete bases[info.versionId];
+    bases[info.versionId] = unitHashes(incoming);
+  }
   return {
-    showId: incoming.lineage?.showId ?? local?.lineage?.showId ?? "",
-    sent: local?.lineage?.showId === incoming.lineage?.showId ? local?.lineage?.sent : undefined,
-    received: { version: info.version, at: Date.now(), via: info.via, from: info.from },
-    base: unitHashes(incoming),
+    showId,
+    sent: mine?.sent,
+    received: { version: info.version, id: info.versionId, at: Date.now(), via: info.via, from: info.from },
+    history,
+    bases: trimBases(bases),
   };
 }
 
@@ -317,10 +347,23 @@ export function applyMerge(local: Project, incoming: Project, plan: MergePlan, i
   return { project: out, assets: taken };
 }
 
-/** Before sending a version out: a show id, the next version number, and this version as the new base. */
-export function stampOutgoing(p: Project, newShowId: () => string): { project: Project; version: number } {
+/**
+ * Before sending a version out: a show id, a new version id and the next version number (at least `atLeast`);
+ * this content is remembered as a base, so whatever comes back from it merges against it.
+ */
+export function stampOutgoing(p: Project, newId: (prefix: string) => string, atLeast = 0): { project: Project; version: number; versionId: string; ancestry: string[] } {
   const lin = p.lineage;
-  const version = Math.max(lin?.sent ?? 0, lin?.received?.version ?? 0) + 1;
-  const project: Project = { ...p, lineage: { ...lin, showId: lin?.showId || newShowId(), sent: version, base: unitHashes(p) } };
-  return { project, version };
+  const version = Math.max(lin?.sent ?? 0, lin?.received?.version ?? 0, atLeast - 1) + 1;
+  const versionId = newId("ver");
+  const ancestry = [...(lin?.history ?? []), versionId].slice(-MAX_HISTORY);
+  const project: Project = {
+    ...p,
+    lineage: { ...lin, showId: lin?.showId || newId("show"), sent: version, history: ancestry, bases: trimBases({ ...(lin?.bases ?? {}), [versionId]: unitHashes(p) }) },
+  };
+  return { project, version, versionId, ancestry };
+}
+
+/** The show as it travels: without this machine's merge bases (the receiver keeps its own). */
+export function outgoingShow(p: Project): Project {
+  return p.lineage ? { ...p, lineage: { showId: p.lineage.showId, sent: p.lineage.sent, history: p.lineage.history } } : p;
 }
