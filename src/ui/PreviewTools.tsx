@@ -341,6 +341,9 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
   // The ref is current within one event burst (state lags a render), so a fast scrub never loses its start.
   const dragRef = useRef<{ v: number; src: Source } | null>(null);
   const [open, setOpen] = useState(false);
+  // A marker tick being dragged: where it would land (seconds), and whether it has moved yet.
+  const [mDrag, setMDrag] = useState<{ id: string; at: number; x0: number; moved: boolean } | null>(null);
+  const track = useRef<HTMLDivElement>(null);
   useTick(120);
   const ids = rt ? rt.scene.components.flatMap((c) => (c.kind === "background" || c.kind === "video" ? (c.media.assetId ? [c.media.assetId] : []) : [])) : [];
   useAssetDurations(assets, ids);
@@ -423,26 +426,62 @@ export function Timeline({ editable = true }: { editable?: boolean }) {
           </>
         )}
       </div>
-      <div className="relative mt-1 h-6">
+      <div ref={track} className="relative mt-1 h-6">
         <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-muted" />
         <div className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-preview/70" style={{ width: `${(Math.min(pos, src.duration) / src.duration) * 100}%` }} />
-        {markers.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            title={describe(m)}
-            className="absolute top-0 z-10 -translate-x-1/2"
-            style={{ left: `${(Math.min(m.at, src.duration) / src.duration) * 100}%` }}
-            onClick={() => {
-              pause();
-              dispatch("preview", src.seek(m.at));
-              if (editable) setOpen(true);
-            }}
-          >
-            <span className={cn("block size-2.5 rotate-45 rounded-[2px] border border-black/60", m.cueId ? "bg-preview" : "bg-armed")} />
-            <span className="mx-auto mt-0.5 block h-2.5 w-px bg-armed/70" />
-          </button>
-        ))}
+        {markers.map((m) => {
+          const dragging = mDrag?.id === m.id;
+          const at = dragging ? mDrag.at : m.at;
+          const timeAt = (clientX: number) => {
+            const r = track.current!.getBoundingClientRect();
+            return Math.round(Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * src.duration * 10) / 10;
+          };
+          return (
+            <button
+              key={m.id}
+              type="button"
+              title={editable ? `${describe(m)} · drag to move` : describe(m)}
+              className={cn("absolute top-0 z-10 -translate-x-1/2 touch-none", editable && (dragging ? "cursor-grabbing" : "cursor-grab"))}
+              style={{ left: `${(Math.min(at, src.duration) / src.duration) * 100}%` }}
+              onPointerDown={(e) => {
+                if (!editable || e.button !== 0) return;
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                } catch {
+                  /* synthetic or already-released pointer */
+                }
+                pause();
+                setMDrag({ id: m.id, at: m.at, x0: e.clientX, moved: false });
+              }}
+              onPointerMove={(e) => {
+                if (!dragging) return;
+                if (!mDrag.moved && Math.abs(e.clientX - mDrag.x0) < 3) return;
+                const t = timeAt(e.clientX);
+                setMDrag({ ...mDrag, at: t, moved: true });
+                // Show the frame the marker is landing on.
+                dispatch("preview", src.seek(t));
+              }}
+              onPointerUp={() => {
+                if (!dragging) return;
+                if (mDrag.moved) setMarkers(markers.map((x) => (x.id === m.id ? { ...x, at: mDrag.at } : x)));
+                else dispatch("preview", src.seek(m.at));
+                setMDrag(null);
+                setOpen(true);
+              }}
+              onPointerCancel={() => setMDrag(null)}
+              onClick={() => {
+                // Show Mode (not editable): a click jumps to the marker.
+                if (editable) return;
+                pause();
+                dispatch("preview", src.seek(m.at));
+              }}
+            >
+              <span className={cn("block size-2.5 rotate-45 rounded-[2px] border border-black/60", m.cueId ? "bg-preview" : "bg-armed", dragging && mDrag.moved && "scale-125 ring-2 ring-foreground/70")} />
+              <span className="mx-auto mt-0.5 block h-2.5 w-px bg-armed/70" />
+              {dragging && mDrag.moved && <span className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/80 px-1 text-[10px] tabular text-white">{mDrag.at.toFixed(1)} s</span>}
+            </button>
+          );
+        })}
         <input
           type="range"
           min={0}
