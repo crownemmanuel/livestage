@@ -116,6 +116,28 @@ The Shepherd's Valley photoreal scene pushes Three.js toward photorealism with a
 
 All photos are preloaded at startup in every window, so TAKE only pays for shader compilation (about 1–2 s cold). Use a crossfade or fade into it rather than a cut.
 
+## Media formats
+
+The two webviews decode video with the platform's own player (AVFoundation on macOS, Media Foundation on Windows), in hardware, and hand each frame to WebGL. What that path plays well was measured on this project (October 2026, Apple silicon):
+
+| | Plays | Does not |
+| --- | --- | --- |
+| H.264 | up to 4096 px wide or high (the hardware decoder's ceiling, level 5.2) | wider frames decode, but reach WebGL as a green picture with garbage along the top |
+| HEVC | up to 8K on a Mac | on Windows only with the paid HEVC extension |
+| VP9 / AV1 (WebM) | Windows; VP9 alpha is the transparent format there | VP9 alpha on a Mac (use the HEVC-alpha twin, `macUrl`) |
+| ProRes / Motion JPEG | yes, at disk-reading bit rates | |
+
+A seek lands on the previous keyframe and decodes forward, so a long GOP stalls every scrub and every drift correction; the index (`moov`) must come before the media data (`+faststart`) or playback waits for the whole file. Nothing above the wall's own size is ever shown, and every window (preview, program, output) decodes its own copy, so an oversize file costs three times.
+
+**The wall format**, which the app makes itself: H.264 High, scaled to fit the output canvas (never upscaled), the file's own frame rate, a keyframe every half second, yuv420p, stereo AAC, fast start, about 0.3 bits per pixel per frame (25 Mbit/s at 3072 × 768, 30 fps; between 8 and 60).
+
+- **Probe** (`src-tauri/src/media.rs`, `media_probe`): a small ISO BMFF / QuickTime box walker (no external tool) reads codec, profile and level, size, frame rate, keyframe spacing from the sync-sample table, audio and fast start. WebM gets its codec ids only.
+- **Check** (`src/core/mediaCheck.ts`): the rules above, as problems with a severity (`error`: will not play or look right; `warn`: plays, but costs or stalls) and whether re-encoding fixes them.
+- **Optimise** (`media_optimise`, `src/engine/media.ts`): ffmpeg re-encodes into the wall format using the hardware encoder when there is one (VideoToolbox on a Mac, NVENC / QuickSync elsewhere, else x264), with progress events; the asset then points at the new `*.wall.mp4` and the old library copy goes. ffmpeg is looked for next to the app (a bundled sidecar), in `SLS_FFMPEG`, then on the machine (`brew install ffmpeg`). Without it the file is still probed and the library shows why it will not play, with the reason in the tooltip.
+- **On import** (library button, the agent's `asset_import`) every video is probed; one with an `error`, or far bigger than the wall, or with long keyframe gaps, or without fast start, is optimised at once. Alpha video (HEVC alpha, VP9 WebM) is never re-encoded. The agent's `asset_check` / `asset_optimise` do the same on demand.
+
+Video elements are created in an effect, never during render: React may run a render twice and keep one result, and a `<video>` from the discarded render would stay in the page buffering with a decoder of its own.
+
 ## Effects engine
 
 Effects are generic components rendered by the same code in every scene. They are not baked into scenes.

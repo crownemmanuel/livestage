@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { clamp } from "@/core/clock";
 import type { MediaSettings } from "@/core/types";
@@ -105,8 +105,16 @@ function hostVideo(v: HTMLVideoElement) {
 
 /** One <video> per use; playback is slaved to the shared scene clock. */
 export function useVideo(url: string | null): VideoHandle | null {
-  const h = useMemo(() => {
-    if (!url) return null;
+  // Created in an effect, never in render: React (StrictMode, concurrent rendering) may run a
+  // render twice and keep one result, and a <video> made in the discarded render would stay in
+  // the page, buffering and holding a decoder, with nothing left to remove it (seen: two decoders
+  // per layer, 26 elements alive for a two-scene show).
+  const [h, setH] = useState<VideoHandle | null>(null);
+  useEffect(() => {
+    if (!url) {
+      setH(null);
+      return;
+    }
     const v = document.createElement("video");
     v.crossOrigin = "anonymous";
     v.playsInline = true;
@@ -127,20 +135,18 @@ export function useVideo(url: string | null): VideoHandle | null {
     v.addEventListener("seeked", refresh);
     v.addEventListener("loadeddata", refresh);
     hostVideo(v);
-    return { video: v, texture, lastSeek: 0, shownTime: -1, correcting: 0 as const };
+    const handle: VideoHandle = { video: v, texture, lastSeek: 0, shownTime: -1, correcting: 0 };
+    setH(handle);
+    return () => {
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+      v.remove();
+      texture.dispose();
+      counters.delete(handle);
+      setH((cur) => (cur === handle ? null : cur));
+    };
   }, [url]);
-  useEffect(
-    () => () => {
-      if (!h) return;
-      h.video.pause();
-      h.video.removeAttribute("src");
-      h.video.load();
-      h.video.remove();
-      h.texture.dispose();
-      counters.delete(h);
-    },
-    [h],
-  );
   return h;
 }
 

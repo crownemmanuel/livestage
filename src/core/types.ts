@@ -33,6 +33,12 @@ export interface Asset {
   macUrl?: string;
   /** Ships with the app (served from /media); never deleted from disk. */
   builtIn?: boolean;
+  /** What the file is (codec, size, frame rate, keyframes), read when it was imported or optimised. */
+  probe?: import("./mediaCheck").MediaProbe;
+  /** Why the wall may not play it well (empty or missing: fine). Recomputed from `probe` on load. */
+  problems?: import("./mediaCheck").MediaProblem[];
+  /** The file was re-encoded into the wall format on import (the original's name and probe are kept here). */
+  optimised?: { from: string; at: number; source?: import("./mediaCheck").MediaProbe };
 }
 
 // ---------------------------------------------------------------- output

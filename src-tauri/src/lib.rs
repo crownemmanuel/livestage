@@ -1,6 +1,7 @@
 mod cloud;
 mod fonts;
 mod io;
+mod media;
 mod package;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -63,7 +64,10 @@ pub fn run() {
             cloud::cloud_http,
             cloud::cloud_hash_sources,
             cloud::cloud_upload,
-            cloud::cloud_download
+            cloud::cloud_download,
+            media::media_probe,
+            media::media_tools,
+            media::media_optimise
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

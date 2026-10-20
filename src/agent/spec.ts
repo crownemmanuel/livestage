@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 5;
+export const AGENT_SPEC_VERSION = 6;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -85,7 +85,7 @@ export const AGENT_COMMANDS = {
   },
   list_assets: {
     readOnly: true,
-    description: "The media library (images, videos, 3D models, audio) with ids to use in components and cues.",
+    description: "The media library (images, videos, 3D models, audio) with ids to use in components and cues. Videos carry a one-line `format` and `problems` when the wall may not play them well (see asset_check).",
     params: args({ type: oneOf(["image", "video", "model", "audio"], "Only this type."), query: str("Name contains (case-insensitive).") }),
   },
   get: {
@@ -383,14 +383,26 @@ export const AGENT_COMMANDS = {
   },
   asset_import: {
     description:
-      "Add media to the library: a local file (copied into the show's library; files under the project's public/ folder are linked instead) or a URL the app can load. Returns the asset id.",
+      "Add media to the library: a local file (copied into the show's library; files under the project's public/ folder are linked instead) or a URL the app can load. Videos are probed (codec, size, keyframes) and checked against what the wall plays; one the wall would not play well (H.264 wider than 4096 px, far bigger than the wall, long keyframe gaps, no fast start) is re-encoded into the wall format on the way in (desktop app, needs ffmpeg). Returns the asset id, the probe and any remaining problems.",
     params: args({
       file: str("Absolute path of a local file (read by the MCP server)."),
       url: str("Or a URL / app path (e.g. /media/prologue/p2-rock.jpg)."),
       name: str("Display name (default: the file name)."),
       type: oneOf(["image", "video", "model", "audio"], "Default: from the extension."),
-      hasAlpha: bool("Video/image has transparency."),
+      hasAlpha: bool("Video/image has transparency (never re-encoded)."),
+      optimise: bool("Re-encode a video that the wall would not play well (default true). false: only probe and report."),
     }),
+  },
+  asset_check: {
+    readOnly: true,
+    description:
+      "What a video file is (codec, profile/level, size, frame rate, keyframe gap, bit rate, audio, fast start) and whether the wall will play it well: problems with severity error (will not play or will not look right) or warn (plays, but costs or stalls), each saying whether optimising fixes it. One asset, or every video in the library. Also reports the encoder tools on this machine (ffmpeg, hardware encoder). Desktop app only.",
+    params: args({ asset: str("Asset id or exact name; omit for all videos."), reprobe: bool("Read the file again even when a probe is stored.") }),
+  },
+  asset_optimise: {
+    description:
+      "Re-encode a library video into the wall format: H.264 High, scaled to fit the wall canvas (never upscaled), a keyframe every half second, stereo AAC, fast start. The asset then points at the new file and the old library copy is deleted. Skipped when the file already plays well unless force. Refuses alpha video and media that ships with the app. Reports progress to the operator; takes seconds to minutes.",
+    params: args({ asset: str("Asset id or exact name."), force: bool("Re-encode even when no problem was found.") }, ["asset"]),
   },
   asset_remove: {
     destructive: true,

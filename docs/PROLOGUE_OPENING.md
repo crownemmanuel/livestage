@@ -70,7 +70,7 @@ A 21:9 frame loses about 42% of its height on the wall. The real prologue plates
 
 ### Encoding for playback
 
-Every video the app plays must have a keyframe at least every 0.5–1 s, its native frame rate (the Seedance clips are 24 fps) and `+faststart`. The app keeps each video locked to the show clock and re-seeks one that drifts too far; with x264's default 10 s keyframe gap a re-seek decodes seconds of video and stalls. (The bigger cause of the opening's judder was the app correcting drift every frame; see ARCHITECTURE.md.) `vgen.sh`, `oneshot.sh` and `preview.sh` encode with `-g 12 -keyint_min 12 -sc_threshold 0 -movflags +faststart`.
+Every video the app plays must have a keyframe at least every 0.5–1 s, its native frame rate (the Seedance clips are 24 fps) and `+faststart`. The app keeps each video locked to the show clock and re-seeks one that drifts too far; with x264's default 10 s keyframe gap a re-seek decodes seconds of video and stalls. (The bigger cause of the opening's judder was the app correcting drift every frame; see ARCHITECTURE.md.) `vgen.sh`, `oneshot.sh` and `preview.sh` encode with `-g 12 -keyint_min 12 -sc_threshold 0 -movflags +faststart`. Since October 2026 the app checks every imported video and re-encodes what the wall would not play well (ARCHITECTURE.md, "Media formats"); H.264 must stay at or under 4096 px wide, which the wall's 3072 always is.
 
 ## Draft → final
 

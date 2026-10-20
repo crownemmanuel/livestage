@@ -8,6 +8,8 @@ import { importAssets, playableUrl } from "@/core/platform";
 import type { Asset, AssetType } from "@/core/types";
 import { useProject } from "@/store/project";
 import { useAssetInfo } from "../assetThumbs";
+import { MediaBadge } from "./MediaBadge";
+import { ingestAssets } from "@/engine/media";
 
 const TYPE_ICON: Record<AssetType, typeof Film> = { video: Film, image: ImageIcon, audio: AudioLines, model: Box };
 
@@ -30,7 +32,8 @@ function useImport() {
     setBusy(true);
     try {
       const a = await importAssets();
-      if (a.length) useProject.getState().addAssets(a);
+      // Lands in the library at once; videos are probed and, when the wall would not play them well, re-encoded.
+      if (a.length) await ingestAssets(a);
     } finally {
       setBusy(false);
     }
@@ -84,6 +87,7 @@ export function AssetLibrary() {
                 {a.name}
               </span>
               {a.ephemeral && <span className="text-[9.5px] text-armed" title="Imported in the browser: available until reload">session</span>}
+              <MediaBadge asset={a} />
               {!used.has(a.id) && !a.builtIn && (
                 <button className="hidden text-muted-foreground hover:text-destructive group-hover:block" onClick={() => useProject.getState().removeAsset(a.id)} aria-label="Remove asset">
                   <Trash2 className="size-3.5" />
@@ -93,7 +97,7 @@ export function AssetLibrary() {
           ))}
           {assets.length === 0 && (
             <li className="px-2 py-3 text-[11.5px] leading-snug text-muted-foreground">
-              Import images, videos (MP4, WebM with alpha, HEVC alpha .mov), GLB/glTF models and audio. Files are copied into the show library.
+              Import images, videos (MP4, WebM with alpha, HEVC alpha .mov), GLB/glTF models and audio. Files are copied into the show library; a video the wall would not play well is re-encoded for it.
             </li>
           )}
         </ul>
@@ -198,6 +202,7 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
                         <span className={isUsed ? "text-preview" : ""}>{isUsed ? "in the show" : "not used"}</span>
                         {a.builtIn && <span>· built-in</span>}
                         {a.ephemeral && <span className="text-armed">· until reload</span>}
+                        <MediaBadge asset={a} detail />
                       </div>
                     </div>
                     {pick?.value === a.id && <Check className="mt-0.5 size-4 shrink-0 text-preview" />}

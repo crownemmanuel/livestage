@@ -72,7 +72,9 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `cue_add`, `cue_update`, `cue_remove`, `cue_move` | Cues, with any actions and fire mode |
 | `upsert`, `remove` | Any list by path: camera shots, media markers, clips, timers, announcements, triggers, OSC targets, Hog items, presets |
 | `patch` | Set / merge / insert / remove anything in the show file in one change; returns the old values |
-| `asset_import`, `asset_remove` | Library media (local file or URL) |
+| `asset_import`, `asset_remove` | Library media (local file or URL). An imported video is probed and, when the wall would not play it well, re-encoded into the wall format on the way in (`optimise: false` to only report) |
+| `asset_check` | What a video is (codec, size, frame rate, keyframe gap, bit rate, audio) and whether the wall plays it well: problems with severity and whether optimising fixes them; the encoder tools on this machine |
+| `asset_optimise` | Re-encode a library video into the wall format (H.264, fitted to the wall, keyframe every ½ s, fast start); `force` when no problem was found |
 | `output_settings` | Wall size, scaling, standby card, timer style, audio host |
 | `project` | Save, export/import a show file, reset to the demo, rename |
 | `package_export` | Write a show package (show file, versioned manifest, every media file) for another computer; desktop app ([SHOW_PACKAGE.md](SHOW_PACKAGE.md)) |

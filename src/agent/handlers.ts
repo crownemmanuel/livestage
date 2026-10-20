@@ -20,6 +20,8 @@ import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Projec
 import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
 import * as ops from "@/engine/operator";
 import * as transport from "@/engine/transport";
+import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
+import { describeProbe } from "@/core/mediaCheck";
 import { liveAudioSources } from "@/engine/mixer";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { requestSnap } from "@/render/snap";
@@ -393,7 +395,58 @@ export const handlers: Record<AgentCommand, Handler> = {
     const q = a.query ? String(a.query).toLowerCase() : null;
     return P()
       .project.assets.filter((x) => (!a.type || x.type === a.type) && (!q || x.name.toLowerCase().includes(q)))
-      .map((x) => ({ id: x.id, name: x.name, type: x.type, url: x.url.startsWith("blob:") || x.url.length > 200 ? undefined : x.url, hasAlpha: x.hasAlpha || undefined, builtIn: x.builtIn || undefined, ephemeral: x.ephemeral || undefined }));
+      .map((x) => {
+        const problems = assetProblems(x);
+        return {
+          id: x.id,
+          name: x.name,
+          type: x.type,
+          url: x.url.startsWith("blob:") || x.url.length > 200 ? undefined : x.url,
+          hasAlpha: x.hasAlpha || undefined,
+          builtIn: x.builtIn || undefined,
+          ephemeral: x.ephemeral || undefined,
+          format: x.probe ? describeProbe(x.probe) : undefined,
+          optimised: x.optimised ? `from ${x.optimised.from}` : undefined,
+          problems: problems.length ? problems.map((p) => `${p.severity}: ${p.message}`) : undefined,
+        };
+      });
+  },
+
+  async asset_check(a) {
+    const all = P().project.assets.filter((x) => x.type === "video");
+    const list = a.asset ? [byIdOrName(all, a.asset, "video asset")] : all;
+    if (!isTauri) return { tools: null, assets: list.map((x) => ({ id: x.id, name: x.name, note: "browser session: files cannot be probed" })) };
+    const tools = await mediaTools();
+    const assets = [];
+    for (const x of list) {
+      let asset = x;
+      if ((a.reprobe || !x.probe) && x.path) {
+        asset = await checkAsset(x);
+        P().update((p) => {
+          const i = p.assets.findIndex((y) => y.id === x.id);
+          if (i >= 0) p.assets[i] = asset;
+        });
+      }
+      const problems = assetProblems(asset);
+      assets.push({
+        id: asset.id,
+        name: asset.name,
+        file: asset.file,
+        format: asset.probe ? describeProbe(asset.probe) : undefined,
+        probe: asset.probe ?? (asset.path ? undefined : "not a file on this machine (ships with the app or a URL): not probed"),
+        optimised: asset.optimised ? { from: asset.optimised.from, at: new Date(asset.optimised.at).toISOString(), was: describeProbe(asset.optimised.source) || undefined } : undefined,
+        problems,
+        playsWell: !problems.some((p) => p.severity === "error"),
+        canOptimise: !!asset.path && !asset.builtIn && !asset.url.startsWith("/media/") && !asset.hasAlpha,
+      });
+    }
+    return { wall: { canvasWidth: P().project.output.canvasWidth, canvasHeight: P().project.output.canvasHeight }, tools, assets };
+  },
+
+  async asset_optimise(a) {
+    const x = byIdOrName(P().project.assets, a.asset, "asset");
+    const r = await optimiseAsset(x.id, { force: !!a.force });
+    return { id: r.asset.id, name: r.asset.name, file: r.asset.file, skipped: r.skipped, format: describeProbe(r.asset.probe), problems: r.problems, optimised: r.asset.optimised ? { from: r.asset.optimised.from, was: describeProbe(r.asset.optimised.source) || undefined } : undefined };
   },
 
   get(a) {
@@ -884,8 +937,19 @@ export const handlers: Record<AgentCommand, Handler> = {
 
   async asset_import(a) {
     const asset = await importAsset(a);
-    P().addAssets([asset]);
-    return { id: asset.id, name: asset.name, type: asset.type, hasAlpha: asset.hasAlpha, ephemeral: asset.ephemeral || undefined };
+    const [r] = await ingestAssets([asset], { auto: a.optimise !== false });
+    const final = r?.asset ?? asset;
+    return {
+      id: final.id,
+      name: final.name,
+      type: final.type,
+      hasAlpha: final.hasAlpha,
+      ephemeral: final.ephemeral || undefined,
+      format: final.probe ? describeProbe(final.probe) : undefined,
+      optimised: r?.optimised ? { from: final.optimised?.from, was: describeProbe(final.optimised?.source) || undefined } : undefined,
+      problems: r?.problems.length ? r.problems : undefined,
+      optimiseError: r?.error,
+    };
   },
 
   asset_remove(a) {

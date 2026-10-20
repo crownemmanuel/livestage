@@ -68,6 +68,8 @@ if (status.error) {
     const tr = await call("transport", { target: "preview", op: "status" });
     ok("transport status (preview)", typeof tr.json?.held === "boolean", tr.error ?? (tr.json?.video ? `${tr.json.video.label} ${tr.json.video.position}/${tr.json.video.duration} s` : "no video"));
   }
+  const check = await call("asset_check");
+  ok("asset_check", Array.isArray(check.json?.assets), JSON.stringify(check.json).slice(0, 200));
   const mix = await call("mixer");
   ok("mixer (read)", Array.isArray(mix.json?.sources), mix.error ?? `${mix.json?.sources?.length ?? 0} sources playing`);
   const cloud = await call("cloud_status");
