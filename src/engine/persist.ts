@@ -12,6 +12,8 @@ export interface PendingRecord {
   /** Wall-clock ms the action must fire. */
   fireAt: number;
   action: CueAction;
+  /** The cue that scheduled it: re-firing that cue cancels its leftovers. */
+  cueId?: string;
 }
 
 export interface LiveState {

@@ -196,6 +196,16 @@ export const AGENT_COMMANDS = {
     description: "Play a front-of-house announcement through the program audio, or stop the one playing (announcement = null).",
     params: args({ announcement: { type: ["string", "null"], description: "Announcement id or exact name; null stops." } }, ["announcement"]),
   },
+  mixer: {
+    live: true,
+    description:
+      "Live mixer: list every audio source sounding on the LIVE wall (cue sounds, video with its sound on) with its volume trim, or set one. The trim multiplies the designed volume (1 = as designed, 0 = silent) and stays through takes; reset = true puts every source back. Without source/volume it only reads.",
+    params: args({
+      source: str('Mixer key from the list ("sound:<assetId>" or a component id), a sound or component name, or an asset id.'),
+      volume: num("Trim 0..1 for that source (1 = as designed)."),
+      reset: bool("Put every source back to its designed volume."),
+    }),
+  },
   timer_overlay: {
     live: true,
     description: "Put a show timer's clock on the LIVE wall over everything, or take it off (timer = null).",
@@ -388,7 +398,7 @@ export const AGENT_COMMANDS = {
     params: args({ asset: str("Asset id or exact name.") }, ["asset"]),
   },
   output_settings: {
-    description: "Change output settings by deep merge: canvasWidth/Height (LED canvas pixels), scaling, targetFps, backgroundColor, safeArea, testPattern, standby card, audioHost, timerOverlay style, monitorName, fullscreen.",
+    description: "Change output settings by deep merge: canvasWidth/Height (LED canvas pixels), scaling (fit | fill | stretch | native; stretch fills a display of another shape, e.g. 1920×720 that the LED processor rescales onto a 3072×768 wall), targetFps, backgroundColor, safeArea, testPattern, standby card, audioHost, timerOverlay style, monitorName, fullscreen.",
     params: args({ patch: obj("Fields to merge.") }, ["patch"]),
   },
   project: {

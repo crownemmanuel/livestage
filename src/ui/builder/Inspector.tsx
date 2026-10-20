@@ -616,6 +616,16 @@ function ProceduralForm({ c, up }: { c: ProceduralComponent; up: Updater<Procedu
         </div>
       </Field>
       {c.element !== "campfire" && <NumberField label="Radius (m)" value={c.radius} min={1} step={1} onChange={(v) => up((x) => (x.radius = v))} />}
+      {c.element === "birds" && (
+        <Field label="Flight height, low / high (m)">
+          <div className="grid grid-cols-2 gap-1">
+            <NumberInput value={(c.altitude ?? [25, 70])[0]} step={1} onChange={(v) => up((x) => (x.altitude = [v, (x.altitude ?? [25, 70])[1]]))} />
+            <NumberInput value={(c.altitude ?? [25, 70])[1]} step={1} onChange={(v) => up((x) => (x.altitude = [(x.altitude ?? [25, 70])[0], v]))} />
+          </div>
+        </Field>
+      )}
+      {c.element === "birds" && <ColorField label="Colour" value={c.color ?? "#1b1a1d"} onChange={(v) => up((x) => (x.color = v))} />}
+      {c.element === "birds" && <SliderField label="Sky haze" value={c.haze ?? 0.35} min={0} max={1} step={0.05} onChange={(v) => up((x) => (x.haze = v))} />}
       <SliderField label="Fade" value={c.fade} min={0} max={10} step={0.1} unit="s" onChange={(v) => up((x) => (x.fade = v))} />
     </Section>
   );

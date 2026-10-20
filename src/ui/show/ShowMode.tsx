@@ -60,6 +60,7 @@ import { flowNext } from "@/core/groups";
 import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 import { MediaPanel } from "./MediaPanel";
+import { MixerPanel } from "./MixerPanel";
 import { AnnouncementsPanel, TimersPanel } from "./ShowTools";
 
 export const TRANSITIONS: { value: TransitionKind; label: string }[] = [
@@ -90,8 +91,11 @@ export function ShowMode() {
           <CueList />
         </main>
         <Splitter value={w[1]} onChange={(v) => setW(1, v)} min={280} max={560} dir={-1} onReset={reset} />
-        <aside className="min-h-0 shrink-0 border-l border-border" style={{ width: w[1] }}>
-          <ControlPanel />
+        <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: w[1] }}>
+          <MixerPanel />
+          <div className="min-h-0 flex-1">
+            <ControlPanel />
+          </div>
         </aside>
       </div>
       <StatusBar />

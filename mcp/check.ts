@@ -68,6 +68,8 @@ if (status.error) {
     const tr = await call("transport", { target: "preview", op: "status" });
     ok("transport status (preview)", typeof tr.json?.held === "boolean", tr.error ?? (tr.json?.video ? `${tr.json.video.label} ${tr.json.video.position}/${tr.json.video.duration} s` : "no video"));
   }
+  const mix = await call("mixer");
+  ok("mixer (read)", Array.isArray(mix.json?.sources), mix.error ?? `${mix.json?.sources?.length ?? 0} sources playing`);
   const cloud = await call("cloud_status");
   ok("cloud_status", typeof cloud.json?.configured === "boolean", cloud.error ?? (cloud.json?.configured ? `${cloud.json.project}, signed in: ${cloud.json.signedIn}` : "not set up"));
   if (status.json.app.desktop) {

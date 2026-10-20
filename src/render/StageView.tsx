@@ -47,6 +47,23 @@ export function displayRect(mode: ScalingMode, cw: number, ch: number, W: number
   return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
 }
 
+/**
+ * HTML layers (videos, standby card, timer) laid out at the wall's own proportions and squeezed
+ * the same way as the 3D picture, so under Stretch they distort with it and look right on the wall.
+ * `sx` is the horizontal squeeze (1 when the display shows the canvas undistorted).
+ */
+function WallBox({ sx, z, children }: { sx: number; z: number; children: React.ReactNode }) {
+  const squeezed = Math.abs(sx - 1) > 1e-3;
+  return (
+    <div
+      className="pointer-events-none absolute top-0 left-0 h-full"
+      style={{ width: `${100 / sx}%`, zIndex: z, transform: squeezed ? `scaleX(${sx})` : undefined, transformOrigin: "0 0" }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 2, showSafeArea = false, audio = false, onCapture }: StageViewProps) {
   const box = useRef<HTMLDivElement>(null);
   const { w: cw, h: ch } = useSize(box);
@@ -57,17 +74,23 @@ export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 
   const rect = displayRect(scaling, cw, ch, W, H, sysDpr);
   // Render at the displayed size, never above the logical canvas resolution.
   const dpr = Math.max(0.25, Math.min(maxDpr, sysDpr, (W / Math.max(1, rect.w)) * 1.0001));
+  // Horizontal squeeze of the displayed wall against its true proportions (Stretch only).
+  const sx = rect.h > 0 ? rect.w / ((rect.h * W) / H) : 1;
 
   return (
     <div ref={box} className="relative h-full w-full overflow-hidden" style={{ background: "#000" }}>
       {cw > 0 && ch > 0 && (
         <div className="absolute overflow-hidden" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, background: output.backgroundColor }}>
           {source === "program" ? (
-            <ProgramSlots W={W} H={H} dpr={dpr} isOutput={isOutput} audio={audio} />
+            <ProgramSlots W={W} H={H} dpr={dpr} sx={sx} isOutput={isOutput} audio={audio} />
           ) : (
             <PreviewSlot W={W} H={H} dpr={dpr} onCapture={onCapture} />
           )}
-          {source === "program" && <TimerOverlay h={rect.h} />}
+          {source === "program" && (
+            <WallBox sx={sx} z={9}>
+              <TimerOverlay h={rect.h} />
+            </WallBox>
+          )}
           {output.testPattern && (source === "program" || !isOutput) && <TestPattern W={W} H={H} />}
           {showSafeArea && output.safeArea.enabled && <SafeArea W={W} H={H} pct={output.safeArea.marginPct} />}
         </div>
@@ -149,7 +172,7 @@ function transitionView(key: string): TransitionView | null {
   return { spec: tr.spec, p, side: tr.from?.key === key ? "out" : "in" };
 }
 
-const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, isOutput, audio }: { W: number; H: number; dpr: number; isOutput: boolean; audio: boolean }) {
+const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio }: { W: number; H: number; dpr: number; sx: number; isOutput: boolean; audio: boolean }) {
   const program = useShow((s) => s.program);
   const assets = useShow((s) => s.assets);
   const output = useShow((s) => s.output);
@@ -257,6 +280,8 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, isOutput, audio }: 
           <ProgramCanvas rt={s.rt} role={s.role} W={W} H={H} dpr={dpr} isOutput={isOutput} audio={audio && s.role === "live"} />
         </div>
       ))}
+      {/* Above the program slots (1–2); the stacking inside matches the old z-indexes 5–8. */}
+      <WallBox sx={sx} z={5}>
       {videoAsset && (
         <video
           key={`${program.takeCount}`}
@@ -286,6 +311,7 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, isOutput, audio }: 
           </div>
         )}
       </div>
+      </WallBox>
     </>
   );
 });

@@ -18,6 +18,7 @@ import type {
   Scene,
   SceneComponent,
   SceneRuntime,
+  SoundEvent,
   SpeedRamp,
   Vec2,
   Vec3,
@@ -283,6 +284,20 @@ export function mediaElapsed(rt: SceneRuntime, id: string, startAt: number, t: n
   return ramp.elapsedAt + integral;
 }
 
+/**
+ * How loud a video's sound is allowed to be at scene time t (1 = untouched, 0 = faded out) after
+ * sound cues that fade other audio out (the sound action's `fadeOthers`).
+ */
+export function videoAudioFade(rt: SceneRuntime, componentId: string, t: number): number {
+  let k = 1;
+  for (const ev of rt.sounds ?? []) {
+    const f = ev.fadeOthers;
+    if (!f || ev.at > t || (f.which !== "all" && !f.which.includes(componentId))) continue;
+    k = Math.min(k, f.fade > 0 ? 1 - clamp((t - ev.at) / (f.fade * 1000), 0, 1) : 0);
+  }
+  return k;
+}
+
 /** Current playback rate of a component (for the <video> element's own rate). */
 export function mediaRate(rt: SceneRuntime, id: string, t: number, baseRate: number): number {
   const ramp = rt.speed?.[id];
@@ -526,7 +541,9 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     }
     case "sound": {
       if (!cmd.assetId) return { rt, poses };
-      return { rt: { ...rt, sounds: [...(rt.sounds ?? []).slice(-15), { id: uid("snd"), assetId: cmd.assetId, at: t, volume: cmd.volume }] }, poses };
+      const ev: SoundEvent = { id: uid("snd"), assetId: cmd.assetId, at: t, volume: cmd.volume, keepPlaying: !!cmd.keepPlaying };
+      if (cmd.fadeOthers && (cmd.fadeOthers.which === "all" || cmd.fadeOthers.which.length)) ev.fadeOthers = cmd.fadeOthers;
+      return { rt: { ...rt, sounds: [...(rt.sounds ?? []).slice(-15), ev] }, poses };
     }
   }
 }

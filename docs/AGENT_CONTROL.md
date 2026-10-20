@@ -58,6 +58,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `cancel_pending`, `restart_preview` | Pending actions, restart the preview |
 | `blackout`, `standby` [LIVE] | Wall-wide controls |
 | `timer`, `timer_overlay`, `announce` [LIVE] | Show timers, on-screen clock, front-of-house announcements |
+| `mixer` [LIVE] | Live mixer: list what is sounding on the wall (cue sounds, video with sound) and trim one source's volume, or reset all |
 | `next_transition` | Transition for the next TAKE |
 | `io_send` [LIVE] | Send MIDI / OSC / MSC / Hog 4 (lighting items by name) |
 | `io_inject` | Simulate an incoming MIDI/OSC message to test triggers |

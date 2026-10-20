@@ -67,6 +67,8 @@ interface ShowStore {
   announce(a: { id: string; assetId: string; volume: number } | null): void;
   /** Put a show timer on screen over everything (null takes it off). */
   setTimerOverlay(o: { timerId: string; label: string } | null): void;
+  /** Live mixer: set one source's volume trim (0..1; null = back to as designed). See ProgramState.mix. */
+  setMix(key: string, level: number | null): void;
   /** Bring a saved program back after a reload/crash; the scene clock keeps running from where it was. */
   restoreProgram(program: ProgramState, poses: ActorPoses): void;
   /** The live scene was edited and saved: push the new definition without restarting it. */
@@ -144,6 +146,7 @@ export const useShow = create<ShowStore>((set, get) => ({
         timers: program.timers,
         announce: program.announce,
         timerOverlay: program.timerOverlay,
+        mix: program.mix,
       },
       programPoses: createPoses(scene),
       fromPoses: instant ? null : programPoses,
@@ -254,6 +257,14 @@ export const useShow = create<ShowStore>((set, get) => ({
     set({ program: { ...get().program, timerOverlay: o } });
   },
 
+  setMix(key, level) {
+    const { program } = get();
+    const mix = { ...(program.mix ?? {}) };
+    if (level === null || Math.abs(level - 1) < 1e-4) delete mix[key];
+    else mix[key] = Math.min(1, Math.max(0, level));
+    set({ program: { ...program, mix } });
+  },
+
   restoreProgram(program, poses) {
     // A transition that was running when we went down is over by now.
     set({ program: { ...program, transition: null }, programPoses: poses, fromPoses: null, posesAt: now(), restoredAt: now() });
@@ -265,6 +276,9 @@ export const useShow = create<ShowStore>((set, get) => ({
     set({ program: { ...program, runtime: reconcileRuntime(program.runtime, scene) } });
   },
 }));
+
+/** The live mixer's trim for an audio source (see ProgramState.mix); 1 when untouched. */
+export const mixLevel = (key: string) => useShow.getState().program.mix?.[key] ?? 1;
 
 export const runtimeFor = (target: Target) => {
   const s = useShow.getState();

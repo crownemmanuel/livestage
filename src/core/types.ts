@@ -314,6 +314,15 @@ export interface ProceduralComponent extends ComponentBase {
   center: Vec2;
   radius: number;
   fade: number;
+  /**
+   * Birds only: flight height band in metres [low, high] (default 25-70, for the 3D environments).
+   * Over a flat media plate the camera is at eye level and a 4:1 wall sees only ~±10° vertically,
+   * so birds there fly lower and further out, e.g. [4, 14] with the centre ~60 m away.
+   */
+  altitude?: [number, number];
+  /** Birds only: silhouette colour (default #1b1a1d) and how far it blends toward the sky colour, 0-1 (default 0.35). */
+  color?: string;
+  haze?: number;
 }
 
 /** One AI/pre-rendered clip of a video actor, tagged with the pose it starts and ends on. */
@@ -546,7 +555,16 @@ export type CueAction =
   /** Freeze / unfreeze every moving thing in the scene. */
   | { type: "clock"; op: "pause" | "resume" | "toggle"; delay: number }
   /** Play a sound once (on the audio host). */
-  | { type: "sound"; assetId: string | null; volume: number; delay: number }
+  | {
+      type: "sound";
+      assetId: string | null;
+      volume: number;
+      delay: number;
+      /** Keep playing when another scene is taken. Default: the sound fades out when the scene changes. */
+      keepPlaying?: boolean;
+      /** When this sound starts, fade other audio out (null/absent = leave it). See AudioFadeOut. */
+      fadeOthers?: AudioFadeOut | null;
+    }
   /** Send MIDI / OSC to a console or another machine. */
   | { type: "send"; message: IoMessage; delay: number }
   /** Show timers are global (the Timers tab); a cue can start, pause or reset one. */
@@ -853,6 +871,20 @@ export interface SoundEvent {
   assetId: string;
   at: number;
   volume: number;
+  /** Carries on when another scene is taken (see the sound action). */
+  keepPlaying?: boolean;
+  /** Other audio this sound fades out as it starts (see the sound action). */
+  fadeOthers?: AudioFadeOut;
+}
+
+/**
+ * A sound cue that clears the air as it starts: `which` = "all" fades every other cue sound and the
+ * sound of every video on the wall; a list names mixer keys (`sound:<assetId>` for a cue sound, a
+ * component id for a video's sound). `fade` is in seconds.
+ */
+export interface AudioFadeOut {
+  which: "all" | string[];
+  fade: number;
 }
 
 export interface EffectRuntime {
@@ -975,4 +1007,10 @@ export interface ProgramState {
   timerOverlay?: { timerId: string; label: string } | null;
   /** The announcement playing (or last played); `stoppedAt` set when it was stopped early. */
   announce?: { key: string; id: string; assetId: string; volume: number; at: number; stoppedAt?: number };
+  /**
+   * Live mixer: the operator's volume trim per audio source, multiplied into the designed volume
+   * (1 = as designed, 0 = silent). Keys: `sound:<assetId>` for cue sounds, a component id for the sound
+   * of a video layer, video background or video actor. Show-wide, so it survives takes and reloads.
+   */
+  mix?: Record<string, number>;
 }

@@ -31,19 +31,31 @@ export function ProceduralElement({ comp, preset }: Props) {
 
 // ---------------------------------------------------------------- birds
 
+/*
+ * A bird silhouette (local space: x along the wings, z forward) whose wings fold at the elbow:
+ * the inner wing follows the wingbeat and the outer wing lags it, which gives the whip of a real
+ * flap. Each bird alternates flapping (2.5-4 Hz) with glides on slightly raised wings.
+ */
 const birdVert = /* glsl */ `
-attribute float aWing;
 uniform float uTime;
 uniform float uScale;
-varying float vFade;
 void main() {
-  float phase = float(gl_InstanceID) * 1.731;
-  float flap = sin(uTime * (7.0 + mod(phase, 3.0)) + phase * 4.0);
-  float glide = smoothstep(0.2, 0.8, sin(uTime * 0.35 + phase) * 0.5 + 0.5);
-  vec3 p = position * uScale;
-  p.y += abs(aWing) * flap * 0.45 * uScale * (1.0 - glide * 0.85);
-  p.y -= abs(aWing) * 0.1 * uScale * glide;
-  vec4 mv = modelViewMatrix * instanceMatrix * vec4(p, 1.0);
+  float id = float(gl_InstanceID);
+  float freq = 2.5 + fract(id * 0.618) * 1.5;
+  float beat = uTime * freq * 6.2832 + id * 1.7;
+  float glide = smoothstep(0.3, 0.7, sin(uTime * 0.45 + id * 2.3) * 0.5 + 0.5);
+  float amp = mix(0.75, 0.07, glide);
+  float dihedral = mix(0.05, 0.18, glide);
+  float a1 = dihedral + amp * sin(beat);
+  float a2 = dihedral + amp * 1.25 * sin(beat - 0.8);
+  vec3 p = position;
+  float d = abs(p.x);
+  float side = sign(p.x);
+  float inner = min(d, 0.65);
+  float outer = max(d - 0.65, 0.0);
+  p.x = side * (inner * cos(a1) + outer * cos(a2));
+  p.y += inner * sin(a1) + outer * sin(a2) - 0.03 * sin(beat) * (1.0 - glide);
+  vec4 mv = modelViewMatrix * instanceMatrix * vec4(p * uScale, 1.0);
   gl_Position = projectionMatrix * mv;
 }
 `;
@@ -56,15 +68,36 @@ void main() {
 }
 `;
 
+function birdGeometry() {
+  const tri: number[] = [];
+  const add = (...pts: [number, number][]) => pts.forEach(([x, z]) => tri.push(x, 0, z));
+  // body: beak, head, shoulders, body, fanned tail
+  add([0, 0.55], [-0.06, 0.42], [0.06, 0.42]);
+  add([-0.06, 0.42], [-0.12, 0.12], [0.12, 0.12]);
+  add([-0.06, 0.42], [0.12, 0.12], [0.06, 0.42]);
+  add([-0.12, 0.12], [0, -0.3], [0.12, 0.12]);
+  add([0, -0.3], [-0.2, -0.62], [0, -0.55]);
+  add([0, -0.3], [0, -0.55], [0.2, -0.62]);
+  // wings: inner (root to elbow) and outer (elbow to a swept, tapered tip)
+  for (const k of [-1, 1]) {
+    const R1: [number, number] = [k * 0.1, 0.16], R2: [number, number] = [k * 0.1, -0.16];
+    const E1: [number, number] = [k * 0.65, 0.14], E2: [number, number] = [k * 0.62, -0.14];
+    const P1: [number, number] = [k * 1.25, 0.02], T1: [number, number] = [k * 1.45, -0.22], P2: [number, number] = [k * 0.95, -0.26];
+    add(R1, E1, E2);
+    add(R1, E2, R2);
+    add(E1, P1, T1);
+    add(E1, T1, P2);
+    add(E1, P2, E2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(tri, 3));
+  return g;
+}
+
 function Birds({ comp }: { comp: ProceduralComponent }) {
   const { frame } = useStage();
   const presence = useLayerPresence(comp.id, comp.fade);
-  const { mesh, mat, seeds } = useMemo(() => {
-    const g = new THREE.BufferGeometry();
-    // body + two wings (wing tips carry aWing = ±1 for flapping)
-    const pos = [0, 0, 0.5, -1.4, 0, -0.1, 0, 0, -0.3, 0, 0, 0.5, 0, 0, -0.3, 1.4, 0, -0.1];
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute("aWing", new THREE.Float32BufferAttribute([0, -1, 0, 0, 0, 1], 1));
+  const { mesh, mat, flocks, birds } = useMemo(() => {
     const mat = new THREE.ShaderMaterial({
       vertexShader: birdVert,
       fragmentShader: birdFrag,
@@ -72,24 +105,35 @@ function Birds({ comp }: { comp: ProceduralComponent }) {
       transparent: true,
       uniforms: { uTime: { value: 0 }, uScale: { value: 0.55 }, uColor: { value: new THREE.Color("#1b1a1d") }, uOpacity: { value: 1 } },
     });
-    const mesh = new THREE.InstancedMesh(g, mat, Math.max(1, comp.count));
+    const mesh = new THREE.InstancedMesh(birdGeometry(), mat, Math.max(1, comp.count));
     mesh.frustumCulled = false;
     const r = rng(comp.count * 13 + 7);
-    const seeds = Array.from({ length: comp.count }, () => ({
-      rad: comp.radius * (0.4 + r() * 0.6),
-      h: 25 + r() * 45,
-      speed: (6 + r() * 5) * (r() < 0.5 ? 1 : -1),
-      ph: r() * Math.PI * 2,
+    const [lo, hi] = comp.altitude ?? [25, 70];
+    // Loose flocks of 2-4 birds, each flock with its own path, height, speed and drift.
+    const nFlocks = Math.max(1, Math.round(comp.count / 3));
+    const flocks = Array.from({ length: nFlocks }, () => {
+      const rad = comp.radius * (0.5 + r() * 0.5);
+      return { rad, w: ((7 + r() * 4) / rad) * (r() < 0.5 ? 1 : -1), th0: r() * Math.PI * 2, h: lo + r() * Math.max(0, hi - lo), ph: r() * 10 };
+    });
+    const birds = Array.from({ length: comp.count }, (_, i) => ({
+      f: i % nFlocks,
+      along: (r() - 0.5) * 7,
+      across: (r() - 0.5) * 4,
+      dy: (r() - 0.5) * 2.5,
+      size: 0.8 + r() * 0.4,
       wob: r() * 10,
     }));
-    return { mesh, mat, seeds };
-  }, [comp.count, comp.radius]);
+    return { mesh, mat, flocks, birds };
+  }, [comp.count, comp.radius, comp.altitude?.[0], comp.altitude?.[1]]);
 
   const m4 = useMemo(() => new THREE.Matrix4(), []);
   const q = useMemo(() => new THREE.Quaternion(), []);
-  const e = useMemo(() => new THREE.Euler(), []);
+  const e = useMemo(() => new THREE.Euler(0, 0, 0, "YXZ"), []);
   const v = useMemo(() => new THREE.Vector3(), []);
   const s = useMemo(() => new THREE.Vector3(1, 1, 1), []);
+  const p0 = useMemo(() => new THREE.Vector3(), []);
+  const p1 = useMemo(() => new THREE.Vector3(), []);
+  const p2 = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(() => {
     const t = frame.ts;
@@ -97,17 +141,35 @@ function Birds({ comp }: { comp: ProceduralComponent }) {
     mesh.visible = vis > 0.01;
     mat.uniforms.uTime.value = t;
     mat.uniforms.uOpacity.value = vis;
-    mat.uniforms.uColor.value.set("#1b1a1d").lerp(frame.horizon, 0.35);
+    mat.uniforms.uColor.value.set(comp.color ?? "#1b1a1d").lerp(frame.horizon, comp.haze ?? 0.35);
     const [cx, cz] = comp.center;
-    seeds.forEach((b, i) => {
-      const a = b.ph + (t * b.speed) / b.rad;
-      const x = cx + Math.cos(a) * b.rad + Math.sin(t * 0.13 + b.wob) * 6;
-      const z = cz + Math.sin(a) * b.rad * 0.6;
-      const y = b.h + Math.sin(t * 0.4 + b.wob) * 3;
-      const yaw = Math.atan2(-Math.sin(a) * Math.sign(b.speed), Math.cos(a) * 0.6 * Math.sign(b.speed));
-      e.set(0, yaw, Math.sin(t * 0.5 + b.wob) * 0.25);
+    // Position of bird b at time tt: a pure function of time, so every window agrees.
+    const at = (b: (typeof birds)[number], tt: number, out: THREE.Vector3) => {
+      const fl = flocks[b.f];
+      const th = fl.th0 + fl.w * tt + b.along / fl.rad + 0.25 * Math.sin(tt * 0.11 + fl.ph);
+      const R = fl.rad + b.across + 4 * Math.sin(tt * 0.17 + fl.ph * 1.3);
+      return out.set(
+        cx + Math.cos(th) * R + 6 * Math.sin(tt * 0.07 + fl.ph),
+        fl.h + b.dy + 1.2 * Math.sin(tt * 0.5 + b.wob) + 2 * Math.sin(tt * 0.13 + fl.ph),
+        cz + Math.sin(th) * R * 0.55,
+      );
+    };
+    birds.forEach((b, i) => {
+      at(b, t, p0);
+      at(b, t + 0.04, p1);
+      at(b, t + 0.08, p2);
+      const vx = p1.x - p0.x, vy = p1.y - p0.y, vz = p1.z - p0.z;
+      const yaw = Math.atan2(vx, vz);
+      const yaw2 = Math.atan2(p2.x - p1.x, p2.z - p1.z);
+      let turn = yaw2 - yaw;
+      if (turn > Math.PI) turn -= Math.PI * 2;
+      if (turn < -Math.PI) turn += Math.PI * 2;
+      const pitch = -Math.atan2(vy, Math.hypot(vx, vz)) * 0.6;
+      const bank = clamp((-turn / 0.04) * 0.25, -0.6, 0.6);
+      e.set(pitch, yaw, bank);
       q.setFromEuler(e);
-      m4.compose(v.set(x, y, z), q, s);
+      s.setScalar(b.size);
+      m4.compose(v.copy(p0), q, s);
       mesh.setMatrixAt(i, m4);
     });
     mesh.instanceMatrix.needsUpdate = true;

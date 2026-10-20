@@ -125,12 +125,13 @@ function execAction(target: Target, a: CueAction) {
   useShow.getState().dispatch(target, a);
 }
 
-function scheduleAction(target: Target, a: CueAction, fireAt: number) {
+function scheduleAction(target: Target, a: CueAction, fireAt: number, cueId?: string) {
   const delay = Math.max(0, fireAt - now());
   const rec: Pending = {
     target,
     fireAt,
     action: a,
+    cueId,
     handle: setTimeout(() => {
       pending[target] = pending[target].filter((x) => x !== rec);
       execAction(target, a);
@@ -141,8 +142,14 @@ function scheduleAction(target: Target, a: CueAction, fireAt: number) {
 
 export function runCue(target: Target, cue: Cue) {
   const t0 = now();
+  // Re-firing a cue replaces its earlier run: the delayed actions still waiting from it are dropped.
+  const stale = pending[target].filter((p) => p.cueId === cue.id);
+  if (stale.length) {
+    stale.forEach((p) => clearTimeout(p.handle));
+    pending[target] = pending[target].filter((p) => p.cueId !== cue.id);
+  }
   for (const a of cue.actions) {
-    if (a.delay > 0) scheduleAction(target, a, t0 + a.delay * 1000);
+    if (a.delay > 0) scheduleAction(target, a, t0 + a.delay * 1000, cue.id);
     else execAction(target, a);
   }
 }
@@ -548,7 +555,7 @@ export async function restoreLiveState(): Promise<boolean> {
     if (rec.target !== "program") continue;
     // Late by less than two seconds: still fire it (the audience is waiting for it); later than that it is stale.
     if (rec.fireAt < t - 2000) continue;
-    scheduleAction("program", rec.action, Math.max(t + 50, rec.fireAt));
+    scheduleAction("program", rec.action, Math.max(t + 50, rec.fireAt), rec.cueId);
     rearmed++;
   }
   ioLog("info", `Resumed live state: ${p.runtime ? `${p.runtime.scene.name}, next cue ${p.runtime.cuePointer + 1}` : "standby"}${rearmed ? `, ${rearmed} delayed action(s) re-armed` : ""}`);
@@ -708,7 +715,7 @@ export function startOperatorServices(): () => void {
   cleanups.push(() => clearInterval(watchdog));
 
   // Live-state persistence (crash / reload recovery) and show-control I/O.
-  setPendingSource(() => pending.program.map(({ target, fireAt, action }) => ({ target, fireAt, action })));
+  setPendingSource(() => pending.program.map(({ target, fireAt, action, cueId }) => ({ target, fireAt, action, cueId })));
   cleanups.push(startLiveStatePersistence());
   setIoActionHandler(runIoAction);
   cleanups.push(startIo());

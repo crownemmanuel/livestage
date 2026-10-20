@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { now } from "@/core/clock";
 import { onBus, send } from "@/core/bus";
 import { isTauri } from "@/core/platform";
-import { startProgramAudio, unlockAudio } from "@/engine/audio";
+import { playingCueSounds, startProgramAudio, unlockAudio } from "@/engine/audio";
 import { StageView } from "@/render/StageView";
 import { takeVideoSyncStats } from "@/render/layers/video";
 import { useShow } from "@/store/show";
@@ -54,6 +54,7 @@ export function OutputApp() {
           dpr: devicePixelRatio,
           fullscreen: !!document.fullscreenElement || (window.innerWidth === screen.width && window.innerHeight === screen.height),
           video: takeVideoSyncStats(),
+          sounds: playingCueSounds(),
         },
       });
       if (import.meta.env.DEV && import.meta.env.VITE_SLS_SELFTEST) {

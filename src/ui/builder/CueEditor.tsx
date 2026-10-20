@@ -21,6 +21,7 @@ function currentPreviewFraming() {
   return { zoom: r(f.zoom), x: r(f.x), y: r(f.y) };
 }
 import { useProject, NO_ITEMS } from "@/store/project";
+import { Switch } from "@/components/ui/switch";
 import { NumberInput, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
 import { TRANSITIONS } from "../show/ShowMode";
@@ -72,6 +73,24 @@ const infoFor = (a: CueAction) => ACTION_INFO[a.type === "send" && a.message.typ
 
 const LAYER_KINDS = ["video", "image", "model", "procedural", "text", "names", "route"];
 
+/** Audio a sound cue can fade out as it starts: this scene's other cue sounds and its video with sound on (mixer keys). */
+function otherAudio(scene: Scene, ownAssetId: string | null): { key: string; label: string }[] {
+  const assets = useShow.getState().assets;
+  const out: { key: string; label: string }[] = [];
+  const seen = new Set<string>();
+  for (const cue of scene.cues)
+    for (const x of cue.actions)
+      if (x.type === "sound" && x.assetId && x.assetId !== ownAssetId && !seen.has(x.assetId)) {
+        seen.add(x.assetId);
+        out.push({ key: `sound:${x.assetId}`, label: `♪ ${assets.find((s) => s.id === x.assetId)?.name ?? x.assetId}` });
+      }
+  for (const c of scene.components) {
+    const sound = c.kind === "clipActor" ? !c.muted : (c.kind === "video" || c.kind === "background") && "media" in c && !c.media.muted;
+    if (sound) out.push({ key: c.id, label: `▶ ${c.name}` });
+  }
+  return out;
+}
+
 export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]): CueAction {
   const actor = scene.components.find((c) => c.kind === "actor")?.id ?? "";
   const marker = Object.keys(scene.markers)[0] ?? "center";
@@ -105,7 +124,7 @@ export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]
     case "clock":
       return { type, op: "toggle", delay: 0 };
     case "sound":
-      return { type, assetId: null, volume: 1, delay: 0 };
+      return { type, assetId: null, volume: 1, delay: 0, keepPlaying: false, fadeOthers: null };
     case "send":
       return { type, message: defaultMessage("osc"), delay: 0 };
     case "timer":
@@ -414,6 +433,46 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
           <AssetPickerButton types={["audio"]} value={a.assetId} onChange={(v) => onChange({ ...a, assetId: v })} placeholder="Choose a sound…" title="Choose a sound" className="h-6 w-[220px] text-[11px]" />
           {lbl("vol")}
           <NumberInput className="h-6 w-14" value={a.volume} min={0} max={1} step={0.05} onChange={(v) => onChange({ ...a, volume: v })} />
+          <label className="flex items-center gap-1 text-[10.5px] text-muted-foreground" title="Off: the sound fades out when another scene is taken. On: it carries on into the next scene.">
+            <Switch size="sm" checked={!!a.keepPlaying} onCheckedChange={(v) => onChange({ ...a, keepPlaying: v })} />
+            keep playing into next scene
+          </label>
+          {lbl("as it starts")}
+          {sel(
+            !a.fadeOthers ? "keep" : a.fadeOthers.which === "all" ? "all" : "chosen",
+            [
+              { value: "keep", label: "leave other audio" },
+              { value: "all", label: "fade out all other audio" },
+              { value: "chosen", label: "fade out chosen audio…" },
+            ],
+            (v) => onChange({ ...a, fadeOthers: v === "keep" ? null : { which: v === "all" ? "all" : Array.isArray(a.fadeOthers?.which) ? a.fadeOthers.which : [], fade: a.fadeOthers?.fade ?? 3 } }),
+            "w-[170px]",
+          )}
+          {a.fadeOthers && (
+            <>
+              {lbl("over s")}
+              <NumberInput className="h-6 w-12" value={a.fadeOthers.fade} min={0} step={0.5} onChange={(v) => onChange({ ...a, fadeOthers: { ...a.fadeOthers!, fade: Math.max(0, v) } })} />
+            </>
+          )}
+          {a.fadeOthers && a.fadeOthers.which !== "all" && (
+            <div className="flex w-full flex-wrap items-center gap-1">
+              {lbl("fade:")}
+              {otherAudio(scene, a.assetId).map((o) => {
+                const which = a.fadeOthers!.which as string[];
+                const on = which.includes(o.key);
+                return (
+                  <button
+                    key={o.key}
+                    type="button"
+                    className={cn("rounded border px-1.5 py-0.5 text-[10.5px]", on ? "border-live/60 bg-live/15 text-foreground" : "border-border text-muted-foreground hover:text-foreground")}
+                    onClick={() => onChange({ ...a, fadeOthers: { ...a.fadeOthers!, which: on ? which.filter((k) => k !== o.key) : [...which, o.key] } })}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </>
       );
       break;

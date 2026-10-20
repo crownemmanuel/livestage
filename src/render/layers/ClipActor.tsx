@@ -5,6 +5,8 @@ import { clipStateAt } from "@/core/clipActor";
 import { defaultActorLayout } from "@/core/factories";
 import { playableUrl } from "@/core/platform";
 import type { ClipActorComponent, ClipDef } from "@/core/types";
+import { mixLevel } from "@/store/show";
+import { videoAudioFade } from "@/core/runtime";
 import { QUAD_VERT } from "../glsl";
 import { useStage } from "../frame";
 import { applyMediaSettings, makeMediaMaterial, setMap } from "./mediaMaterial";
@@ -111,7 +113,7 @@ function ClipQuad({ actor, clip, order }: { actor: ClipActorComponent; clip: Cli
     const dur = videoDuration(video) || clip.duration;
     if (active) {
       const time = clip.loop ? st.localT % dur : Math.min(st.localT, dur - 0.04);
-      syncVideo(video, { play: st.playing && rt.clock.pausedAt === null, time, rate: 1, muted: actor.muted || !audio, volume: actor.volume }, frame.wall);
+      syncVideo(video, { play: st.playing && rt.clock.pausedAt === null, time, rate: 1, muted: actor.muted || !audio, volume: actor.volume * mixLevel(actor.id) * videoAudioFade(rt, actor.id, frame.t) }, frame.wall);
     } else {
       // Park on frame 0 so the clip can cut in instantly when its turn comes.
       syncVideo(video, { play: false, time: 0, rate: 1, muted: true, volume: 0 }, frame.wall);

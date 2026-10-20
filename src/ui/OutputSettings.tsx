@@ -34,6 +34,8 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
   const g = gcd(o.canvasWidth, o.canvasHeight) || 1;
   const mon = monitors.find((m) => m.name === o.monitorName) ?? monitors.find((m) => !m.primary) ?? monitors[0];
   const exceeds = mon && (o.canvasWidth > mon.width || o.canvasHeight > mon.height);
+  // A display whose shape differs from the wall (e.g. 1920×720 feeding a 3072×768 wall) is usually rescaled to the whole wall by the LED processor.
+  const shapeDiffers = mon && Math.abs(mon.width / mon.height / (o.canvasWidth / o.canvasHeight) - 1) > 0.02;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -68,10 +70,16 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
             options={[
               { value: "fit", label: "Fit (letterbox, whole canvas visible)" },
               { value: "fill", label: "Fill (crop to fill display)" },
-              { value: "stretch", label: "Stretch (distort to display)" },
+              { value: "stretch", label: "Stretch (fill display; the LED processor undoes it)" },
               { value: "native", label: "Native size (1:1 pixels, may crop)" },
             ]}
           />
+          {o.scaling === "stretch" && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              The whole canvas fills the output display, squeezed to its shape. Use this when the LED processor scales the display signal onto the whole wall (like vMix's
+              Widescreen input setting): it looks squashed on the computer screen and correct on the wall. Check with the test pattern: its circles should be round on the wall.
+            </p>
+          )}
           <SliderField label="Target frame rate" value={o.targetFps} min={24} max={60} step={1} unit="fps" onChange={(targetFps) => set({ targetFps })} />
           <ColorField label="Background" value={o.backgroundColor} onChange={(backgroundColor) => set({ backgroundColor })} />
         </Section>
@@ -96,12 +104,21 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
               </div>
             </Field>
           )}
+          {shapeDiffers && o.scaling !== "stretch" && (
+            <div className="flex gap-2 rounded-md border border-armed/40 bg-armed/10 p-2 text-[11.5px] leading-snug text-armed">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>
+                This display ({mon!.width}×{mon!.height}, {(mon!.width / mon!.height).toFixed(2)}:1) is a different shape from the wall ({(o.canvasWidth / o.canvasHeight).toFixed(2)}:1).
+                If the LED processor scales this signal onto the whole wall, set Scaling to Stretch, or the picture will sit in a band with black above and below.
+              </span>
+            </div>
+          )}
           {exceeds && (
             <div className="flex gap-2 rounded-md border border-armed/40 bg-armed/10 p-2 text-[11.5px] leading-snug text-armed">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <span>
                 The canvas ({o.canvasWidth}×{o.canvasHeight}) is larger than this display ({mon!.width}×{mon!.height}). Composition stays in canvas coordinates, but the
-                signal leaving this computer can only be {mon!.width}×{mon!.height}; it is scaled to fit. To drive the full wall pixel-for-pixel, present the wall as a single
+                signal leaving this computer can only be {mon!.width}×{mon!.height}; it is scaled down (see Scaling). To drive the full wall pixel-for-pixel, present the wall as a single
                 display of that size (LED processor / GPU spanning) and select it here.
               </span>
             </div>

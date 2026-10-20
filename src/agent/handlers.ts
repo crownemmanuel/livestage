@@ -2,7 +2,7 @@
 // spec.ts (TypeScript enforces it), so a new command cannot ship without an implementation.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { now, sceneNow } from "@/core/clock";
+import { clamp, now, sceneNow } from "@/core/clock";
 import { clipStateAt } from "@/core/clipActor";
 import { EFFECT_DEFS } from "@/core/effects";
 import * as factories from "@/core/factories";
@@ -20,6 +20,7 @@ import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Projec
 import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
 import * as ops from "@/engine/operator";
 import * as transport from "@/engine/transport";
+import { liveAudioSources } from "@/engine/mixer";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { requestSnap } from "@/render/snap";
 import { useProject } from "@/store/project";
@@ -184,6 +185,7 @@ function schemaDoc(topic: string) {
   if (topic === "cueActions" || topic === "all") {
     out.cueActions = {
       note: "Examples are built for the selected scene, so ids are real where it has such components. Every action has delay (seconds after the cue fires).",
+      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); null leaves other audio alone.',
       fire: 'Cue.fire: {mode: "go"} (default) | {mode: "time", at: seconds after TAKE} | {mode: "follow", after: seconds after the previous cue} | {mode: "video"} (fired by a media marker whose cueId is this cue).',
       types: (Object.keys(ACTION_INFO) as (CueActionType | "hog")[]).map((t) =>
         t === "hog"
@@ -308,6 +310,12 @@ function compKindDefaults(a: Args): SceneComponent {
   }
 }
 
+/** Clips given in props arrive as plain objects: give each an id and the factory's defaults (a clip action needs the id). */
+function normalizeClips(c: SceneComponent) {
+  if (c.kind !== "clipActor" || !Array.isArray(c.clips)) return;
+  c.clips = c.clips.map((clip) => makeClip(clip.name ?? "Clip", clip));
+}
+
 function storeOf(name: unknown): Record<string, unknown> {
   if (name === "project") return P() as unknown as Record<string, unknown>;
   if (name === "show") return S() as unknown as Record<string, unknown>;
@@ -333,6 +341,7 @@ export const handlers: Record<AgentCommand, Handler> = {
         transitionRunning: !!prog.transition,
         timerOnScreen: prog.timerOverlay?.label ?? null,
         announcement: prog.announce && !prog.announce.stoppedAt ? prog.announce.id : null,
+        mixerTrims: prog.mix ?? {},
       },
       preview: s.preview ? { scene: brief(s.preview.scene), cuePointer: s.preview.cuePointer, sceneTime: round(sceneNow(s.preview) / 1000), solo: s.solo, hidden: s.hidden } : null,
       output: { open: outputUp, status: outputUp ? s.outputStatus : null, lost: !!s.outputLostAt },
@@ -577,6 +586,23 @@ export const handlers: Record<AgentCommand, Handler> = {
     return { playing: x.name };
   },
 
+  mixer(a) {
+    if (a.reset) for (const k of Object.keys(S().program.mix ?? {})) S().setMix(k, null);
+    if (a.source !== undefined || a.volume !== undefined) {
+      if (typeof a.source !== "string" || typeof a.volume !== "number") throw new Error("Pass both source and volume (0..1) to set a trim.");
+      const want = a.source.toLowerCase();
+      const playing = liveAudioSources();
+      const asset = S().assets.find((x) => x.id === a.source || x.name.toLowerCase() === want);
+      const comp = S().program.runtime?.scene.components.find((c) => c.id === a.source || c.name.toLowerCase() === want);
+      const key =
+        playing.find((x) => x.key === a.source || x.name.toLowerCase() === want)?.key ??
+        (a.source.startsWith("sound:") ? a.source : asset && asset.type === "audio" ? `sound:${asset.id}` : comp?.id);
+      if (!key) throw new Error(`No audio source "${a.source}". Call mixer without arguments to list what is playing.`);
+      S().setMix(key, clamp(a.volume, 0, 1));
+    }
+    return { sources: liveAudioSources().map((x) => ({ ...x, level: round(x.level, 2) })), trims: S().program.mix ?? {} };
+  },
+
   timer_overlay(a) {
     if (a.timer === null) {
       S().setTimerOverlay(null);
@@ -731,6 +757,7 @@ export const handlers: Record<AgentCommand, Handler> = {
       delete props.kind;
       deepMerge(c as any, props);
     }
+    normalizeClips(c);
     editScene(s.id, (x) => {
       const i = typeof a.index === "number" ? Math.max(0, Math.min(x.components.length, a.index)) : x.components.length;
       x.components.splice(i, 0, c);
@@ -745,7 +772,10 @@ export const handlers: Record<AgentCommand, Handler> = {
     const patch = { ...a.patch };
     delete patch.id;
     delete patch.kind;
-    P().updateComponent(s.id, c.id, (x) => deepMerge(x as any, patch));
+    P().updateComponent(s.id, c.id, (x) => {
+      deepMerge(x as any, patch);
+      normalizeClips(x);
+    });
     return componentOf(sceneOf(s.id), c.id);
   },
 

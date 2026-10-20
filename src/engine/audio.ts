@@ -1,10 +1,10 @@
-// Program audio: thunder for lightning strikes and one-shot sound cues. Runs only in
+// Program audio: thunder for lightning strikes and sound cues (a re-fired sound replaces itself). Runs only in
 // the window that is the audio host so sound is never doubled between operator and output.
 
 import { now } from "@/core/clock";
 import { num, str } from "@/core/effects";
 import type { LightningStrike, SoundEvent } from "@/core/types";
-import { useShow } from "@/store/show";
+import { mixLevel, useShow } from "@/store/show";
 
 let ctx: AudioContext | null = null;
 function audio(): AudioContext {
@@ -81,6 +81,82 @@ async function playFile(url: string, when: number, volume: number) {
   src.start(Math.max(ac.currentTime, when));
 }
 
+/**
+ * Cue sounds playing now, one per sound file. Firing the same sound again (re-firing its cue or
+ * re-taking the scene) replaces the copy already playing instead of stacking another on top.
+ */
+const cueSounds = new Map<string, { src: AudioBufferSourceNode; gain: GainNode; volume: number; runKey: string; keepPlaying: boolean }>();
+
+/** Mixer key of a cue sound (see ProgramState.mix). */
+export const soundMixKey = (assetId: string) => `sound:${assetId}`;
+
+/** The live mixer moved: glide each playing cue sound to its new level. */
+function applyMix() {
+  const ac = audio();
+  for (const [key, s] of cueSounds) s.gain.gain.setTargetAtTime(s.volume * mixLevel(soundMixKey(key)), ac.currentTime, 0.05);
+}
+
+function fadeOutCueSound(key: string, seconds: number) {
+  const s = cueSounds.get(key);
+  if (!s) return;
+  cueSounds.delete(key);
+  const ac = audio();
+  s.gain.gain.cancelScheduledValues(ac.currentTime);
+  s.gain.gain.setValueAtTime(s.gain.gain.value, ac.currentTime);
+  s.gain.gain.linearRampToValueAtTime(0.0001, ac.currentTime + seconds);
+  s.src.stop(ac.currentTime + seconds + 0.05);
+}
+
+/** A sound cue with `fadeOthers` started: fade the other cue sounds it names (or all of them) from `when`. */
+function fadeOthersFor(ev: SoundEvent, when: number) {
+  const f = ev.fadeOthers;
+  if (!f) return;
+  const ac = audio();
+  const start = Math.max(ac.currentTime, when);
+  const secs = Math.max(0.05, f.fade);
+  for (const [key, s] of [...cueSounds]) {
+    if (key === ev.assetId || (f.which !== "all" && !f.which.includes(soundMixKey(key)))) continue;
+    cueSounds.delete(key);
+    s.gain.gain.cancelScheduledValues(ac.currentTime);
+    s.gain.gain.setValueAtTime(s.gain.gain.value, start);
+    s.gain.gain.linearRampToValueAtTime(0.0001, start + secs);
+    s.src.stop(start + secs + 0.05);
+  }
+}
+
+/** A new scene run took the wall: the previous runs' sounds fade out, unless marked to keep playing. */
+function stopSoundsOfOtherRuns(runKey: string | null, seconds = 0.8) {
+  for (const [key, s] of [...cueSounds]) if (s.runKey !== runKey && !s.keepPlaying) fadeOutCueSound(key, seconds);
+}
+
+async function playCueSound(key: string, url: string, when: number, volume: number, runKey: string, keepPlaying: boolean) {
+  const ac = audio();
+  const buf = await loadBuffer(url);
+  const start = Math.max(ac.currentTime, when);
+  const old = cueSounds.get(key);
+  if (old) {
+    old.gain.gain.cancelScheduledValues(ac.currentTime);
+    old.gain.gain.setValueAtTime(old.gain.gain.value, start);
+    old.gain.gain.linearRampToValueAtTime(0.0001, start + 0.15);
+    old.src.stop(start + 0.2);
+  }
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const gain = ac.createGain();
+  gain.gain.value = volume * mixLevel(soundMixKey(key));
+  src.connect(gain).connect(ac.destination);
+  src.onended = () => {
+    if (cueSounds.get(key)?.src === src) cueSounds.delete(key);
+  };
+  src.start(start);
+  cueSounds.set(key, { src, gain, volume, runKey, keepPlaying });
+}
+
+/** Asset ids of the cue sounds playing now (diagnostics for the output heartbeat). */
+export function playingCueSounds(): string[] {
+  return [...cueSounds.keys()];
+}
+
 /** The announcement on the speakers now (one at a time). */
 let announcing: { key: string; src: AudioBufferSourceNode; gain: GainNode } | null = null;
 
@@ -153,7 +229,8 @@ export function startProgramAudio(isHost: () => boolean): () => void {
       const asset = s.assets.find((a) => a.id === ev.assetId);
       if (!asset) continue;
       const ac = audio();
-      void playFile(asset.url, ac.currentTime + Math.max(0, (wallAt - now()) / 1000), ev.volume).catch((e) => console.warn("sound failed", e));
+      fadeOthersFor(ev, ac.currentTime + Math.max(0, (wallAt - now()) / 1000));
+      void playCueSound(asset.id, asset.url, ac.currentTime + Math.max(0, (wallAt - now()) / 1000), ev.volume, rt.key, !!ev.keepPlaying).catch((e) => console.warn("sound failed", e));
     }
   };
 
@@ -176,6 +253,9 @@ export function startProgramAudio(isHost: () => boolean): () => void {
   return useShow.subscribe((s, prev) => {
     const ann = s.program.announce;
     if (ann && ann !== prev.program.announce) handleAnnounce(ann);
+    const runKey = s.program.runtime?.key ?? null;
+    if (runKey !== (prev.program.runtime?.key ?? null)) stopSoundsOfOtherRuns(runKey);
+    if (s.program.mix !== prev.program.mix) applyMix();
     const a = s.program.runtime?.strikes;
     if (a && a !== prev.program.runtime?.strikes) handleStrikes(a);
     const b = s.program.runtime?.sounds;

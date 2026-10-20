@@ -294,6 +294,7 @@ export function makeProcedural(
     center: [0, -40],
     radius: 20,
     fade: 2,
+    ...(element === "birds" ? { altitude: [25, 70] as [number, number], color: "#1b1a1d", haze: 0.35 } : {}),
     ...partial,
   };
 }

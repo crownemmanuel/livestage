@@ -15,6 +15,8 @@ export interface OutputStatus {
   frameMs: number;
   /** Sync diagnostics of each playing video in the last second (seeks, rate changes, drift). */
   video?: VideoSyncStat[];
+  /** Asset ids of the cue sounds playing in this window (one entry per sound; a re-fired sound replaces itself). */
+  sounds?: string[];
 }
 
 export type BusMessage =
