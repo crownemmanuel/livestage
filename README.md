@@ -40,6 +40,7 @@ pnpm build:installer
 ```
 
 Releases for the show computer are built by GitHub Actions from a version tag, and the installed app updates itself from them when the operator says so (More → Check for updates). See [docs/RELEASES.md](docs/RELEASES.md).
+Both commands first fetch the static ffmpeg the app bundles (about 60 MB on a Mac, 110 MB on Windows, once per target), which re-encodes imported video into the wall format on a show computer with nothing installed. It lands in `src-tauri/binaries/`, outside git; `pnpm fetch:ffmpeg --all` fetches every target, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Media formats) has the sources, checksums and licence (GPL v3).
 
 UI-only development in a browser (no Rust needed) also works:
 

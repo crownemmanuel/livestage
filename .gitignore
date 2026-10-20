@@ -23,3 +23,6 @@ output/
 *.m4v
 *.mkv
 *.avi
+
+# The static ffmpeg the app bundles as a sidecar (scripts/fetch-ffmpeg.ts fetches it; ~60-120 MB per target)
+src-tauri/binaries/

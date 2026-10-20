@@ -13,6 +13,7 @@
     "mcp:check": "node mcp/check.ts",
     "release": "node scripts/release.ts",
     "build:installer": "tauri build --config src-tauri/tauri.unsigned.conf.json",
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.ts",
     "cloud:emulator": "cd firebase && npx -y firebase-tools@15.34.0 emulators:start --only auth,storage --project demo-sls"
   },
   "dependencies": {
