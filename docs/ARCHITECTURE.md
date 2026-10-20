@@ -139,6 +139,13 @@ A seek lands on the previous keyframe and decodes forward, so a long GOP stalls 
 
 Video elements are created in an effect, never during render: React may run a render twice and keep one result, and a `<video>` from the discarded render would stay in the page buffering with a decoder of its own.
 
+### Video playback and sync (`render/layers/video.ts`)
+
+- **Slaved to the clock, corrected rarely.** A playing video is compared with the scene clock every frame but touched only in steps (a ±5 % rate nudge beyond the dead band, a hard seek beyond 0.6 s), because the platform player stalls on every seek and rate change. A **looping** video whose loop is the whole file (`loop` in `SyncWant`) has its drift measured on the loop circle: around the wrap the element and the clock are never exactly together, and measuring the raw difference (almost a whole clip) used to force a hard seek at every loop, each followed by several seconds at 1.05× to catch up again. Measured on the output heartbeat before the fix: one seek per 8 s loop, 100-250 ms drift after it; after: no seeks, ~30 ms drift.
+- **Warm and cold elements.** Every loaded `<video>` holds a platform decoder session and its buffered file. A clip actor keeps only the clips that can come next **warm** (`setWarm`): the one on screen or fading out, the queued one, every clip whose start pose is the actor's current pose, and the clips the cue under the GO pointer would start; the rest have no `src`. A scene with an eight-clip actor went from 11 loaded videos per canvas (×3 canvases across the two windows) to 2-4. A clip that was cold when its turn came loads in ~200 ms; the clip before it holds its last frame until the new one has a picture.
+- **Heartbeat diagnostics.** The output window reports once a second (Output settings, the agent's `status`): fps and the slowest frame, per-video seeks / rate changes / drift / dropped frames, `upload` (milliseconds spent handing video frames to WebGL: ~0.1 ms per frame on the GPU path, whole milliseconds mean a software copy), `videoElements` (loaded / total) and `stalls` (frames over 40 ms with the last bus message before them). In development the operator window exposes the same counters as `window.__slsVideoStats()` and `window.__slsUploadStats()`.
+- **A hidden window does not render.** macOS stops `requestAnimationFrame` in an occluded or off-Space webview and the operator window's frame loop with it; the output window on the wall's display is never occluded in a show, but if it reports 0 fps that is the first thing to check.
+
 ## Effects engine
 
 Effects are generic components rendered by the same code in every scene. They are not baked into scenes.

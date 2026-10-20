@@ -33,3 +33,6 @@ ttf-parser = "0.25"
 sha2 = "0.10"
 ureq = "3"
 http = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"

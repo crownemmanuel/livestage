@@ -659,6 +659,8 @@ function ClipActorForm({ c, up }: { c: ClipActorComponent; up: Updater<ClipActor
         />
         <SliderField label="Vertical framing" value={c.anchorY ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.anchorY = v))} />
         <p className="-mt-1 pl-[104px] text-[10.5px] text-muted-foreground">Keep equal to the plate's vertical framing.</p>
+        <SliderField label="Crossfade (s)" value={c.crossfade ?? 0} min={0} max={3} step={0.1} onChange={(v) => up((x) => (x.crossfade = v))} />
+        <p className="-mt-1 pl-[104px] text-[10.5px] text-muted-foreground">0 = hard cut. Softens joins between clips that don't match exactly.</p>
         <SwitchField label="Muted" value={c.muted} onChange={(v) => up((x) => (x.muted = v))} />
       </Section>
       <Section title="Layout (cut-out clips)">

@@ -72,6 +72,8 @@ if (status.error) {
   ok("asset_check", Array.isArray(check.json?.assets), JSON.stringify(check.json).slice(0, 200));
   const mix = await call("mixer");
   ok("mixer (read)", Array.isArray(mix.json?.sources), mix.error ?? `${mix.json?.sources?.length ?? 0} sources playing`);
+  const out = await call("audio_output");
+  ok("audio_output (read)", Array.isArray(out.json?.native), out.error ?? `${out.json?.native?.length ?? 0} native, ${out.json?.web?.length ?? 0} web outputs`);
   const cloud = await call("cloud_status");
   ok("cloud_status", typeof cloud.json?.configured === "boolean", cloud.error ?? (cloud.json?.configured ? `${cloud.json.project}, signed in: ${cloud.json.signedIn}` : "not set up"));
   if (status.json.app.desktop) {

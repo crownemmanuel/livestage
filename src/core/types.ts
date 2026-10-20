@@ -375,6 +375,8 @@ export interface ClipActorComponent extends ComponentBase {
    */
   matted?: boolean;
   layout?: ActorLayout;
+  /** Seconds the next clip fades in over the one it replaces (0 or absent = hard cut). */
+  crossfade?: number;
   muted: boolean;
   volume: number;
 }

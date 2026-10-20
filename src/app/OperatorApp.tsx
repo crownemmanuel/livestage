@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { startProgramAudio, unlockAudio } from "@/engine/audio";
+import { startAudioRouting } from "@/engine/audioOutput";
 import { cancelPending, cueControl, restoreLiveState, startOperatorServices, takeScene } from "@/engine/operator";
 import { toggleHoldFor } from "@/engine/transport";
 import { useProject } from "@/store/project";
@@ -50,6 +51,7 @@ export function OperatorApp() {
         syncPreview();
         if (import.meta.env.DEV && import.meta.env.VITE_SLS_SELFTEST) (await import("@/dev/selftest")).runSelfTest();
       });
+    const stopRouting = startAudioRouting();
     const stopAudio = startProgramAudio(() => {
       const s = useShow.getState();
       const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
@@ -102,6 +104,7 @@ export function OperatorApp() {
       stopAgent();
       stopUpdates();
       stopAudio();
+      stopRouting();
       unsub();
       window.removeEventListener("keydown", onKey);
     };

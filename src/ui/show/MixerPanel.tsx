@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { liveAudioSources, type MixSource } from "@/engine/mixer";
 import { useShow } from "@/store/show";
 import { InfoTip } from "../kit";
+import { AudioOutputPicker } from "./AudioOutputPicker";
 
 const ICONS: Record<MixSource["kind"], typeof Music> = { sound: Music, video: Film, background: Mountain, videoActor: Clapperboard };
 
@@ -47,6 +48,7 @@ export function MixerPanel() {
           </Button>
         )}
       </div>
+      {open && <AudioOutputPicker />}
       {open && sources.length > 0 && (
         <div className="max-h-56 space-y-1.5 overflow-y-auto px-3 pb-3">
           {sources.map((src) => {

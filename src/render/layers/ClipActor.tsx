@@ -4,27 +4,35 @@ import * as THREE from "three";
 import { clipStateAt } from "@/core/clipActor";
 import { defaultActorLayout } from "@/core/factories";
 import { playableUrl } from "@/core/platform";
-import type { ClipActorComponent, ClipDef } from "@/core/types";
+import type { ClipActorComponent, ClipDef, SceneRuntime } from "@/core/types";
 import { mixLevel } from "@/store/show";
 import { videoAudioFade } from "@/core/runtime";
 import { QUAD_VERT } from "../glsl";
 import { useStage } from "../frame";
 import { applyMediaSettings, makeMediaMaterial, setMap } from "./mediaMaterial";
 import { plateParallax } from "./MediaLayers";
-import { syncVideo, useVideo, videoDuration } from "./video";
+import { setWarm, syncVideo, useVideo, videoDuration, type VideoHandle } from "./video";
 
 /**
  * Full-frame video actor: one quad per clip, only the scheduled one visible.
  * `order` (the component's index in the scene) stacks actors in scene order.
  */
 export function ClipActorLayer({ comp, order = 0 }: { comp: ClipActorComponent; order?: number }) {
+  // Every clip's video, so a quad can tell whether the clip taking over from it has a frame yet.
+  const handles = useMemo(() => new Map<string, VideoHandle>(), []);
   return (
     <>
       {comp.clips.map((c) => (
-        <ClipQuad key={c.id} actor={comp} clip={c} order={order} />
+        <ClipQuad key={c.id} actor={comp} clip={c} order={order} handles={handles} />
       ))}
     </>
   );
+}
+
+/** Does the cue the GO pointer is on start this clip? */
+function nextCueStarts(rt: SceneRuntime, actorId: string, clipId: string): boolean {
+  const cue = rt.scene.cues[rt.cuePointer];
+  return !!cue && cue.actions.some((a) => a.type === "clip" && a.actorId === actorId && a.clipId === clipId);
 }
 
 // Cast shadow from a cut-out: the silhouette reflected about the ground line,
@@ -59,12 +67,21 @@ void main() {
 }
 `;
 
-function ClipQuad({ actor, clip, order }: { actor: ClipActorComponent; clip: ClipDef; order: number }) {
+function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; clip: ClipDef; order: number; handles: Map<string, VideoHandle> }) {
   const { assets, getRt, frame, canvasW, canvasH, audio } = useStage();
   // Cut-out mode prefers the transparent version of the clip when one exists.
   const srcId = actor.matted && clip.cutoutAssetId ? clip.cutoutAssetId : clip.assetId;
   const asset = srcId ? assets.find((a) => a.id === srcId) : undefined;
-  const video = useVideo(playableUrl(asset));
+  // Cold until the frame loop decides the clip can come next (see setWarm): an actor with ten
+  // clips must not hold ten decoders in every window for the one clip that is on screen.
+  const video = useVideo(playableUrl(asset), { lazy: true });
+  useEffect(() => {
+    if (!video) return;
+    handles.set(clip.id, video);
+    return () => {
+      if (handles.get(clip.id) === video) handles.delete(clip.id);
+    };
+  }, [handles, clip.id, video]);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
@@ -108,23 +125,57 @@ function ClipQuad({ actor, clip, order }: { actor: ClipActorComponent; clip: Cli
       mesh.visible = shadow.visible = false;
       return;
     }
-    const st = clipStateAt(actor, rt.clipActors?.[actor.id], frame.t);
-    const active = st.clip?.id === clip.id;
+    const art = rt.clipActors?.[actor.id];
+    const st = clipStateAt(actor, art, frame.t);
     const dur = videoDuration(video) || clip.duration;
+    // Crossfade: for `crossfade` seconds after a clip starts, the clip it replaced keeps playing underneath.
+    const xf = Math.max(0, actor.crossfade ?? 0) * 1000;
+    const since = st.segment ? frame.t - st.segment.at : Infinity;
+    let fadeIn = 1;
+    let outgoing: ReturnType<typeof clipStateAt> | null = null;
+    if (xf > 0 && since < xf && st.segment) {
+      fadeIn = Math.max(0, since / xf);
+      const prev = clipStateAt(actor, { segments: (art?.segments ?? []).filter((x) => x !== st.segment) }, frame.t);
+      if (prev.clip && prev.clip.id !== st.clip?.id) outgoing = prev;
+    }
+    const isOut = outgoing?.clip?.id === clip.id;
+    const active = st.clip?.id === clip.id || isOut;
+    const cur = isOut && outgoing ? outgoing : st;
+    // Warm (loaded, decoder held): the clip on screen or fading out, the queued one, every clip that
+    // can follow from the actor's pose, and the clips the next cue would start. The rest stay cold.
+    const near = active || st.queued?.clip.id === clip.id || clip.startPose === st.pose || nextCueStarts(rt, actor.id, clip.id);
+    setWarm(video, near);
+    // A clip that was cold when its turn came is still loading: the clip before it holds its last
+    // frame until the new one has a picture, instead of a flash of bare background.
+    let holding = false;
+    if (!active && st.clip && st.segment) {
+      const taking = handles.get(st.clip.id);
+      if (!taking || taking.video.readyState < 2) {
+        const at = st.segment.at;
+        let prev: { clipId: string; at: number } | null = null;
+        for (const s of art?.segments ?? []) if (s.at < at && (!prev || s.at > prev.at)) prev = s;
+        holding = prev?.clipId === clip.id;
+      }
+    }
     if (active) {
-      const time = clip.loop ? st.localT % dur : Math.min(st.localT, dur - 0.04);
-      syncVideo(video, { play: st.playing && rt.clock.pausedAt === null, time, rate: 1, muted: actor.muted || !audio, volume: actor.volume * mixLevel(actor.id) * videoAudioFade(rt, actor.id, frame.t) }, frame.wall);
-    } else {
+      const time = clip.loop ? cur.localT % dur : Math.min(cur.localT, dur - 0.04);
+      const vol = actor.volume * mixLevel(actor.id) * videoAudioFade(rt, actor.id, frame.t) * (isOut ? 1 - fadeIn : fadeIn);
+      syncVideo(video, { play: cur.playing && rt.clock.pausedAt === null, time, rate: 1, muted: actor.muted || !audio, volume: vol, loop: clip.loop ? dur : undefined }, frame.wall);
+    } else if (holding) {
+      syncVideo(video, { play: false, time: clip.loop ? video.video.currentTime : Math.max(0, dur - 0.04), rate: 1, muted: true, volume: 0 }, frame.wall);
+    } else if (near) {
       // Park on frame 0 so the clip can cut in instantly when its turn comes.
       syncVideo(video, { play: false, time: 0, rate: 1, muted: true, volume: 0 }, frame.wall);
     }
     // While a seek is in flight the texture still holds the last frame: keep showing it.
-    mesh.visible = active && (video.video.readyState >= 2 || (video.video.seeking && video.video.readyState >= 1));
+    mesh.visible = (active || holding) && (video.video.readyState >= 2 || (video.video.seeking && video.video.readyState >= 1));
     shadow.visible = mesh.visible && !!actor.matted && (actor.layout?.shadow ?? 0) > 0;
     if (!mesh.visible) return;
 
     setMap(mat, video.texture);
-    mat.uniforms.opacity.value = 1;
+    // The incoming clip draws over the outgoing one and fades in; the outgoing one stays solid underneath.
+    mat.uniforms.opacity.value = isOut || holding ? 1 : fadeIn;
+    mesh.renderOrder = 5 + order * 0.01 + (isOut ? 0 : 0.005);
     mat.uniforms.grade.value.copy(frame.mediaGrade);
 
     // Frame rectangle: fitted to the plate's aspect and framing so it lines up with the background.

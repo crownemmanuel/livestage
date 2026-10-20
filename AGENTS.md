@@ -27,3 +27,4 @@ Checklist for every feature change:
 - Only the operator window is authoritative; the output window is a view.
 - Dev server port is 1430 (another project uses 1420). The agent bridge uses 1431.
 - Ask before spending generation credits (Runway, ElevenLabs) and before firing cues on the real lighting console.
+- Making AI video for the wall (Runway pipeline, 4:1 crops, no music, lip-sync to a recorded voice with the black-video trick): read [docs/MEDIA_GENERATION.md](docs/MEDIA_GENERATION.md).

@@ -145,6 +145,7 @@ function Monitors() {
   const scene = useProject(selectedScene);
   const program = useShow((s) => s.program);
   const output = useShow((s) => s.output);
+  const operatorAudio = useOperatorIsAudioHost();
   const capture = useCaptureThumb();
   const aspect = `${output.canvasWidth} / ${output.canvasHeight}`;
 
@@ -177,7 +178,7 @@ function Monitors() {
             )}
           </MonitorHeader>
           <div className="on-air-frame relative w-full overflow-hidden rounded-md" style={{ aspectRatio: aspect, maxHeight: "36vh" }}>
-            <StageView source="program" maxDpr={1.25} showSafeArea />
+            <StageView source="program" maxDpr={1.25} showSafeArea audio={operatorAudio} />
             <HeldBadge />
           </div>
           <Timeline target="program" editable={false} />
@@ -630,4 +631,16 @@ export function describeAction(a: import("@/core/types").CueAction): string {
     case "framing":
       return `framing ${a.zoom.toFixed(2)}× over ${a.duration}s${d}`;
   }
+}
+
+/** The operator plays the live wall's video sound when it is the audio host, or when no output window is up (same rule as cue sounds). */
+function useOperatorIsAudioHost(): boolean {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const h = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(h);
+  }, []);
+  const s = useShow.getState();
+  const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
+  return s.output.audioHost === "operator" || !outputUp;
 }

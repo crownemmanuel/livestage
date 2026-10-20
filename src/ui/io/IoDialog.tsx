@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Activity, Cable, ChevronRight, Lightbulb, Play, Plug, Plus, Radio, RefreshCw, Square, Trash2, Wand2, Zap } from "lucide-react";
+import { Activity, Cable, ChevronRight, Lightbulb, Play, Plug, Plus, Radio, RefreshCw, Speaker, Square, Trash2, Wand2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -14,6 +14,7 @@ import { useProject } from "@/store/project";
 import { Field, NumberInput, Section, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
 import { MessageFields, defaultMessage } from "./MessageFields";
+import { AudioOutputPicker } from "../show/AudioOutputPicker";
 
 const NONE = "__none__";
 
@@ -198,6 +199,11 @@ function ConnectionTab() {
           </label>
         </div>
         {st.midiError && <p className="text-[11px] text-destructive">{st.midiError}</p>}
+      </Card>
+
+      <Card icon={<Speaker />} title="Audio output">
+        <p className="text-[11px] leading-snug text-muted-foreground">Where all of the app&apos;s sound goes on this computer: cue sounds, thunder, announcements and video sound. Dante Virtual Soundcard shows here when it is running.</p>
+        <AudioOutputPicker inCard />
       </Card>
 
       <details className="group rounded-lg border border-border bg-card/30">

@@ -2990,6 +2990,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "salvation-live-studio"
 version = "0.2.0"
 dependencies = [
+ "core-foundation",
  "http",
  "log",
  "midir",

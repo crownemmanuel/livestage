@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 6;
+export const AGENT_SPEC_VERSION = 7;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -204,6 +204,15 @@ export const AGENT_COMMANDS = {
       source: str('Mixer key from the list ("sound:<assetId>" or a component id), a sound or component name, or an asset id.'),
       volume: num("Trim 0..1 for that source (1 = as designed)."),
       reset: bool("Put every source back to its designed volume."),
+    }),
+  },
+  audio_output: {
+    live: true,
+    description:
+      "Where the whole app's sound goes (cue sounds, thunder, announcements, video sound), for this computer. Lists the native devices (CoreAudio on macOS, Dante Virtual Soundcard / Dante Via included; on the Mac choosing one makes it the Mac's default output while the app runs) and the web engine's outputs (setSinkId, where the webview offers them), plus the current choice. Pass device to route: a native UID, a web deviceId or an exact device name; null goes back to the computer's default. Without device it only reads.",
+    params: args({
+      device: { type: ["string", "null"], description: "Device UID / deviceId / exact name to route to; null = computer default. Omit to read." },
+      engine: oneOf(["native", "web"], "Which engine's device to pick when a name exists in both (default: native)."),
     }),
   },
   timer_overlay: {

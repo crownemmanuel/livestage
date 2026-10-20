@@ -23,6 +23,7 @@ import * as transport from "@/engine/transport";
 import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
 import { describeProbe } from "@/core/mediaCheck";
 import { liveAudioSources } from "@/engine/mixer";
+import { getAudioRoute, nativeOutputs, setAudioRoute, webOutputs, type AudioRoute } from "@/engine/audioOutput";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { requestSnap } from "@/render/snap";
 import { useProject } from "@/store/project";
@@ -654,6 +655,25 @@ export const handlers: Record<AgentCommand, Handler> = {
       S().setMix(key, clamp(a.volume, 0, 1));
     }
     return { sources: liveAudioSources().map((x) => ({ ...x, level: round(x.level, 2) })), trims: S().program.mix ?? {} };
+  },
+
+  async audio_output(a) {
+    const list = async () => ({ native: await nativeOutputs(), web: await webOutputs() });
+    if (a.device !== undefined) {
+      let route: AudioRoute = null;
+      if (a.device !== null) {
+        const { native, web } = await list();
+        const want = String(a.device).toLowerCase();
+        const n = native.find((o) => o.uid === a.device || o.name.toLowerCase() === want);
+        const w = web.find((o) => o.deviceId === a.device || o.label.toLowerCase() === want);
+        const pick = a.engine === "web" ? (w ? "web" : n ? "native" : null) : n ? "native" : w ? "web" : null;
+        if (pick === "native") route = { engine: "native", id: n!.uid, name: n!.name };
+        else if (pick === "web") route = { engine: "web", id: w!.deviceId, name: w!.label };
+        else throw new Error(`No audio output "${a.device}". Call audio_output without arguments to list them.`);
+      }
+      await setAudioRoute(route);
+    }
+    return { route: getAudioRoute(), ...(await list()) };
   },
 
   timer_overlay(a) {

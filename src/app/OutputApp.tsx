@@ -3,11 +3,22 @@ import { now } from "@/core/clock";
 import { onBus, send } from "@/core/bus";
 import { isTauri } from "@/core/platform";
 import { playingCueSounds, startProgramAudio, unlockAudio } from "@/engine/audio";
+import { startAudioRouting } from "@/engine/audioOutput";
 import { StageView } from "@/render/StageView";
 import { takeVideoSyncStats } from "@/render/layers/video";
+import { takeUploadStats } from "@/render/uploadStats";
 import { useShow } from "@/store/show";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
 import { ErrorBoundary, installGlobalErrorLog } from "@/ui/ErrorBoundary";
+
+function countVideos() {
+  const all = document.querySelectorAll("video");
+  let warm = 0;
+  all.forEach((v) => {
+    if (v.hasAttribute("src") || v.currentSrc) warm++;
+  });
+  return { total: all.length, warm };
+}
 
 /**
  * Audience output window: a pure view of the operator's program state.
@@ -22,22 +33,30 @@ export function OutputApp() {
     document.body.classList.add("output-window");
     installGlobalErrorLog();
     preloadPhotoAssets();
+    let lastBusAt = 0;
+    let lastBusType = "";
     const off = onBus((msg) => {
+      lastBusAt = performance.now();
+      lastBusType = msg.type;
       if (msg.type === "project") useShow.setState({ assets: msg.assets, output: msg.output });
       else if (msg.type === "program") useShow.setState({ program: msg.program });
       else if (msg.type === "poses") useShow.setState({ programPoses: msg.program, fromPoses: msg.from, posesAt: now() });
     });
     void send({ type: "hello" });
+    const stopRouting = startAudioRouting();
     const stopAudio = startProgramAudio(() => useShow.getState().output.audioHost === "output");
 
     // Heartbeat with measured frame rate so the operator can see output health.
     let frames = 0;
     let worst = 0;
+    let stalls: { ms: number; sinceBusMs: number; bus: string }[] = [];
     let last = performance.now();
     let raf = 0;
     const loop = () => {
       const t = performance.now();
-      worst = Math.max(worst, t - last);
+      const gap = t - last;
+      worst = Math.max(worst, gap);
+      if (gap > 40 && stalls.length < 8) stalls.push({ ms: Math.round(gap), sinceBusMs: Math.round(t - lastBusAt), bus: lastBusType });
       last = t;
       frames++;
       raf = requestAnimationFrame(loop);
@@ -55,8 +74,12 @@ export function OutputApp() {
           fullscreen: !!document.fullscreenElement || (window.innerWidth === screen.width && window.innerHeight === screen.height),
           video: takeVideoSyncStats(),
           sounds: playingCueSounds(),
+          upload: takeUploadStats(),
+          videoElements: countVideos(),
+          stalls,
         },
       });
+      stalls = [];
       if (import.meta.env.DEV && import.meta.env.VITE_SLS_SELFTEST) {
         console.warn("[selftest:output]", document.visibilityState, "hidden:", document.hidden, "frames:", frames, "size:", innerWidth, innerHeight);
       }
@@ -78,6 +101,7 @@ export function OutputApp() {
     return () => {
       off();
       stopAudio();
+      stopRouting();
       cancelAnimationFrame(raf);
       clearInterval(hb);
       bye();

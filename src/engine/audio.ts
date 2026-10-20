@@ -5,10 +5,14 @@ import { now } from "@/core/clock";
 import { num, str } from "@/core/effects";
 import type { LightningStrike, SoundEvent } from "@/core/types";
 import { mixLevel, useShow } from "@/store/show";
+import { registerAudioContext } from "./audioOutput";
 
 let ctx: AudioContext | null = null;
 function audio(): AudioContext {
-  ctx ??= new AudioContext();
+  if (!ctx) {
+    ctx = new AudioContext();
+    registerAudioContext(ctx);
+  }
   if (ctx.state === "suspended") void ctx.resume();
   return ctx;
 }

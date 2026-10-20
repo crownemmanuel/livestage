@@ -17,6 +17,12 @@ export interface OutputStatus {
   video?: VideoSyncStat[];
   /** Asset ids of the cue sounds playing in this window (one entry per sound; a re-fired sound replaces itself). */
   sounds?: string[];
+  /** Time spent handing video frames to WebGL in the last second, and how many frames. */
+  upload?: { ms: number; count: number };
+  /** <video> elements in the window, and how many hold a loaded file (a decoder each). */
+  videoElements?: { total: number; warm: number };
+  /** Frames that took over 40 ms in the last second: how long, and what bus message arrived how long before. */
+  stalls?: { ms: number; sinceBusMs: number; bus: string }[];
 }
 
 export type BusMessage =

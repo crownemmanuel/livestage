@@ -6,6 +6,10 @@ import type { MediaSettings } from "@/core/types";
 export interface VideoHandle {
   video: HTMLVideoElement;
   texture: THREE.VideoTexture;
+  /** The file this element plays (set as `src` only while warm). */
+  url: string;
+  /** Warm: the file is loaded and a decoder is held, ready to show a frame at once. Cold: no src, no decoder. */
+  warm: boolean;
   lastSeek: number;
   /** currentTime of the last frame uploaded while paused. */
   shownTime: number;
@@ -103,13 +107,39 @@ function hostVideo(v: HTMLVideoElement) {
   videoHost.appendChild(v);
 }
 
-/** One <video> per use; playback is slaved to the shared scene clock. */
-export function useVideo(url: string | null): VideoHandle | null {
+/**
+ * Load or unload a video element's file. Every warm element costs a platform decoder session and
+ * holds the file's buffered data, and a webview with dozens of them (every clip of every actor in
+ * the preview, the program and the output) starves the ones that are actually playing. A clip that
+ * cannot come next is kept cold and warmed when it can (a local file is ready within ~200 ms).
+ */
+export function setWarm(h: VideoHandle, warm: boolean) {
+  if (h.warm === warm) return;
+  h.warm = warm;
+  const v = h.video;
+  if (warm) {
+    v.src = h.url;
+    v.load();
+  } else {
+    v.pause();
+    v.removeAttribute("src");
+    v.load();
+    h.shownTime = -1;
+    h.correcting = 0;
+  }
+}
+
+/**
+ * One <video> per use; playback is slaved to the shared scene clock.
+ * `lazy`: create the element cold; the owner decides each frame whether it should be warm (`setWarm`).
+ */
+export function useVideo(url: string | null, opts: { lazy?: boolean } = {}): VideoHandle | null {
   // Created in an effect, never in render: React (StrictMode, concurrent rendering) may run a
   // render twice and keep one result, and a <video> made in the discarded render would stay in
   // the page, buffering and holding a decoder, with nothing left to remove it (seen: two decoders
   // per layer, 26 elements alive for a two-scene show).
   const [h, setH] = useState<VideoHandle | null>(null);
+  const lazy = !!opts.lazy;
   useEffect(() => {
     if (!url) {
       setH(null);
@@ -121,7 +151,7 @@ export function useVideo(url: string | null): VideoHandle | null {
     v.muted = true;
     v.loop = true;
     v.preload = "auto";
-    v.src = url;
+    if (!lazy) v.src = url;
     const texture = new THREE.VideoTexture(v);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
@@ -135,7 +165,7 @@ export function useVideo(url: string | null): VideoHandle | null {
     v.addEventListener("seeked", refresh);
     v.addEventListener("loadeddata", refresh);
     hostVideo(v);
-    const handle: VideoHandle = { video: v, texture, lastSeek: 0, shownTime: -1, correcting: 0 };
+    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0 };
     setH(handle);
     return () => {
       v.pause();
@@ -146,7 +176,7 @@ export function useVideo(url: string | null): VideoHandle | null {
       counters.delete(handle);
       setH((cur) => (cur === handle ? null : cur));
     };
-  }, [url]);
+  }, [url, lazy]);
   return h;
 }
 
@@ -178,6 +208,13 @@ export interface SyncWant {
   volume: number;
   /** Scrub backwards by seeking (browsers cannot play at negative rates). */
   reverse?: boolean;
+  /**
+   * The element loops by itself with this period (s) and the wanted time wraps with the same
+   * period. Drift is then judged on the loop circle: around the wrap the two sides are never
+   * exactly together, and the raw difference (almost a whole clip) used to force a hard seek
+   * on every loop, each followed by seconds at catch-up speed.
+   */
+  loop?: number;
 }
 
 /**
@@ -206,7 +243,7 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
   v.muted = want.muted;
   v.volume = clamp(want.volume, 0, 1);
   if (v.readyState < 1) return;
-  const drift = v.currentTime - want.time;
+  let drift = v.currentTime - want.time;
   if (!want.play || want.reverse) {
     if (!v.paused) v.pause();
     // Paused: park on the wanted frame (follows a scrub closely). Reverse: at most ~12 seeks a second.
@@ -222,7 +259,9 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
     return;
   }
   const rate = Math.max(0.0625, Math.min(16, want.rate));
-  const wrapped = Math.abs(drift) > (v.duration || 1e9) / 2;
+  const period = want.loop && want.loop > 0.1 && v.loop ? want.loop : 0;
+  if (period) drift -= Math.round(drift / period) * period;
+  const wrapped = !period && Math.abs(drift) > (v.duration || 1e9) / 2;
   if (!v.paused && !v.seeking) {
     const c = countersFor(h);
     c.driftSum += Math.abs(drift);
@@ -250,3 +289,6 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
     });
   }
 }
+
+// Dev-only: read the sync counters of this window from the console / agent eval (window.__slsVideoStats()).
+if (import.meta.env.DEV && typeof window !== "undefined") (window as unknown as { __slsVideoStats?: unknown }).__slsVideoStats = takeVideoSyncStats;

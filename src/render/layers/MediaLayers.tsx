@@ -6,7 +6,7 @@ import { playableUrl } from "@/core/platform";
 import { hash2 } from "@/core/noise";
 import { mediaElapsed, mediaRate, videoAudioFade } from "@/core/runtime";
 import { mixLevel } from "@/store/show";
-import type { BackgroundComponent, EntranceKind, ImageLayerComponent, KenBurns, VideoLayerComponent } from "@/core/types";
+import type { BackgroundComponent, EntranceKind, ImageLayerComponent, KenBurns, MediaSettings, VideoLayerComponent } from "@/core/types";
 import { useStage } from "../frame";
 import { applyBlend, applyMediaSettings, makeMediaMaterial, missingTexture, setMap } from "./mediaMaterial";
 import { mediaTime, syncVideo, useVideo, videoDuration, type VideoHandle } from "./video";
@@ -74,6 +74,11 @@ export function kenBurnsAt(kb: KenBurns | undefined, elapsed: number) {
 }
 
 type LayerComp = VideoLayerComponent | ImageLayerComponent;
+
+/** Loop period when the element's own loop (whole file) is the wanted loop, so drift is judged on the circle. */
+function nativeLoop(m: MediaSettings, video: VideoHandle): number | undefined {
+  return m.loop && m.startTime === 0 && m.endTime == null ? videoDuration(video) || undefined : undefined;
+}
 
 interface InstanceState {
   visible: boolean;
@@ -182,7 +187,7 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
       const mediaSec = comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
       const time = mediaTime(m, mediaSec, videoDuration(video));
       const rate = comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
-      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0 }, frame.wall);
+      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video) }, frame.wall);
     }
     if (!show) return;
 
@@ -281,7 +286,7 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
       const time = mediaTime(comp.media, mediaSec, videoDuration(video));
       syncVideo(
         video,
-        { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0 },
+        { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video) },
         frame.wall,
       );
     }

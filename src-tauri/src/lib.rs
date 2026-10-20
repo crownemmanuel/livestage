@@ -1,3 +1,4 @@
+mod audio;
 mod cloud;
 mod fonts;
 mod io;
@@ -67,7 +68,10 @@ pub fn run() {
             cloud::cloud_download,
             media::media_probe,
             media::media_tools,
-            media::media_optimise
+            media::media_optimise,
+            audio::audio_outputs,
+            audio::audio_output_route,
+            audio::audio_output_restore
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -91,6 +95,12 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Live Studio");
+        .build(tauri::generate_context!())
+        .expect("error while running Live Studio")
+        .run(|_, event| {
+            // Give the Mac back the sound output it had before the show routed it.
+            if let tauri::RunEvent::Exit = event {
+                let _ = audio::audio_output_restore();
+            }
+        });
 }

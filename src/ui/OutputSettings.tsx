@@ -126,6 +126,8 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
           {status && (
             <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground tabular">
               <Monitor className="size-3.5" /> Output window: {status.width}×{status.height}px, {status.fps} fps, worst frame {status.frameMs} ms
+              {status.upload ? `, video frames to GPU ${status.upload.ms} ms/s` : ""}
+              {status.videoElements ? `, ${status.videoElements.warm}/${status.videoElements.total} videos loaded` : ""}
             </p>
           )}
           <div className="flex justify-end">

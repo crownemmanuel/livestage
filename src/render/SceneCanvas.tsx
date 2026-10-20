@@ -26,6 +26,7 @@ import { DissolveMask, FogOverlay, HazeOverlay, LightningOverlay, TravelHaze } f
 import { GlowOverlay, HeatOverlay, LightsOverlay, StarsOverlay } from "./effects/Atmos";
 import { recordError } from "@/ui/ErrorBoundary";
 import { serveSnaps } from "./snap";
+import { instrumentUploads } from "./uploadStats";
 
 export interface SceneCanvasProps {
   role: SlotRole;
@@ -93,6 +94,7 @@ export function SceneCanvas(p: SceneCanvasProps) {
         gl.toneMappingExposure = 1.05;
         gl.outputColorSpace = THREE.SRGBColorSpace;
         glRef.current = gl;
+        instrumentUploads(gl.getContext());
         const el = gl.domElement;
         // A lost context (driver reset, GPU hiccup) must never leave the wall frozen: let the
         // browser restore it, then rebuild this canvas from the same runtime.
