@@ -300,6 +300,33 @@ export async function importAssets(only?: AssetType): Promise<Asset[]> {
   });
 }
 
+/**
+ * Import files dropped onto the window (from Finder / Explorer). The webview gives their contents but
+ * not their paths, so in the desktop app the bytes are streamed into the library folder.
+ */
+export async function importFiles(files: File[]): Promise<Asset[]> {
+  const fitting = files.filter((f) => assetTypeFor(f.name));
+  if (!isTauri) return fitting.map((f) => ({ id: uid("asset"), name: f.name, type: assetTypeFor(f.name)!, url: URL.createObjectURL(f), ephemeral: true, hasAlpha: guessAlpha(f.name) }));
+  const fs = await import("@tauri-apps/plugin-fs");
+  const { appDataDir, join } = await import("@tauri-apps/api/path");
+  const { convertFileSrc } = await import("@tauri-apps/api/core");
+  const dir = await join(await appDataDir(), "assets");
+  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+  const out: Asset[] = [];
+  for (const f of fitting) {
+    const id = uid("asset");
+    const fileName = `${id}_${f.name.replace(/[\\/:*?"<>|]/g, "-")}`;
+    const dest = await join(dir, fileName);
+    // In pieces, so a long video never sits in memory whole.
+    const CHUNK = 16 * 1024 * 1024;
+    for (let at = 0; at < f.size || at === 0; at += CHUNK) {
+      await fs.writeFile(dest, new Uint8Array(await f.slice(at, at + CHUNK).arrayBuffer()), { append: at > 0 });
+    }
+    out.push({ id, name: f.name, type: assetTypeFor(f.name)!, url: convertFileSrc(dest), path: dest, file: `assets/${fileName}`, hasAlpha: guessAlpha(f.name) });
+  }
+  return out;
+}
+
 /** Store generated media (e.g. a text-to-speech MP3) in the library like an imported file. */
 export async function saveGeneratedAsset(bytes: Uint8Array, name: string, type: AssetType): Promise<Asset> {
   const id = uid("asset");

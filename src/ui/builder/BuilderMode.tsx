@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Box, Clapperboard, Copy, Eye, EyeOff, Film, Focus, Timer, Image as ImageIcon, Layers, ListOrdered, Mountain, Plus, Repeat, Settings2, Sparkles, Trash2, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -21,6 +21,7 @@ import { CameraShots } from "./CameraShots";
 import { FramingBar, FramingOverlay, PreviewHeader, SelectOverlay, selectScrubSource, StepBar, Timeline, ToolToggle, usePreviewTool } from "../PreviewTools";
 import { InfoTip, Splitter, usePaneWidths } from "../kit";
 import { AssetLibrary } from "./AssetLibrary";
+import { assignMedia, componentFor, mediaSlot, NEW_FROM_DROP, useMediaDrop } from "../mediaDrop";
 
 export function BuilderMode() {
   const scene = useProject(selectedScene);
@@ -149,9 +150,11 @@ function ComponentList() {
   const sel = scene.components.find((c) => c.id === selectedId);
   const solo = useShow((s) => s.solo);
   const hidden = useShow((s) => s.hidden);
+  // Media dropped between rows becomes new components (a row takes it into its own media).
+  const { over, dropProps } = useMediaDrop(NEW_FROM_DROP, (list) => list.forEach((a) => { const c = componentFor(a); if (c) add(c); }));
 
   return (
-    <div className="flex max-h-[42%] min-h-[180px] flex-col">
+    <div className={cn("flex max-h-[42%] min-h-[180px] flex-col", over && "bg-preview/[0.06] ring-2 ring-inset ring-preview/50")} {...dropProps}>
       <div className="flex items-center gap-1 px-3 py-2">
         <h3 className="flex items-center gap-1 text-[12.5px] font-semibold">
           <Layers className="size-3.5 text-muted-foreground" />
@@ -243,7 +246,7 @@ function ComponentList() {
             const isHidden = hidden.includes(c.id);
             return (
               <li key={c.id} className="group/row">
-                <div className={cn("flex items-center gap-2 rounded px-2 py-1 text-[12px]", c.id === selectedId ? "bg-accent text-foreground" : "text-foreground/85 hover:bg-accent/50", isolated && "ring-1 ring-armed/70")}>
+                <ComponentRowDrop sceneId={scene.id} c={c} className={cn("flex items-center gap-2 rounded px-2 py-1 text-[12px]", c.id === selectedId ? "bg-accent text-foreground" : "text-foreground/85 hover:bg-accent/50", isolated && "ring-1 ring-armed/70")}>
                   <button type="button" onClick={() => st.selectComponent(c.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
                     <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                     <span className={cn("flex-1 truncate", isHidden && "text-muted-foreground line-through decoration-muted-foreground/50")}>{c.name}</span>
@@ -271,7 +274,7 @@ function ComponentList() {
                   >
                     <Focus className="size-3.5" />
                   </button>
-                </div>
+                </ComponentRowDrop>
                 {c.kind === "clipActor" && c.clips.length > 0 && (
                   <div className="flex flex-wrap gap-1 pb-1 pl-8 pt-0.5">
                     {c.clips.map((k) => (
@@ -297,6 +300,20 @@ function ComponentList() {
           })}
         </ul>
       </ScrollArea>
+    </div>
+  );
+}
+
+/** A component row that takes dropped media into its media setting (a background plate, layer, model…). */
+function ComponentRowDrop({ sceneId, c, className, children }: { sceneId: string; c: SceneComponent; className: string; children: ReactNode }) {
+  const types = mediaSlot(c);
+  const { over, dropProps } = useMediaDrop(types ?? [], (list) => {
+    assignMedia(sceneId, c.id, list[0].id);
+    useProject.getState().selectComponent(c.id);
+  });
+  return (
+    <div className={cn(className, over && "bg-preview/15 ring-2 ring-preview/70")} {...(types ? dropProps : {})}>
+      {children}
     </div>
   );
 }

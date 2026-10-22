@@ -13,6 +13,7 @@ import { ErrorBoundary, installGlobalErrorLog } from "@/ui/ErrorBoundary";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
 import { startAgentBridge } from "@/agent/bridge";
 import { startUpdateChecks } from "@/engine/updater";
+import { guardWindowDrops } from "@/ui/mediaDrop";
 
 function syncPreview() {
   const { project, selectedSceneId } = useProject.getState();
@@ -99,7 +100,10 @@ export function OperatorApp() {
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", unlockAudio, { once: true });
+    const stopDropGuard = guardWindowDrops();
+
     return () => {
+      stopDropGuard();
       stopServices();
       stopAgent();
       stopUpdates();

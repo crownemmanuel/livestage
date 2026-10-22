@@ -10,6 +10,7 @@ import { useProject } from "@/store/project";
 import { useAssetInfo } from "../assetThumbs";
 import { MediaBadge } from "./MediaBadge";
 import { ingestAssets } from "@/engine/media";
+import { startAssetDrag, useMediaDrop } from "../mediaDrop";
 
 const TYPE_ICON: Record<AssetType, typeof Film> = { video: Film, image: ImageIcon, audio: AudioLines, model: Box };
 
@@ -81,7 +82,7 @@ export function AssetLibrary() {
       <ScrollArea className="min-h-0 flex-1">
         <ul className="space-y-px px-2 pb-2">
           {assets.map((a) => (
-            <li key={a.id} className="group flex items-center gap-2 rounded px-1.5 py-1 text-[12px] hover:bg-accent/50">
+            <li key={a.id} draggable onDragStart={(e) => startAssetDrag(e, a)} title="Drag onto a component or a media field" className="group flex cursor-grab items-center gap-2 rounded px-1.5 py-1 text-[12px] hover:bg-accent/50 active:cursor-grabbing">
               <AssetThumb asset={a} className="h-7 w-12" />
               <span className="min-w-0 flex-1 truncate" title={a.path ?? a.name}>
                 {a.name}
@@ -227,12 +228,14 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
 export function AssetPickerButton({ types, value, onChange, placeholder = "Choose media…", className, title }: { types: AssetType[]; value: string | null; onChange: (id: string | null) => void; placeholder?: string; className?: string; title?: string }) {
   const asset = useProject((s) => (value ? s.project.assets.find((a) => a.id === value) : undefined));
   const [open, setOpen] = useState(false);
+  const { over, dropProps } = useMediaDrop(types, (list) => onChange(list[0].id));
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={cn("flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-transparent px-1.5 text-left text-[12px] hover:bg-accent/40", className)}
+        {...dropProps}
+        className={cn("flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-transparent px-1.5 text-left text-[12px] hover:bg-accent/40", over && "border-preview bg-preview/10 ring-2 ring-preview/50", className)}
       >
         {asset ? <AssetThumb asset={asset} className="h-6 w-10" /> : <span className="grid h-6 w-10 place-items-center rounded bg-black/40 text-muted-foreground">{types.length === 1 ? (() => { const I = TYPE_ICON[types[0]]; return <I className="size-3.5" />; })() : <Film className="size-3.5" />}</span>}
         <span className={cn("min-w-0 flex-1 truncate", !asset && "text-muted-foreground")}>{asset ? asset.name : value ? "missing asset" : placeholder}</span>

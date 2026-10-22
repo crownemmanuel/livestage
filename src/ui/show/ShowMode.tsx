@@ -59,7 +59,7 @@ import { FireIcon, fireLabel } from "../builder/FireField";
 import { flowNext } from "@/core/groups";
 import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
-import { MediaPanel } from "./MediaPanel";
+import { MediaPanel, useSceneMediaDrop } from "./MediaPanel";
 import { MixerPanel } from "./MixerPanel";
 import { AnnouncementsPanel, TimersPanel } from "./ShowTools";
 
@@ -392,6 +392,7 @@ function ActionIcons({ actions }: { actions: CueAction[] }) {
 function CueList() {
   const { target, rt } = useControlTarget();
   const [tab, setTab] = useState<"cues" | "media" | "announce" | "timers">("cues");
+  const mediaDrop = useSceneMediaDrop();
   useTick(400);
   const runningTimers = useShow((s) => Object.values(s.program.timers ?? {}).filter((r) => r.running).length);
   if (!rt) return null;
@@ -405,6 +406,8 @@ function CueList() {
             <button
               key={k}
               onClick={() => setTab(k)}
+              // Dragging media over the Media tab opens it, so the drop can land on a card.
+              onDragEnter={k === "media" ? () => setTab("media") : undefined}
               className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold", tab === k ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}
             >
               {k === "cues" ? <ListOrdered className="size-3.5" /> : k === "media" ? <Images className="size-3.5" /> : k === "announce" ? <Megaphone className="size-3.5" /> : <Timer className="size-3.5" />}
@@ -422,7 +425,7 @@ function CueList() {
           <CueButtons target={target} />
         </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className={cn("min-h-0 flex-1", tab === "media" && mediaDrop.over && "bg-preview/[0.05] ring-2 ring-inset ring-preview/50")} {...(tab === "media" ? mediaDrop.dropProps : {})}>
         {tab === "media" ? (
           <MediaPanel />
         ) : tab === "announce" ? (

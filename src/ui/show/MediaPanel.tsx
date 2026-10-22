@@ -1,10 +1,12 @@
 // The scene's media as a grid of cards (ProPresenter-style). Clicking a video makes it the
 // one the scrub bar moves through; clicking a background plate switches the preview to it.
-import { Clapperboard, Film, Image as ImageIcon, Music, Play } from "lucide-react";
+import { Clapperboard, Film, Image as ImageIcon, Music, Play, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { playableUrl } from "@/core/platform";
-import type { Asset, SceneRuntime } from "@/core/types";
+import type { Asset, AssetType, SceneRuntime } from "@/core/types";
 import { useShow } from "@/store/show";
+import { useProject } from "@/store/project";
+import { assignMedia, componentFor, mediaSlot, NEW_FROM_DROP, useMediaDrop } from "../mediaDrop";
 import { selectScrubSource, useAssetDurations, useScrubSelection, videoSources } from "../PreviewTools";
 
 interface Item {
@@ -17,26 +19,38 @@ interface Item {
   active: boolean;
   scrubKey: string | null;
   backgroundId?: string;
+  /** What a drop onto this card sets: the kinds it takes and where the chosen asset goes. */
+  drop?: { types: AssetType[]; assign: (assetId: string) => void };
 }
 
 function items(rt: SceneRuntime, assets: Asset[]): Item[] {
   const find = (id: string | null | undefined) => (id ? assets.find((a) => a.id === id) : undefined);
   const scrubbable = new Map(videoSources(rt, assets).map((s) => [s.key, s]));
   const out: Item[] = [];
+  const sceneId = rt.scene.id;
   for (const c of rt.scene.components) {
+    const slot = mediaSlot(c);
+    const drop = slot ? { types: slot, assign: (id: string) => assignMedia(sceneId, c.id, id) } : undefined;
     if (c.kind === "background" && c.source === "media") {
       const a = find(c.media.assetId);
       const isVid = a?.type === "video";
-      out.push({ key: c.id, name: c.name, sub: "Background", asset: a, kind: isVid ? "video" : "image", active: rt.background.current === c.id, scrubKey: isVid && scrubbable.has(c.id) ? c.id : null, backgroundId: c.id, duration: scrubbable.get(c.id)?.duration });
+      out.push({ key: c.id, name: c.name, sub: "Background", asset: a, kind: isVid ? "video" : "image", active: rt.background.current === c.id, scrubKey: isVid && scrubbable.has(c.id) ? c.id : null, backgroundId: c.id, duration: scrubbable.get(c.id)?.duration, drop });
     } else if (c.kind === "clipActor") {
       for (const k of c.clips) {
         const key = `${c.id}:${k.id}`;
         const a = find(c.matted && k.cutoutAssetId ? k.cutoutAssetId : (k.assetId ?? k.cutoutAssetId));
-        out.push({ key, name: k.name, sub: c.name, asset: a, kind: "clip", active: !!scrubbable.get(key)?.playing, scrubKey: scrubbable.has(key) ? key : null, duration: k.duration });
+        // A drop replaces the video the card shows (the cut-out, when the character plays matted).
+        const assign = (id: string) =>
+          useProject.getState().updateComponent(sceneId, c.id, (x) => {
+            const clip = x.kind === "clipActor" ? x.clips.find((y) => y.id === k.id) : undefined;
+            if (clip && x.kind === "clipActor" && x.matted && clip.cutoutAssetId) clip.cutoutAssetId = id;
+            else if (clip) clip.assetId = id;
+          });
+        out.push({ key, name: k.name, sub: c.name, asset: a, kind: "clip", active: !!scrubbable.get(key)?.playing, scrubKey: scrubbable.has(key) ? key : null, duration: k.duration, drop: { types: ["video"], assign } });
       }
     } else if (c.kind === "video" || c.kind === "image") {
       const a = find(c.kind === "video" ? c.media.assetId : c.assetId);
-      out.push({ key: c.id, name: c.name, sub: c.kind === "video" ? "Video layer" : "Image layer", asset: a, kind: c.kind, active: !!rt.layers[c.id]?.visible, scrubKey: scrubbable.has(c.id) ? c.id : null, duration: scrubbable.get(c.id)?.duration });
+      out.push({ key: c.id, name: c.name, sub: c.kind === "video" ? "Video layer" : "Image layer", asset: a, kind: c.kind, active: !!rt.layers[c.id]?.visible, scrubKey: scrubbable.has(c.id) ? c.id : null, duration: scrubbable.get(c.id)?.duration, drop });
     }
   }
   // Sounds used by this scene's cues.
@@ -64,6 +78,18 @@ function Thumb({ item }: { item: Item }) {
   );
 }
 
+/** The Media tab as a drop target: media dropped beside the cards joins the previewed scene as a new plate. */
+export function useSceneMediaDrop() {
+  return useMediaDrop(NEW_FROM_DROP, (list) => {
+    const sceneId = useShow.getState().preview?.scene.id;
+    if (!sceneId) return;
+    for (const a of list) {
+      const c = componentFor(a);
+      if (c) useProject.getState().addComponent(sceneId, c);
+    }
+  });
+}
+
 export function MediaPanel() {
   const rt = useShow((s) => s.preview);
   const assets = useShow((s) => s.assets);
@@ -74,45 +100,56 @@ export function MediaPanel() {
   const list = items(rt, assets);
   const current = videoSources(rt, assets);
   const effective = scrubKey && current.some((s) => s.key === scrubKey) ? scrubKey : null;
-  if (!list.length) return <p className="px-4 py-8 text-center text-[12px] text-muted-foreground">This scene has no media.</p>;
+  if (!list.length)
+    return (
+      <p className="flex flex-col items-center gap-1.5 px-4 py-8 text-center text-[12px] text-muted-foreground">
+        <Upload className="size-4" />
+        This scene has no media. Drop a video or picture here to add it.
+      </p>
+    );
   return (
     <ul className="space-y-1.5 px-3 pb-3">
-      {list.map((it) => {
-        const I = ICON[it.kind];
-        const scrubbing = effective === it.scrubKey && !!it.scrubKey;
-        return (
-          <li key={it.key}>
-            <button
-              onClick={() => {
-                if (it.backgroundId && !it.active) useShow.getState().dispatch("preview", { type: "background", backgroundId: it.backgroundId, delay: 0 });
-                if (it.scrubKey) selectScrubSource(it.scrubKey);
-              }}
-              title={it.scrubKey ? "Scrub this video in the preview" : it.backgroundId ? "Show this plate in the preview" : it.name}
-              className={cn(
-                "relative flex w-full items-center gap-3 overflow-hidden rounded-lg border p-1.5 pr-3 text-left transition-colors",
-                scrubbing ? "border-preview/70 bg-preview/[0.07]" : "border-border bg-card/60 hover:bg-card",
-              )}
-            >
-              {scrubbing && <span className="absolute inset-y-0 left-0 w-1 bg-preview" />}
-              {/* Fixed box: WebKit ignores aspect-ratio on media inside buttons. */}
-              <div className="relative h-[68px] w-[120px] shrink-0 overflow-hidden rounded-md bg-black">
-                <Thumb item={it} />
-              </div>
-              <I className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[14px] font-semibold leading-tight">{it.name}</div>
-                <div className="truncate text-[12px] text-muted-foreground">{it.sub}</div>
-              </div>
-              {it.duration ? <span className="font-key shrink-0 text-[13px] font-semibold tabular text-muted-foreground">{fmt(it.duration)}</span> : null}
-              {it.active && (
-                <span className="flex shrink-0 items-center gap-1 rounded bg-preview px-1.5 py-0.5 text-[10.5px] font-bold text-black">
-                  <Play className="size-2.5 fill-current" /> ON
-                </span>
-              )}
-            </button>
-          </li>
-        );
-      })}
+      {list.map((it) => (
+        <MediaRow key={it.key} it={it} scrubbing={effective === it.scrubKey && !!it.scrubKey} />
+      ))}
     </ul>
+  );
+}
+
+function MediaRow({ it, scrubbing }: { it: Item; scrubbing: boolean }) {
+  const I = ICON[it.kind];
+  const { over, dropProps } = useMediaDrop(it.drop?.types ?? [], (list) => it.drop?.assign(list[0].id));
+  return (
+    <li {...(it.drop ? dropProps : {})}>
+      <button
+        onClick={() => {
+          if (it.backgroundId && !it.active) useShow.getState().dispatch("preview", { type: "background", backgroundId: it.backgroundId, delay: 0 });
+          if (it.scrubKey) selectScrubSource(it.scrubKey);
+        }}
+        title={it.scrubKey ? "Scrub this video in the preview" : it.backgroundId ? "Show this plate in the preview" : it.name}
+        className={cn(
+          "relative flex w-full items-center gap-3 overflow-hidden rounded-lg border p-1.5 pr-3 text-left transition-colors",
+          scrubbing ? "border-preview/70 bg-preview/[0.07]" : "border-border bg-card/60 hover:bg-card",
+          over && "border-preview bg-preview/15 ring-2 ring-preview/60",
+        )}
+      >
+        {scrubbing && <span className="absolute inset-y-0 left-0 w-1 bg-preview" />}
+        {/* Fixed box: WebKit ignores aspect-ratio on media inside buttons. */}
+        <div className="relative h-[68px] w-[120px] shrink-0 overflow-hidden rounded-md bg-black">
+          <Thumb item={it} />
+        </div>
+        <I className="size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] font-semibold leading-tight">{it.name}</div>
+          <div className="truncate text-[12px] text-muted-foreground">{it.sub}</div>
+        </div>
+        {it.duration ? <span className="font-key shrink-0 text-[13px] font-semibold tabular text-muted-foreground">{fmt(it.duration)}</span> : null}
+        {it.active && (
+          <span className="flex shrink-0 items-center gap-1 rounded bg-preview px-1.5 py-0.5 text-[10.5px] font-bold text-black">
+            <Play className="size-2.5 fill-current" /> ON
+          </span>
+        )}
+      </button>
+    </li>
   );
 }
