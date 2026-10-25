@@ -47,6 +47,7 @@ pub fn run() {
         // Updates only install when the operator asks for it (src/engine/updater.ts).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(audio::plugin())
         .manage(io::IoState::default())
         .manage(package::HashCache::default())
         .invoke_handler(tauri::generate_handler![

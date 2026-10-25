@@ -66,7 +66,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
       {section === "audio" && (
         <div className="space-y-3">
           <AudioOutputPicker inCard />
-          <p className="text-[12px] leading-relaxed text-muted-foreground">Cue sounds, thunder, announcements and video sound all play here. Dante Virtual Soundcard shows in the list when it is running. The choice belongs to this computer, not the show file.</p>
+          <p className="text-[12px] leading-relaxed text-muted-foreground">Cue sounds, thunder, announcements and video sound all play here. Dante Virtual Soundcard shows in the list, at the top, when it is running (on Windows the app asks Windows once to name its outputs; it never records). The choice belongs to this computer, not the show file.</p>
         </div>
       )}
       {section === "monitor" && <LogTab />}

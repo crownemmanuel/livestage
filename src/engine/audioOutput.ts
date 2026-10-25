@@ -5,7 +5,10 @@
 //    output, Dante Virtual Soundcard included. The desktop app's webview always plays on the
 //    Mac's default output, so routing sets that (and the app puts the old one back on quit).
 //  - web: the webview's own device list and setSinkId, where the webview offers them (Chrome and
-//    WebView2 on Windows do; the macOS webview lists no outputs).
+//    WebView2 on Windows do; the macOS webview lists no outputs). Chromium hides the list (one
+//    nameless entry) until the page may use a microphone, and refuses setSinkId to a named device
+//    until then too, so the desktop app on Windows asks once (the Rust side grants it without a
+//    prompt, see lib.rs) and never records anything.
 // The choice is machine-local (a Dante card on one Mac is not on another), kept in localStorage,
 // and every window follows it (the storage event reaches the output window).
 
@@ -26,6 +29,8 @@ export interface NativeOutput {
 export interface WebOutput {
   deviceId: string;
   label: string;
+  /** Dante Virtual Soundcard (Windows lists it as an ordinary playback device). */
+  dante: boolean;
 }
 
 /** The chosen output; null = the computer's default, untouched. */
@@ -68,20 +73,64 @@ export async function nativeOutputs(): Promise<NativeOutput[]> {
 /** Whether this webview can send media to a chosen device at all. */
 export const webSinkSupported = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
-export async function webOutputs(): Promise<WebOutput[]> {
+/** The desktop app outside macOS (WebView2): the web engine is how sound is routed, and the app grants itself the microphone. */
+const webRouting = isTauri && !nativeRouting && webSinkSupported;
+
+// Chromium's own entries for "whatever Windows uses": the computer default, not devices to pick.
+const ALIASES = new Set(["default", "communications"]);
+
+async function rawOutputs(): Promise<MediaDeviceInfo[]> {
   if (!webSinkSupported || !navigator.mediaDevices?.enumerateDevices) return [];
   try {
-    const all = await navigator.mediaDevices.enumerateDevices();
-    return all.filter((d) => d.kind === "audiooutput" && d.deviceId).map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Output ${i + 1}` }));
+    return (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
   } catch {
     return [];
   }
 }
 
+/** The webview hides its outputs: one entry with no id or no name. */
+const hidden = (all: MediaDeviceInfo[]) => all.some((d) => !d.deviceId || !d.label);
+
+let unlocking: Promise<void> | null = null;
 /** Browsers hide device names until the page may use a microphone: ask once to show them. */
-export async function revealWebOutputNames(): Promise<void> {
-  const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-  s.getTracks().forEach((t) => t.stop());
+export function revealWebOutputNames(): Promise<void> {
+  unlocking ??= navigator.mediaDevices
+    .getUserMedia({ audio: true })
+    .then((s) => s.getTracks().forEach((t) => t.stop()))
+    .catch((e) => {
+      unlocking = null; // let a later look (or the button) try again, e.g. once Dante is running
+      throw e;
+    });
+  return unlocking;
+}
+
+/** In the desktop app on Windows, unlock the list on its own (no prompt there); elsewhere it waits for the button. */
+async function autoUnlock(all: MediaDeviceInfo[]): Promise<MediaDeviceInfo[]> {
+  if (!webRouting || !hidden(all)) return all;
+  try {
+    await revealWebOutputNames();
+    return await rawOutputs();
+  } catch {
+    return all;
+  }
+}
+
+export async function webOutputs(): Promise<WebOutput[]> {
+  const all = await autoUnlock(await rawOutputs());
+  return all
+    .filter((d) => d.deviceId && !ALIASES.has(d.deviceId))
+    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Output ${i + 1}`, dante: /dante/i.test(d.label) }));
+}
+
+/** What the webview's default output is called ("Speakers (Realtek(R) Audio)"), when it says. */
+export async function webDefaultName(): Promise<string | null> {
+  const d = (await rawOutputs()).find((o) => o.deviceId === "default");
+  return d?.label ? d.label.replace(/^Default\s*-\s*/i, "") : null;
+}
+
+/** Whether the webview still hides its output names (the "Show all outputs" button is needed). */
+export async function webOutputsHidden(): Promise<boolean> {
+  return hidden(await rawOutputs());
 }
 
 // ---------------------------------------------------------------- web engine sinks
@@ -96,7 +145,19 @@ const webSink = () => {
 
 function sink(el: Sinkable) {
   if (!el.setSinkId) return;
-  void el.setSinkId(webSink()).catch((e) => console.warn("audio output not available", e));
+  const id = webSink();
+  void el.setSinkId(id).catch(async (e) => {
+    // A named device needs the microphone permission (this window may not have it yet): ask, try once more.
+    if (id && webRouting && e?.name === "NotAllowedError") {
+      try {
+        await revealWebOutputNames();
+        return await el.setSinkId!(id);
+      } catch (e2) {
+        e = e2;
+      }
+    }
+    console.warn("audio output not available", e);
+  });
 }
 
 /** The program audio context: send it to the chosen web output too. */
@@ -142,7 +203,9 @@ export function routeMismatch(route: AudioRoute, outputs: NativeOutput[]): { cho
  * (Dante Virtual Soundcard restarting sends the Mac to another output and never back).
  */
 export function startAudioRouting(): () => void {
-  applyWebSinks();
+  // A chosen Windows output needs the permission in this window before the first setSinkId.
+  if (webRouting && webSink()) void revealWebOutputNames().catch(() => {}).finally(applyWebSinks);
+  else applyWebSinks();
   // Elements made later start on the default output: point each one at the chosen output.
   const mo = new MutationObserver((muts) => {
     if (!webSink()) return;
@@ -159,6 +222,16 @@ export function startAudioRouting(): () => void {
     listeners.forEach((f) => f());
   };
   window.addEventListener("storage", onStorage);
+  // A chosen web output that went away (Dante Virtual Soundcard restarting): point everything at it again when it is back.
+  let webPresent = true;
+  const onDeviceChange = async () => {
+    const id = webSink();
+    if (!id) return;
+    const back = (await rawOutputs()).some((d) => d.deviceId === id);
+    if (back && !webPresent) applyWebSinks();
+    webPresent = back;
+  };
+  navigator.mediaDevices?.addEventListener?.("devicechange", onDeviceChange);
 
   let poll: ReturnType<typeof setInterval> | undefined;
   if (nativeRouting && windowRole === "operator") {
@@ -176,6 +249,7 @@ export function startAudioRouting(): () => void {
   return () => {
     mo.disconnect();
     window.removeEventListener("storage", onStorage);
+    navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange);
     clearInterval(poll);
   };
 }

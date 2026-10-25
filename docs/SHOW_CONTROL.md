@@ -57,6 +57,14 @@ To release one list and start another at a given cue, give the cue two Lighting 
 
 **App → Hog (MSC):** send MSC GO with the Hog's device ID and the cue number; the Hog must have MSC in enabled.
 
+## Audio output (Dante)
+
+**Settings → Audio output** picks the speakers for all of the app's sound (cue sounds, thunder, announcements, video sound). The choice belongs to the computer, not the show file. Dante devices are listed first.
+
+- **Mac:** the list comes from CoreAudio (`src-tauri/src/audio.rs`). The webview can only play on the Mac's default output, so choosing a device makes it the Mac's output while the app runs, and the previous one comes back on quit.
+- **Windows:** the list comes from the webview (WebView2), which lists every playback device, the same names as vMix's WDM list, Dante Virtual Soundcard included while it runs. Choosing one moves only this app's sound (`setSinkId`, `engine/audioOutput.ts`). WebView2 names its outputs, and plays to a named one, only once the page may use a microphone, so the app asks for it on its own and the Rust side grants it to the app's own pages without a prompt. Nothing is recorded. It needs at least one input device to ask with; Dante Virtual Soundcard provides one. If the list still shows only "Computer default", start Dante Virtual Soundcard and press **Show all outputs**.
+- Sound plays in stereo on the device's channels 1+2. On Dante, check those two channels in Dante Controller.
+
 ## Monitor and test
 
 **Settings** → **Monitor** shows every message in and out with a timestamp, and the **Incoming triggers** section has three "simulate" buttons so the whole chain can be rehearsed without a console. The status bar in Show Mode shows the in/out counters and the last message.

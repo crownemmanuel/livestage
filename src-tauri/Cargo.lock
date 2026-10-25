@@ -3007,6 +3007,8 @@ dependencies = [
  "tauri-plugin-updater",
  "ttf-parser",
  "ureq",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

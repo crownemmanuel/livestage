@@ -23,7 +23,7 @@ import * as transport from "@/engine/transport";
 import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
 import { describeProbe } from "@/core/mediaCheck";
 import { audioRoleOf, liveAudioSources } from "@/engine/mixer";
-import { getAudioRoute, nativeOutputs, setAudioRoute, webOutputs, type AudioRoute } from "@/engine/audioOutput";
+import { getAudioRoute, nativeOutputs, setAudioRoute, webDefaultName, webOutputs, webOutputsHidden, type AudioRoute } from "@/engine/audioOutput";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { requestSnap } from "@/render/snap";
 import { useProject } from "@/store/project";
@@ -680,7 +680,7 @@ export const handlers: Record<AgentCommand, Handler> = {
       }
       await setAudioRoute(route);
     }
-    return { route: getAudioRoute(), ...(await list()) };
+    return { route: getAudioRoute(), ...(await list()), webDefault: await webDefaultName(), webNamesHidden: await webOutputsHidden() };
   },
 
   timer_overlay(a) {

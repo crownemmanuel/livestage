@@ -36,3 +36,8 @@ http = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+
+# WebView2 access (same versions as wry) to let the app's pages see and pick audio outputs.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = "0.62"

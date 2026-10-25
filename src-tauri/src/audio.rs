@@ -5,6 +5,9 @@
 //! The webview (WKWebView) plays all of the app's sound, and it cannot be pointed at a device of
 //! its own: it plays on the Mac's default output. So routing sets the Mac's default output to
 //! the chosen device, and puts the previous default back when the app quits.
+//!
+//! On Windows the webview (WebView2) lists every playback device and plays to the chosen one
+//! itself (setSinkId, see engine/audioOutput.ts); this side only lets it see them.
 
 use serde::Serialize;
 
@@ -207,6 +210,57 @@ mod mac {
             None => Ok(()),
         }
     }
+}
+
+/// Windows: the app's own pages may use the microphone without a prompt. WebView2 names its audio
+/// outputs (Dante Virtual Soundcard among them), and lets a page play to one of them, only once the
+/// page may use a microphone. The app asks for it only to see and pick outputs; it never records.
+#[cfg(windows)]
+mod windows_mic {
+    use webview2_com::{take_pwstr, Microsoft::Web::WebView2::Win32::*, PermissionRequestedEventHandler};
+    use windows::core::PWSTR;
+
+    /// The app's pages: the bundled app, and the dev server (and test profiles) on localhost.
+    fn is_app_page(uri: &str) -> bool {
+        ["http://tauri.localhost/", "https://tauri.localhost/", "http://localhost:", "http://127.0.0.1:"].iter().any(|p| uri.starts_with(p))
+    }
+
+    pub fn grant<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
+        let result = webview.with_webview(|pw| unsafe {
+            let Ok(core) = pw.controller().CoreWebView2() else { return };
+            let handler = PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                let Some(args) = args else { return Ok(()) };
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                args.PermissionKind(&mut kind)?;
+                let uri = {
+                    let mut uri = PWSTR::null();
+                    args.Uri(&mut uri)?;
+                    take_pwstr(uri)
+                };
+                if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE && is_app_page(&uri) {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                }
+                Ok(())
+            }));
+            let mut token = 0i64;
+            if let Err(e) = core.add_PermissionRequested(&handler, &mut token) {
+                log::warn!("audio outputs: could not watch microphone requests: {e}");
+            }
+        });
+        if let Err(e) = result {
+            log::warn!("audio outputs: no WebView2 handle: {e}");
+        }
+    }
+}
+
+/// Sets up every webview to see the computer's audio outputs (Windows; nothing to do elsewhere).
+pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("audio-outputs")
+        .on_webview_ready(|_webview| {
+            #[cfg(windows)]
+            windows_mic::grant(&_webview);
+        })
+        .build()
 }
 
 /// Every audio output device of this computer. Empty where native listing is not supported.
