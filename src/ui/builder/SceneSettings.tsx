@@ -67,6 +67,12 @@ export function SceneSettings({ scene }: { scene: Scene }) {
           <p className="text-[10.5px] leading-snug text-muted-foreground">
             Video transitions play full-frame; the destination scene loads underneath and is revealed as the video ends, so there is no black frame.
           </p>
+          <SwitchField
+            label="Stop music from earlier scenes"
+            hint="On: taking this scene fades out (3 s) the sounds still playing from earlier scenes, music marked 'keep playing into next scene' included. Off: that music carries on through this scene."
+            value={!!scene.stopCarriedSounds}
+            onChange={(v) => up((s) => (s.stopCarriedSounds = v || undefined))}
+          />
         </Section>
       </div>
       <div>

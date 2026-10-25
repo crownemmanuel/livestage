@@ -56,7 +56,7 @@ export function OperatorApp() {
     const stopAudio = startProgramAudio(() => {
       const s = useShow.getState();
       const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
-      return s.output.audioHost === "operator" || !outputUp;
+      return !outputUp;
     });
 
     // Selecting a scene only changes the PREVIEW; edits refresh it without restarting.

@@ -41,12 +41,13 @@ function texAspect(tex: THREE.Texture | null, video: HTMLVideoElement | null) {
   return img?.width && img.height ? img.width / img.height : 16 / 9;
 }
 
-/** Entrance/exit animation factor and offsets. */
+/** Entrance/exit animation factor and offsets. Anything unknown (a text-only name like "burn" or "rise") fades. */
 function entrance(kind: EntranceKind, k: number) {
   const e = easeOut(k);
   switch (kind) {
     case "none":
       return { opacity: k >= 1 ? 1 : k > 0 ? 1 : 0, dx: 0, dy: 0, scale: 1 };
+    default:
     case "fade":
       return { opacity: k, dx: 0, dy: 0, scale: 1 };
     case "slide-left":
@@ -164,8 +165,9 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
       return;
     }
     const t = frame.t;
-    const k = clamp((t - lr.changedAt) / (comp.anim.duration * 1000 || 1), 0, 1);
-    const anim = lr.visible ? entrance(comp.anim.enter, k) : entrance(comp.anim.exit, 1 - k);
+    const a = comp.anim ?? { enter: "fade", exit: "fade", duration: 0.5 };
+    const k = clamp((t - lr.changedAt) / (a.duration * 1000 || 1), 0, 1);
+    const anim = lr.visible ? entrance(a.enter, k) : entrance(a.exit, 1 - k);
     const presence = anim.opacity;
     const elapsed = (t - lr.startAt) / 1000;
 

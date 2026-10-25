@@ -32,5 +32,5 @@ Delayed cue actions are scheduled by absolute wall-clock time, so a slow frame n
 
 - Open the output on the LED display and check **Output … fps · worst frame … ms** in the status bar.
 - Run the cue list once in the preview. Watch the error counter in the top bar.
-- Enable only the I/O you use; test it from the Monitor tab.
+- Enable only the I/O you use; test it from Settings → Monitor.
 - Keep the operator window in front and the output window on its own display; never let the machine sleep (the app disables background throttling, but the OS can still sleep the display).

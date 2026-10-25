@@ -1,4 +1,4 @@
-// A show timer laid over the wall (Show Mode → Timers → Show on screen): plain DOM above the
+// A show timer laid over the wall (top bar → Quick actions → Timers → Show on screen): plain DOM above the
 // program picture, styled by Output → timer overlay, fading on and off.
 
 import { useEffect, useState, type CSSProperties } from "react";

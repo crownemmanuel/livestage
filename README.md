@@ -1,6 +1,6 @@
-# Live Studio
+# LiveStage
 
-Live Studio is the software built to power the live stage production of **Salvation**, the stage play ([salvationplay.com](https://salvationplay.com)): real-time effects on the LED wall, and show control for the lighting and special effects. This season's show is **Salvation 2026: The House of David**.
+LiveStage is the software built to power the live stage production of **Salvation**, the stage play ([salvationplay.com](https://salvationplay.com)): real-time effects on the LED wall, and show control for the lighting and special effects. This season's show is **Salvation 2026: The House of David**.
 
 Version 1 is a working desktop app (Tauri 2 + React + Three.js). It is not a mockup. It has two modes:
 

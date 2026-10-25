@@ -215,13 +215,13 @@ export function defaultOutput(): OutputSettings {
     fullscreen: true,
     windowWidth: 1280,
     windowHeight: 320,
-    scaling: "fit",
+    // The wall's processor takes a 1920×720 signal and spreads it over the 3072×768 wall: Stretch fills it.
+    scaling: "stretch",
     targetFps: 60,
     backgroundColor: "#000000",
     safeArea: { enabled: true, marginPct: 5, showOnOutput: false },
     testPattern: false,
     standby: { text: "SALVATION 2026", subtext: "The House of David", assetId: null, color: "#000000" },
-    audioHost: "output",
     timerOverlay: defaultTimerOverlay(),
   };
 }

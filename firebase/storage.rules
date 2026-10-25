@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Live Studio cloud sync: only the show's own account may read or write.
+// LiveStage cloud sync: only the show's own account may read or write.
 // Replace SHOW_ACCOUNT_UID with that account's User UID (Firebase console → Authentication → Users),
 // then publish these rules (Storage → Rules, or `firebase deploy --only storage` from this folder).
 // Anyone with the web API key can create an account, so "signed in" alone is not enough.

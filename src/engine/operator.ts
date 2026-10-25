@@ -163,11 +163,11 @@ function rtFor(target: Target) {
  * Fire cue `index` of the scene running on `target`: its actions, the GO pointer, and any
  * follow cues chained after it. Every way a cue fires (GO, scene time, follow, video marker) ends here.
  */
-export function fireCue(target: Target, index: number, auto = false) {
+export function fireCue(target: Target, index: number, auto = false, rewind = false) {
   const rt = rtFor(target);
   const cue = rt?.scene.cues[index];
   if (!rt || !cue) return;
-  useShow.getState().dispatch(target, { type: "cueFired", index });
+  useShow.getState().dispatch(target, { type: "cueFired", index, rewind });
   // A cue firing by itself while rehearsing must not swap the scene out from under the editor.
   runCue(target, auto && target === "preview" ? { ...cue, actions: cue.actions.filter((a) => a.type !== "takeScene") } : cue);
   if (target === "program") notifyCue(rt, index, cue);
@@ -228,14 +228,16 @@ export const cueControl = {
   go(target: Target) {
     const rt = rtFor(target);
     if (!rt) return;
+    // A cue that fires by itself (AUTO) still goes on GO: the operator fires it early.
     if (!rt.scene.cues[rt.cuePointer]) {
       goIntoNextScene(target, rt);
       return;
     }
     fireCue(target, rt.cuePointer);
   },
+  /** Fire now: fire cue `index` and rewind the list to it, so the cues after it are up again. */
   fire(target: Target, index: number) {
-    fireCue(target, index);
+    fireCue(target, index, false, true);
   },
   repeat(target: Target) {
     const rt = rtFor(target);

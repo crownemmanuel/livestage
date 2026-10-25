@@ -17,7 +17,7 @@ The MCP server is registered for Claude Code in [.mcp.json](../.mcp.json) (`node
 Then run the app as usual (`pnpm tauri dev`, `pnpm dev` + http://localhost:1430, or the installed build). The operator window connects to the bridge by itself within a few seconds, and keeps retrying while no agent is running.
 
 - **Agent badge** (top bar, next to the save tick): shows while an agent is connected; its tooltip says how many changes it made and the last one. Click it to disconnect and switch agent control off on this machine; click the crossed-out badge to allow it again.
-- Every change an agent makes is written to the I/O log as `Agent → <tool>` (Control → Monitor).
+- Every change an agent makes is written to the I/O log as `Agent → <tool>` (Settings → Monitor).
 - Several agent sessions can run at once: the first MCP server hosts the bridge, later ones relay through it and take over if it exits.
 - Desktop app and a browser tab both open? Both connect. Agents drive the desktop app unless told otherwise (`connections` tool, or `SLS_AGENT_APP=browser`).
 - Port: `SLS_AGENT_PORT` for the MCP server, `localStorage["sls.agentPort"]` or `VITE_SLS_AGENT_PORT` (build time) in the app. A second test instance on its own port never takes commands meant for the show machine.
@@ -50,7 +50,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | **Run the show** | |
 | `select_scene` | Load a scene in the preview |
 | `take` [LIVE] | TAKE a scene live, optional transition |
-| `cue` | GO, fire, back, skip, set pointer, repeat (preview or program) |
+| `cue` | GO (also fires a next cue that would fire by itself, early), fire (a cue's Fire now button: rewinds the list to that cue), set pointer, and back, skip, repeat (no buttons on screen; agents and MIDI/OSC only), on preview or program |
 | `preview_step` | Preview the scene as it looks after N cues |
 | `run_action` | Run any cue action now |
 | `transport` [LIVE] | Hold, resume, seek or nudge the scene's video in its own seconds; the live wall scrubs only while held ([VIDEO_TRANSPORT.md](VIDEO_TRANSPORT.md)) |
@@ -61,7 +61,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `mixer` [LIVE] | Live mixer: list what is sounding on the wall (cue sounds, video with sound) and trim one source's volume, or reset all |
 | `audio_output` [LIVE] | List this computer's audio outputs (native CoreAudio devices incl. Dante, and web engine outputs) and route all of the app's sound to one, or back to the computer default |
 | `next_transition` | Transition for the next TAKE |
-| `io_send` [LIVE] | Send MIDI / OSC / MSC / Hog 4 (lighting items by name) |
+| `io_send` [LIVE] | Send MIDI / OSC / MSC / Hog 4 (lighting items by name; `master` raises a fader before a GO) |
 | `io_inject` | Simulate an incoming MIDI/OSC message to test triggers |
 | `output_window` [LIVE] | Open, close or check the audience output |
 | `ui` | Show/Build mode, selected component, isolate (solo), hidden components |
@@ -76,7 +76,8 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `asset_import`, `asset_remove` | Library media (local file or URL). An imported video is probed and, when the wall would not play it well, re-encoded into the wall format on the way in (`optimise: false` to only report) |
 | `asset_check` | What a video is (codec, size, frame rate, keyframe gap, bit rate, audio) and whether the wall plays it well: problems with severity and whether optimising fixes them; the encoder tools on this machine |
 | `asset_optimise` | Re-encode a library video into the wall format (H.264, fitted to the wall, keyframe every ½ s, fast start); `force` when no problem was found |
-| `output_settings` | Wall size, scaling, standby card, timer style, audio host |
+| `asset_reveal` | Open the operator's Finder / Explorer with an asset's file selected (desktop app only) |
+| `output_settings` | Wall size, scaling, standby card, timer style |
 | `project` | Save, export/import a show file, reset to the demo, rename |
 | `package_export` | Write a show package (show file, versioned manifest, every media file) for another computer; desktop app ([SHOW_PACKAGE.md](SHOW_PACKAGE.md)) |
 | `package_import` | Take in a show package: `dryRun` for the plan, per-conflict `choices` (`incoming`, `local`, `media`, `both`) or `resolve`; refuses while live unless `allowLive` |

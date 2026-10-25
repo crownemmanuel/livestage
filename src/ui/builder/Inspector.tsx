@@ -94,7 +94,7 @@ function TextForm({ c, up }: { c: TextComponent; up: Updater<TextComponent> }) {
           onChange={(v) => up((x) => (x.timerId = v === "__none__" ? null : v))}
           options={[{ value: "__none__", label: "— plain text —" }, ...timers.map((t) => ({ value: t.id, label: `Show timer: ${t.name}` }))]}
         />
-        {c.timerId && <p className="text-[10.5px] leading-snug text-muted-foreground">Write {"{time}"} where the clock goes, e.g. “WE'LL BE BACK IN {"{time}"}”. Run the timer from Show Mode → Timers or a cue.</p>}
+        {c.timerId && <p className="text-[10.5px] leading-snug text-muted-foreground">Write {"{time}"} where the clock goes, e.g. “WE'LL BE BACK IN {"{time}"}”. Run the timer from Quick actions → Timers (top bar) or a cue.</p>}
         <Field label="Text">
           <textarea
             className="h-16 w-full resize-none rounded-md border border-input bg-transparent px-2 py-1 text-[12px]"

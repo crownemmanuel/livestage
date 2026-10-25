@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { now } from "@/core/clock";
 import { onBus, send } from "@/core/bus";
 import { isTauri } from "@/core/platform";
-import { playingCueSounds, startProgramAudio, unlockAudio } from "@/engine/audio";
+import { heldCueSounds, playingCueSounds, startProgramAudio, unlockAudio } from "@/engine/audio";
 import { startAudioRouting } from "@/engine/audioOutput";
 import { StageView } from "@/render/StageView";
 import { takeVideoSyncStats } from "@/render/layers/video";
@@ -27,7 +27,6 @@ function countVideos() {
 export function OutputApp() {
   const scaling = useShow((s) => s.output.scaling);
   const safe = useShow((s) => s.output.safeArea.showOnOutput);
-  const audioHere = useShow((s) => s.output.audioHost === "output");
 
   useEffect(() => {
     document.body.classList.add("output-window");
@@ -44,7 +43,7 @@ export function OutputApp() {
     });
     void send({ type: "hello" });
     const stopRouting = startAudioRouting();
-    const stopAudio = startProgramAudio(() => useShow.getState().output.audioHost === "output");
+    const stopAudio = startProgramAudio(() => true);
 
     // Heartbeat with measured frame rate so the operator can see output health.
     let frames = 0;
@@ -74,6 +73,7 @@ export function OutputApp() {
           fullscreen: !!document.fullscreenElement || (window.innerWidth === screen.width && window.innerHeight === screen.height),
           video: takeVideoSyncStats(),
           sounds: playingCueSounds(),
+          heldSounds: heldCueSounds(),
           upload: takeUploadStats(),
           videoElements: countVideos(),
           stalls,
@@ -114,7 +114,7 @@ export function OutputApp() {
   return (
     <div className="fixed inset-0 bg-black">
       <ErrorBoundary name="output" retryAfter={1000} fallback={null}>
-        <StageView source="program" isOutput scaling={scaling} maxDpr={3} showSafeArea={safe} audio={audioHere} />
+        <StageView source="program" isOutput scaling={scaling} maxDpr={3} showSafeArea={safe} audio /* always the audio host while it runs; the operator takes over when it is down */ />
       </ErrorBoundary>
     </div>
   );

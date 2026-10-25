@@ -69,7 +69,7 @@ export function describeMessage(m: IoMessage): string {
     case "hog": {
       const r = resolveHog(m);
       const what = `${HOG_KIND_LABEL[r.kind].toLowerCase()} ${r.number || "?"}${hogCueSuffix(m, r.kind)}`;
-      return `Hog ${HOG_OP_LABEL[m.op]} ${r.name ? `${r.name} (${what})` : what}`;
+      return `Hog ${HOG_OP_LABEL[m.op]} ${r.name ? `${r.name} (${what})` : what}${hogMaster(m) ? ` + master ${hogMaster(m)} up` : ""}`;
     }
   }
 }
@@ -95,6 +95,9 @@ export function resolveHog(m: HogMessage): { name: string | null; kind: HogKind;
 }
 
 const hogCueSuffix = (m: HogMessage, kind: HogKind) => (m.op === "go" && kind === "cuelist" && m.cue.trim() ? `.${m.cue.trim()}` : "");
+
+/** The master to raise to full before a GO, or "" for none. */
+export const hogMaster = (m: HogMessage) => (m.op === "go" ? (m.master ?? "").trim() : "");
 
 /** The OSC the console expects: /hog/playback/<op>/<0 cuelist | 1 scene | 2 macro> "list[.cue]". */
 export function hogOsc(m: HogMessage): { address: string; arg: string } {
@@ -395,10 +398,13 @@ export async function sendMessage(msg: IoMessage): Promise<void> {
     if (msg.type === "osc" || msg.type === "hog") {
       const targets = settings?.osc.targets ?? [];
       const target = msg.type === "hog" ? hogTarget(settings) : (targets.find((t) => t.id === msg.target) ?? targets[0]);
-      if (!target) throw new Error(msg.type === "hog" ? "No lighting console set up (I/O → Connection)" : "No OSC target configured");
+      if (!target) throw new Error(msg.type === "hog" ? "No lighting console set up (Settings → Lighting console)" : "No OSC target configured");
       const { address, args } = msg.type === "hog" ? (({ address, arg }) => ({ address, args: [arg] }))(hogOsc(msg)) : msg;
       if (!isTauri) throw new Error("OSC needs the desktop app");
       const { invoke } = await import("@tauri-apps/api/core");
+      // A list on a master plays at that fader's level, so GO on a lowered fader shows nothing. 255 = full (tested on the console, 2026-10-24).
+      const master = msg.type === "hog" ? hogMaster(msg) : "";
+      if (master) await invoke("osc_send", { host: target.host, port: target.port, address: `/hog/hardware/fader/${master}`, args: [{ t: "i", v: 255 }] });
       await invoke("osc_send", { host: target.host, port: target.port, address, args: oscArgs(address, args) });
     } else {
       if (!midiOut) throw new Error("No MIDI output open");

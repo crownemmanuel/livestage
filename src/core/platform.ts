@@ -359,6 +359,28 @@ export async function bundledOnDisk(urls: (string | undefined)[]): Promise<Set<s
   return new Set(list.filter((_, i) => found[i]));
 }
 
+/** What this desktop calls its file manager, for buttons and tooltips. */
+export const fileManagerName = (() => {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  if (ua.includes("Mac")) return "Finder";
+  if (ua.includes("Win")) return "File Explorer";
+  return "the file manager";
+})();
+
+/**
+ * Show an asset's file in Finder / Explorer, selected in its folder. Media that ships with the app
+ * is found in the repo's public/ folder on the build computer; media embedded in a release build has
+ * no file to show, and this rejects with that as the message.
+ */
+export async function revealAsset(asset: Asset): Promise<string> {
+  if (!isTauri) throw new Error(`Only the desktop app can open ${fileManagerName}.`);
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("reveal_in_file_manager", {
+    path: asset.path ?? null,
+    bundled: asset.url.startsWith("/media/") ? asset.url : null,
+  });
+}
+
 /** The portable key of a library file from its absolute path (show files from before keys existed). */
 function legacyKey(path: string, root: string): string {
   const norm = (x: string) => x.replace(/\\/g, "/").replace(/\/+$/, "");

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { ChevronRight, Clock, Crosshair, Eye, Film, Flag, Focus, MousePointer2, Pause, Play, Plus, Scan, Send, X, Zap, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
 import { NO_FRAMING, clampFraming, evalFraming } from "@/core/runtime";
@@ -289,6 +290,32 @@ export function StepBar() {
  * A live scrub moves a ghost playhead and lands once, on release, so the audience sees one cut
  * to the chosen frame rather than the whole scrub.
  */
+/** Show Mode's clip picker: just a film icon (the clip's name on hover), a menu only when there is a choice. */
+function ClipPicker({ value, sources, onChange }: { value: string; sources: { key: string; label: string; playing: boolean }[]; onChange: (k: string) => void }) {
+  const cur = sources.find((s) => s.key === value);
+  const icon = <Film className="size-3.5" />;
+  if (sources.length < 2)
+    return (
+      <span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground" title={cur?.label}>
+        {icon}
+      </span>
+    );
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger size="sm" className="h-6 w-auto shrink-0 gap-0.5 border-transparent bg-transparent px-1 text-muted-foreground hover:border-input [&_svg]:size-3.5" title={`${cur?.label ?? "Clip"} (${sources.length} clips: pick which one the bar scrubs)`} aria-label="Clip to scrub">
+        {icon}
+      </SelectTrigger>
+      <SelectContent>
+        {sources.map((s) => (
+          <SelectItem key={s.key} value={s.key} className="text-[12px]">
+            {s.label + (s.playing ? "" : " (not playing)")}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function Timeline({ editable = true, target = "preview" }: { editable?: boolean; target?: Target }) {
   const live = target === "program";
   const rt = useShow((s) => (live ? (s.program.standby ? null : s.program.runtime) : s.preview));
@@ -402,13 +429,19 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </Button>
         )}
-        <Film className="size-3.5 shrink-0 text-muted-foreground" />
-        <SelectBox
-          className="h-6 w-auto max-w-[260px] min-w-0 border-transparent bg-transparent px-1 text-[11.5px] font-medium hover:border-input"
-          value={src.key}
-          onChange={(k) => (live ? setPickedLive(k) : selectScrubSource(k))}
-          options={sources.map((s) => ({ value: s.key, label: s.label + (s.playing ? "" : " (not playing)") }))}
-        />
+        {editable ? (
+          <>
+            <Film className="size-3.5 shrink-0 text-muted-foreground" />
+            <SelectBox
+              className="h-6 w-auto max-w-[260px] min-w-0 border-transparent bg-transparent px-1 text-[11.5px] font-medium hover:border-input"
+              value={src.key}
+              onChange={(k) => (live ? setPickedLive(k) : selectScrubSource(k))}
+              options={sources.map((s) => ({ value: s.key, label: s.label + (s.playing ? "" : " (not playing)") }))}
+            />
+          </>
+        ) : (
+          <ClipPicker value={src.key} sources={sources} onChange={(k) => (live ? setPickedLive(k) : selectScrubSource(k))} />
+        )}
         <span className={cn("shrink-0 tabular", drag && live ? "font-semibold text-armed" : "text-muted-foreground")}>
           {fmt(pos)} / {fmt(src.duration)}
         </span>

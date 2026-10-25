@@ -1,4 +1,4 @@
-# Builds Live Studio for Windows (the show computer) and macOS on Apple silicon (the build
+# Builds LiveStage for Windows (the show computer) and macOS on Apple silicon (the build
 # computer), signs the update files and publishes a GitHub Release with the installers and
 # latest.json, which installed apps read under More → Check for updates. See docs/RELEASES.md.
 #
@@ -78,8 +78,8 @@ jobs:
           cat >> notes.md <<'EOF'
 
           ### Install
-          - **Windows** (show computer): `Live.Studio_*_x64-setup.exe`. The installer is not code-signed yet: if SmartScreen says "Windows protected your PC", choose *More info → Run anyway*. Installed copies update themselves from *More → Check for updates*.
-          - **macOS** (Apple silicon): `.dmg`. Not notarized yet: after dragging the app to Applications, run `xattr -cr "/Applications/Live Studio.app"` once.
+          - **Windows** (show computer): `LiveStage_*_x64-setup.exe`. The installer is not code-signed yet: if SmartScreen says "Windows protected your PC", choose *More info → Run anyway*. Installed copies update themselves from *More → Check for updates*.
+          - **macOS** (Apple silicon): `.dmg`. Not notarized yet: after dragging the app to Applications, run `xattr -cr "/Applications/LiveStage.app"` once.
           EOF
 
       - name: Create the draft release
@@ -95,7 +95,7 @@ jobs:
           else
             # The id comes from the response: a new draft is not in the release list straight away.
             id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name="$TAG" -f name="Live Studio ${{ steps.meta.outputs.version }}" -F body=@notes.md \
+              -f tag_name="$TAG" -f name="LiveStage ${{ steps.meta.outputs.version }}" -F body=@notes.md \
               -F draft=true -F prerelease=${{ steps.meta.outputs.prerelease }} --jq .id)"
           fi
           if [ -z "$id" ]; then

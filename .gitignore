@@ -28,3 +28,9 @@ output/
 src-tauri/binaries/
 public/dev-project.json
 ~$*
+
+# Scratch output: icon sets, render temp folders, Blender autosave backups
+/tmp/
+media-src/**/tmp/
+media-src/**/tmp-*/
+*.blend1

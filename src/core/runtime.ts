@@ -10,6 +10,7 @@ import type {
   CameraPose,
   CameraRuntime,
   CameraShot,
+  Cue,
   CueAction,
   EffectParams,
   Framing,
@@ -34,8 +35,11 @@ export type Command =
   /** Put a video actor on one clip, `offset` seconds in, right now (scrubbing). */
   | { type: "clip.seek"; actorId: string; clipId: string; offset: number }
   | { type: "cuePointer"; index: number }
-  /** Cue `index` has fired: remember it and move the GO pointer past it (and past cues that already fired). */
-  | { type: "cueFired"; index: number };
+  /**
+   * Cue `index` has fired: remember it and move the GO pointer past it (and past cues that already fired).
+   * `rewind` (fired by hand): the list goes back to this cue, so every cue after it is un-fired and GO is the next one.
+   */
+  | { type: "cueFired"; index: number; rewind?: boolean };
 
 const LONG_AGO = -1e9;
 
@@ -271,6 +275,24 @@ function lionCommand(a: ActorState, action: LionAction, t: number): ActorState {
   }
 }
 
+// ---------------------------------------------------------------- GO and automatic cues
+
+/**
+ * Will the cue under the GO pointer fire by itself? True for a scene-time cue whose moment is still ahead, a
+ * follow cue whose cue before it has fired, and a video-marker cue, none of them fired yet. The GO button then
+ * reads AUTO and GO does nothing, so the operator never fires it early (its own fire button still can).
+ * A time cue scrubbed past or a follow whose cue before it never fired is back to a normal GO. `t` is scene seconds.
+ */
+export function nextCueIsAuto(rt: SceneRuntime, t: number): boolean {
+  const i = rt.cuePointer;
+  const cue: Cue | undefined = rt.scene.cues[i];
+  if (!cue || rt.fired?.includes(cue.id)) return false;
+  const f = cue.fire;
+  if (f?.mode === "time") return f.at > t && f.at * 1000 > (rt.clock.reached ?? -1);
+  if (f?.mode === "follow") return i > 0 && !!rt.fired?.includes(rt.scene.cues[i - 1].id);
+  return f?.mode === "video";
+}
+
 // ---------------------------------------------------------------- media speed
 
 /** Media-elapsed seconds for a component playing since `startAt`, honouring a speed ramp. */
@@ -455,6 +477,13 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     case "cueFired": {
       const cue = scene.cues[cmd.index];
       if (!cue) return { rt, poses };
+      if (cmd.rewind) {
+        const later = new Set(scene.cues.slice(cmd.index + 1).map((c) => c.id));
+        const fired = [...(rt.fired ?? []).filter((id) => id !== cue.id && !later.has(id)), cue.id];
+        // Time cues already behind the clock become plain GO cues (as after a scrub) instead of all firing at once.
+        const reached = Math.max(rt.clock.reached ?? 0, t);
+        return { rt: { ...rt, fired, cuePointer: cmd.index + 1, clock: { ...rt.clock, reached } }, poses };
+      }
       const fired = rt.fired?.includes(cue.id) ? rt.fired : [...(rt.fired ?? []), cue.id];
       let ptr = Math.max(rt.cuePointer, cmd.index + 1);
       while (ptr < scene.cues.length && fired.includes(scene.cues[ptr].id)) ptr++;
@@ -542,6 +571,7 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     case "sound": {
       if (!cmd.assetId) return { rt, poses };
       const ev: SoundEvent = { id: uid("snd"), assetId: cmd.assetId, at: t, volume: cmd.volume, keepPlaying: !!cmd.keepPlaying };
+      if (cmd.loop) ev.loop = true;
       if (cmd.fadeOthers && (cmd.fadeOthers.which === "all" || cmd.fadeOthers.which.length)) ev.fadeOthers = cmd.fadeOthers;
       return { rt: { ...rt, sounds: [...(rt.sounds ?? []).slice(-15), ev] }, poses };
     }

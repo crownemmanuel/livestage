@@ -73,17 +73,26 @@ const infoFor = (a: CueAction) => ACTION_INFO[a.type === "send" && a.message.typ
 
 const LAYER_KINDS = ["video", "image", "model", "procedural", "text", "names", "route"];
 
-/** Audio a sound cue can fade out as it starts: this scene's other cue sounds and its video with sound on (mixer keys). */
+/**
+ * Audio a sound cue can fade out as it starts (mixer keys): this scene's other cue sounds, music from other
+ * scenes that keeps playing into the next scene (it may still be on when this cue fires), and this scene's
+ * videos with sound on.
+ */
 function otherAudio(scene: Scene, ownAssetId: string | null): { key: string; label: string }[] {
   const assets = useShow.getState().assets;
   const out: { key: string; label: string }[] = [];
   const seen = new Set<string>();
+  const add = (assetId: string, from?: string) => {
+    seen.add(assetId);
+    out.push({ key: `sound:${assetId}`, label: `♪ ${assets.find((s) => s.id === assetId)?.name ?? assetId}${from ? ` (from ${from})` : ""}` });
+  };
   for (const cue of scene.cues)
-    for (const x of cue.actions)
-      if (x.type === "sound" && x.assetId && x.assetId !== ownAssetId && !seen.has(x.assetId)) {
-        seen.add(x.assetId);
-        out.push({ key: `sound:${x.assetId}`, label: `♪ ${assets.find((s) => s.id === x.assetId)?.name ?? x.assetId}` });
-      }
+    for (const x of cue.actions) if (x.type === "sound" && x.assetId && x.assetId !== ownAssetId && !seen.has(x.assetId)) add(x.assetId);
+  for (const other of useProject.getState().project.scenes) {
+    if (other.id === scene.id) continue;
+    for (const cue of other.cues)
+      for (const x of cue.actions) if (x.type === "sound" && x.keepPlaying && x.assetId && x.assetId !== ownAssetId && !seen.has(x.assetId)) add(x.assetId, other.name);
+  }
   for (const c of scene.components) {
     const sound = c.kind === "clipActor" ? !c.muted : (c.kind === "video" || c.kind === "background") && "media" in c && !c.media.muted;
     if (sound) out.push({ key: c.id, label: `▶ ${c.name}` });
@@ -124,7 +133,7 @@ export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]
     case "clock":
       return { type, op: "toggle", delay: 0 };
     case "sound":
-      return { type, assetId: null, volume: 1, delay: 0, keepPlaying: false, fadeOthers: null };
+      return { type, assetId: null, volume: 1, delay: 0, keepPlaying: false, loop: false, fadeOthers: null };
     case "send":
       return { type, message: defaultMessage("osc"), delay: 0 };
     case "timer":
@@ -437,6 +446,10 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
             <Switch size="sm" checked={!!a.keepPlaying} onCheckedChange={(v) => onChange({ ...a, keepPlaying: v })} />
             keep playing into next scene
           </label>
+          <label className="flex items-center gap-1 text-[10.5px] text-muted-foreground" title="Start again from the top when it ends, until a cue or a scene fades it out (a music bed).">
+            <Switch size="sm" checked={!!a.loop} onCheckedChange={(v) => onChange({ ...a, loop: v })} />
+            loop
+          </label>
           {lbl("as it starts")}
           {sel(
             !a.fadeOthers ? "keep" : a.fadeOthers.which === "all" ? "all" : "chosen",
@@ -477,7 +490,7 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       );
       break;
     case "send":
-      body = <MessageFields compact hideType={a.message.type === "hog"} m={a.message} onChange={(message) => onChange({ ...a, message })} />;
+      body = <MessageFields roomy hideType={a.message.type === "hog"} m={a.message} onChange={(message) => onChange({ ...a, message })} />;
       break;
     case "timer":
       body = (
@@ -488,7 +501,7 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       );
       break;
     case "announce":
-      body = announcements.length ? sel(a.announcementId, announcements.map((x) => ({ value: x.id, label: x.name })), (v) => onChange({ ...a, announcementId: v }), "w-[200px]") : <span className="text-muted-foreground">Add announcements in Show Mode → Announce first.</span>;
+      body = announcements.length ? sel(a.announcementId, announcements.map((x) => ({ value: x.id, label: x.name })), (v) => onChange({ ...a, announcementId: v }), "w-[200px]") : <span className="text-muted-foreground">Add announcements under Quick actions → Announce first.</span>;
       break;
     case "names":
       body = (
@@ -553,6 +566,31 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       break;
   }
   const info = infoFor(a);
+  const delay = (
+    <label className={cn("flex h-6 shrink-0 items-center gap-0.5", a.delay > 0 ? "text-armed" : "text-muted-foreground/60")} title="Delay after GO (seconds)">
+      <Timer className="size-3.5" />
+      <NumberInput className="h-6 w-12 px-1 text-[11px]" value={a.delay} min={0} step={0.5} onChange={(v) => onChange({ ...a, delay: v })} />
+      <span>s</span>
+    </label>
+  );
+  // Lighting / MIDI / OSC has the most fields: its own roomy card, like a clip's time markers.
+  if (a.type === "send")
+    return (
+      <div className="my-1 space-y-3 rounded-xl border border-border/70 bg-black/20 p-3">
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="flex min-w-0 items-center gap-2 text-[12.5px] font-medium [&_svg]:size-4 [&_svg]:shrink-0" title={info.label}>
+            {info.icon}
+            <span className="truncate">{info.label}</span>
+          </span>
+          <span className="ml-auto" />
+          {delay}
+          <Button size="icon-sm" variant="ghost" className="rounded-lg text-muted-foreground hover:text-destructive" onClick={onRemove} aria-label="Remove action" title="Remove action">
+            <X />
+          </Button>
+        </div>
+        {body}
+      </div>
+    );
   return (
     <div className="group/action flex items-start gap-2 rounded-md px-1 py-1 text-[11px] hover:bg-accent/40">
       <span className="flex h-6 w-[112px] shrink-0 items-center gap-1.5 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0" title={info.label}>
@@ -560,11 +598,7 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
         <span className="truncate">{info.label}</span>
       </span>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">{body}</div>
-      <label className={cn("flex h-6 shrink-0 items-center gap-0.5", a.delay > 0 ? "text-armed" : "text-muted-foreground/60")} title="Delay after GO (seconds)">
-        <Timer className="size-3.5" />
-        <NumberInput className="h-6 w-12 px-1 text-[11px]" value={a.delay} min={0} step={0.5} onChange={(v) => onChange({ ...a, delay: v })} />
-        <span>s</span>
-      </label>
+      {delay}
       <Button size="icon-xs" variant="ghost" className="opacity-0 group-hover/action:opacity-100 hover:text-destructive focus-visible:opacity-100" onClick={onRemove} aria-label="Remove action" title="Remove action">
         <X />
       </Button>

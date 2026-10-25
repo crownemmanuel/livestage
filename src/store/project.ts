@@ -4,6 +4,7 @@ import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
 import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, defaultTimers, HOG_DEFAULT_HOST, makeGroup, makeScene } from "@/core/factories";
 import { autoGroup, normalizeGroups } from "@/core/groups";
 import { FOH_ASSETS, FOH_CALLS, FOH_PIN, fohAnnouncements } from "@/core/fohCalls";
+import { SFX_ASSETS } from "@/core/sfxLibrary";
 import { loadProjectFile, resolveAssetUrls, saveProjectFile } from "@/core/platform";
 import type { Asset, OutputSettings, Project, Scene, SceneComponent, SceneGroup } from "@/core/types";
 
@@ -182,8 +183,10 @@ export function migrateProject(p: Project): Project {
     merged.announcements = merged.announcements.map((a) => (a.id === "ann_foh_technical" ? { ...a, pinned: true, urgent: true } : a));
     merged.demoAdditions = [...merged.demoAdditions!, FOH_PIN];
   }
+  // The sound effects library: every show gets the ones it does not have yet.
+  merged.assets = [...merged.assets, ...SFX_ASSETS.filter((a) => !merged.assets.some((x) => x.id === a.id))];
   // Built-in assets ship with the app: keep their definitions in step with the code.
-  const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS, ...FOH_ASSETS].map((a) => [a.id, a]));
+  const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS, ...FOH_ASSETS, ...SFX_ASSETS].map((a) => [a.id, a]));
   // Keep the keys of local copies (from a show package or sync); resolveAssetUrls points at them when present.
   merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)!, file: a.file, macFile: a.macFile } : a));
   return merged;

@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Monitor } from "lucide-react";
+import { AlertTriangle, Grid3x3, Monitor, MonitorCog, Power, RectangleHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { listMonitors, isTauri, openOutputWindow, type MonitorInfo } from "@/core/platform";
 import type { ScalingMode } from "@/core/types";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
-import { AssetField, ColorField, Field, NumberInput, Section, SelectBox, SelectField, SliderField, SwitchField, TextField } from "./fields";
+import { AssetField, ColorField, Field, NumberInput, SelectBox, SelectField, SliderField, SwitchField, TextField } from "./fields";
+import { SidebarDialog, type SidebarSection } from "./SidebarDialog";
+
+type ScreensSection = "canvas" | "display" | "guides" | "standby";
+
+const SECTIONS: SidebarSection<ScreensSection>[] = [
+  { id: "canvas", label: "LED wall canvas", icon: <RectangleHorizontal />, blurb: "The wall is designed in these canvas pixels, then mapped to the output display." },
+  { id: "display", label: "Output display", icon: <MonitorCog />, blurb: "Which screen the audience output opens on, and how it fills it." },
+  { id: "guides", label: "Guides & test pattern", icon: <Grid3x3 />, blurb: "Safe-area guides and a test pattern for lining up the wall." },
+  { id: "standby", label: "Standby", icon: <Power />, blurb: "The safe picture the wall shows on Standby." },
+];
 
 const PRESETS: [number, number][] = [
   [1920, 1080],
@@ -27,6 +36,7 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
   const set = useProject.getState().setOutput;
   const status = useShow((s) => s.outputStatus);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [section, setSection] = useState<ScreensSection>("canvas");
   useEffect(() => {
     if (open) void listMonitors().then(setMonitors);
   }, [open]);
@@ -38,14 +48,10 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
   const shapeDiffers = mon && Math.abs(mon.width / mon.height / (o.canvasWidth / o.canvasHeight) - 1) > 0.02;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[620px]">
-        <DialogHeader>
-          <DialogTitle>Output settings</DialogTitle>
-          <DialogDescription>The LED wall is designed in logical canvas pixels, then mapped to the output display.</DialogDescription>
-        </DialogHeader>
-
-        <Section title="LED wall canvas">
+    <SidebarDialog open={open} onOpenChange={onOpenChange} title="Screens" sections={SECTIONS} section={section} onSection={setSection}>
+      <div className="space-y-4">
+        {section === "canvas" && (
+          <>
           <div className="flex flex-wrap gap-1">
             {PRESETS.map(([w, h]) => (
               <Button key={`${w}x${h}`} size="xs" variant={o.canvasWidth === w && o.canvasHeight === h ? "secondary" : "outline"} onClick={() => set({ canvasWidth: w, canvasHeight: h })}>
@@ -82,9 +88,11 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
           )}
           <SliderField label="Target frame rate" value={o.targetFps} min={24} max={60} step={1} unit="fps" onChange={(targetFps) => set({ targetFps })} />
           <ColorField label="Background" value={o.backgroundColor} onChange={(backgroundColor) => set({ backgroundColor })} />
-        </Section>
+          </>
+        )}
 
-        <Section title="Output display">
+        {section === "display" && (
+          <>
           <Field label="Monitor">
             <SelectBox
               value={mon?.name ?? "__auto__"}
@@ -135,31 +143,28 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
               Apply to output window
             </Button>
           </div>
-        </Section>
+          </>
+        )}
 
-        <Section title="Guides & safety">
+        {section === "guides" && (
+          <>
           <SwitchField label="Safe-area guides" value={o.safeArea.enabled} onChange={(enabled) => set({ safeArea: { ...o.safeArea, enabled } })} />
           <SliderField label="Safe margin" value={o.safeArea.marginPct} min={0} max={20} step={0.5} unit="%" onChange={(marginPct) => set({ safeArea: { ...o.safeArea, marginPct } })} />
           <SwitchField label="Guides on output" hint="Show the safe area on the LED wall itself (for setup only)" value={o.safeArea.showOnOutput} onChange={(showOnOutput) => set({ safeArea: { ...o.safeArea, showOnOutput } })} />
           <SwitchField label="Test pattern" hint="Replaces the program on the output with a test pattern" value={o.testPattern} onChange={(testPattern) => set({ testPattern })} />
-          <SelectField
-            label="Audio from"
-            value={o.audioHost}
-            onChange={(audioHost) => set({ audioHost })}
-            options={[
-              { value: "output", label: "Output window (when open)" },
-              { value: "operator", label: "Operator window" },
-            ]}
-          />
-        </Section>
+          </>
+        )}
 
-        <Section title="Standby visual">
+        {section === "standby" && (
+          <>
           <TextField label="Title" value={o.standby.text} onChange={(text) => set({ standby: { ...o.standby, text } })} />
           <TextField label="Subtitle" value={o.standby.subtext} onChange={(subtext) => set({ standby: { ...o.standby, subtext } })} />
           <ColorField label="Color" value={o.standby.color} onChange={(color) => set({ standby: { ...o.standby, color } })} />
           <AssetField label="Image" type="image" value={o.standby.assetId} onChange={(assetId) => set({ standby: { ...o.standby, assetId } })} />
-        </Section>
-      </DialogContent>
-    </Dialog>
+          <p className="text-[12px] leading-relaxed text-muted-foreground">An image replaces the title and subtitle. It follows Scaling: Stretch fills the whole wall, Fill crops to it, Fit keeps its shape.</p>
+          </>
+        )}
+      </div>
+    </SidebarDialog>
   );
 }

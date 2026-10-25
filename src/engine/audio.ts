@@ -1,9 +1,9 @@
 // Program audio: thunder for lightning strikes and sound cues (a re-fired sound replaces itself). Runs only in
 // the window that is the audio host so sound is never doubled between operator and output.
 
-import { now } from "@/core/clock";
+import { now, sceneNow } from "@/core/clock";
 import { num, str } from "@/core/effects";
-import type { LightningStrike, SoundEvent } from "@/core/types";
+import type { LightningStrike, SceneRuntime, SoundEvent } from "@/core/types";
 import { mixLevel, useShow } from "@/store/show";
 import { registerAudioContext } from "./audioOutput";
 
@@ -88,8 +88,27 @@ async function playFile(url: string, when: number, volume: number) {
 /**
  * Cue sounds playing now, one per sound file. Firing the same sound again (re-firing its cue or
  * re-taking the scene) replaces the copy already playing instead of stacking another on top.
+ *
+ * A cue sound follows the live scene's clock like its videos do: Hold silences it where it is,
+ * resume carries on from there, and a scrub moves it with the picture. Held, it has no source
+ * node; `pos` is where it will carry on from.
  */
-const cueSounds = new Map<string, { src: AudioBufferSourceNode; gain: GainNode; volume: number; runKey: string; keepPlaying: boolean }>();
+interface CueSound {
+  buf: AudioBuffer;
+  volume: number;
+  runKey: string;
+  keepPlaying: boolean;
+  /** Starts again from the top when it ends (a music bed). */
+  loop: boolean;
+  /** Scene time (ms) of its run when it started. */
+  at: number;
+  /** Seconds into the file at context time `ctx0` (negative: starts that much later). */
+  pos: number;
+  ctx0: number;
+  src: AudioBufferSourceNode | null;
+  gain: GainNode | null;
+}
+const cueSounds = new Map<string, CueSound>();
 
 /** Mixer key of a cue sound (see ProgramState.mix). */
 export const soundMixKey = (assetId: string) => `sound:${assetId}`;
@@ -97,18 +116,59 @@ export const soundMixKey = (assetId: string) => `sound:${assetId}`;
 /** The live mixer moved: glide each playing cue sound to its new level. */
 function applyMix() {
   const ac = audio();
-  for (const [key, s] of cueSounds) s.gain.gain.setTargetAtTime(s.volume * mixLevel(soundMixKey(key)), ac.currentTime, 0.05);
+  for (const [key, s] of cueSounds) s.gain?.gain.setTargetAtTime(s.volume * mixLevel(soundMixKey(key)), ac.currentTime, 0.05);
+}
+
+/** A position past the end of a looping sound, wrapped back into the file. */
+const wrap = (s: CueSound, pos: number) => (s.loop && pos > 0 ? pos % s.buf.duration : pos);
+
+/** Seconds into the file now. */
+function soundPos(s: CueSound, ac: AudioContext) {
+  return wrap(s, s.src ? s.pos + (ac.currentTime - s.ctx0) : s.pos);
+}
+
+/** Fade the playing node out over `seconds` from `delay` seconds on; the sound itself is kept. */
+function stopNode(s: CueSound, seconds: number, delay = 0) {
+  if (!s.src || !s.gain) return;
+  const ac = audio();
+  const from = ac.currentTime + delay;
+  s.gain.gain.cancelScheduledValues(ac.currentTime);
+  s.gain.gain.setValueAtTime(s.gain.gain.value, from);
+  s.gain.gain.linearRampToValueAtTime(0.0001, from + seconds);
+  s.src.stop(from + seconds + 0.05);
+  s.src = s.gain = null;
+}
+
+/** Play the sound from `pos` seconds into the file (negative: after that many seconds). */
+function startNode(key: string, s: CueSound, pos: number, fadeIn = 0) {
+  const ac = audio();
+  const src = ac.createBufferSource();
+  src.buffer = s.buf;
+  src.loop = s.loop;
+  pos = wrap(s, pos);
+  const gain = ac.createGain();
+  const level = s.volume * mixLevel(soundMixKey(key));
+  const at = ac.currentTime + Math.max(0, -pos);
+  if (fadeIn > 0) {
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.linearRampToValueAtTime(level, at + fadeIn);
+  } else gain.gain.value = level;
+  src.connect(gain).connect(ac.destination);
+  src.onended = () => {
+    if (cueSounds.get(key)?.src === src) cueSounds.delete(key);
+  };
+  src.start(at, Math.max(0, pos));
+  s.src = src;
+  s.gain = gain;
+  s.pos = pos;
+  s.ctx0 = ac.currentTime;
 }
 
 function fadeOutCueSound(key: string, seconds: number) {
   const s = cueSounds.get(key);
   if (!s) return;
   cueSounds.delete(key);
-  const ac = audio();
-  s.gain.gain.cancelScheduledValues(ac.currentTime);
-  s.gain.gain.setValueAtTime(s.gain.gain.value, ac.currentTime);
-  s.gain.gain.linearRampToValueAtTime(0.0001, ac.currentTime + seconds);
-  s.src.stop(ac.currentTime + seconds + 0.05);
+  stopNode(s, seconds);
 }
 
 /** A sound cue with `fadeOthers` started: fade the other cue sounds it names (or all of them) from `when`. */
@@ -116,49 +176,101 @@ function fadeOthersFor(ev: SoundEvent, when: number) {
   const f = ev.fadeOthers;
   if (!f) return;
   const ac = audio();
-  const start = Math.max(ac.currentTime, when);
+  const delay = Math.max(0, when - ac.currentTime);
   const secs = Math.max(0.05, f.fade);
   for (const [key, s] of [...cueSounds]) {
     if (key === ev.assetId || (f.which !== "all" && !f.which.includes(soundMixKey(key)))) continue;
     cueSounds.delete(key);
-    s.gain.gain.cancelScheduledValues(ac.currentTime);
-    s.gain.gain.setValueAtTime(s.gain.gain.value, start);
-    s.gain.gain.linearRampToValueAtTime(0.0001, start + secs);
-    s.src.stop(start + secs + 0.05);
+    stopNode(s, secs, delay);
   }
 }
 
-/** A new scene run took the wall: the previous runs' sounds fade out, unless marked to keep playing. */
-function stopSoundsOfOtherRuns(runKey: string | null, seconds = 0.8) {
-  for (const [key, s] of [...cueSounds]) if (s.runKey !== runKey && !s.keepPlaying) fadeOutCueSound(key, seconds);
+/**
+ * A new scene run took the wall: the previous runs' sounds fade out, unless marked to keep playing.
+ * A scene set to stop carried sounds (`stopCarriedSounds`) fades those out too, over `carriedFade` seconds.
+ */
+function stopSoundsOfOtherRuns(runKey: string | null, stopCarried = false, seconds = 0.8, carriedFade = 3) {
+  for (const [key, s] of [...cueSounds]) {
+    if (s.runKey === runKey) continue;
+    if (!s.keepPlaying) fadeOutCueSound(key, seconds);
+    else if (stopCarried) fadeOutCueSound(key, carriedFade);
+  }
 }
 
-async function playCueSound(key: string, url: string, when: number, volume: number, runKey: string, keepPlaying: boolean) {
+/** The live clock as last seen (it arrives over the bus, so it is compared by value). */
+let lastClock: { key: string; base: number; pausedAt: number | null } | null = null;
+
+/**
+ * The live scene was held, resumed or scrubbed: hold, resume or move its sounds with it. A sound
+ * of its own run sits where the scene clock says; one carried over from an earlier scene
+ * (keepPlaying) holds and resumes with the wall and moves by as much as the scrub moved it.
+ */
+function followClock(rt: SceneRuntime | null) {
+  if (!rt) {
+    lastClock = null;
+    return;
+  }
+  const c = rt.clock;
+  const prev = lastClock;
+  lastClock = { key: rt.key, base: c.base, pausedAt: c.pausedAt };
+  const held = c.pausedAt !== null;
   const ac = audio();
-  const buf = await loadBuffer(url);
-  const start = Math.max(ac.currentTime, when);
-  const old = cueSounds.get(key);
-  if (old) {
-    old.gain.gain.cancelScheduledValues(ac.currentTime);
-    old.gain.gain.setValueAtTime(old.gain.gain.value, start);
-    old.gain.gain.linearRampToValueAtTime(0.0001, start + 0.15);
-    old.src.stop(start + 0.2);
+  if (prev?.key !== rt.key) {
+    // A new run took the wall: carried-over sounds go on with it (or stay held if it starts held).
+    for (const [key, s] of cueSounds) {
+      if (held && s.src) {
+        s.pos = soundPos(s, ac);
+        stopNode(s, 0.06);
+      } else if (!held && !s.src) startNode(key, s, s.pos, 0.03);
+    }
+    return;
   }
-  const src = ac.createBufferSource();
-  src.buffer = buf;
-  const gain = ac.createGain();
-  gain.gain.value = volume * mixLevel(soundMixKey(key));
-  src.connect(gain).connect(ac.destination);
-  src.onended = () => {
-    if (cueSounds.get(key)?.src === src) cueSounds.delete(key);
-  };
-  src.start(start);
-  cueSounds.set(key, { src, gain, volume, runKey, keepPlaying });
+  if (prev.base === c.base && prev.pausedAt === c.pausedAt) return;
+  const t = now();
+  // How far the scene jumped (a scrub); a hold or a resume alone moves it by nothing.
+  const jump = (c.pausedAt ?? t) - c.base - ((prev.pausedAt ?? t) - prev.base);
+  for (const [key, s] of [...cueSounds]) {
+    const pos = s.runKey === rt.key ? (sceneNow(rt, t) - s.at) / 1000 : soundPos(s, ac) + jump / 1000;
+    stopNode(s, 0.06);
+    if (pos >= s.buf.duration && !s.loop) {
+      cueSounds.delete(key);
+      continue;
+    }
+    if (held) s.pos = pos;
+    else startNode(key, s, pos, 0.03);
+  }
+}
+
+async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: string, wallAt: number) {
+  const buf = await loadBuffer(url);
+  const rt = useShow.getState().program.runtime;
+  const own = rt?.key === runKey;
+  // Its scene was replaced while the file loaded.
+  if (!own && !ev.keepPlaying) return;
+  let pos = own ? (sceneNow(rt!) - ev.at) / 1000 : (now() - wallAt) / 1000;
+  let at = ev.at;
+  // A little late (still decoding): start from the top rather than cut its first words.
+  if (pos > 0 && pos < 1.5) {
+    at += pos * 1000;
+    pos = 0;
+  }
+  const old = cueSounds.get(key);
+  if (old) stopNode(old, 0.15, Math.max(0, -pos));
+  cueSounds.delete(key);
+  if (pos >= buf.duration && !ev.loop) return;
+  const s: CueSound = { buf, volume: ev.volume, runKey, keepPlaying: !!ev.keepPlaying, loop: !!ev.loop, at, pos, ctx0: 0, src: null, gain: null };
+  cueSounds.set(key, s);
+  if (rt?.clock.pausedAt == null) startNode(key, s, pos);
 }
 
 /** Asset ids of the cue sounds playing now (diagnostics for the output heartbeat). */
 export function playingCueSounds(): string[] {
   return [...cueSounds.keys()];
+}
+
+/** Of those, the ones silent while the live scene is held. */
+export function heldCueSounds(): string[] {
+  return [...cueSounds].filter(([, s]) => !s.src).map(([k]) => k);
 }
 
 /** The announcement on the speakers now (one at a time). */
@@ -228,13 +340,14 @@ export function startProgramAudio(isHost: () => boolean): () => void {
       if (heard.has(ev.id)) continue;
       heard.add(ev.id);
       if (!isHost()) continue;
-      const wallAt = rt.clock.base + ev.at;
-      if (now() - wallAt > 1500) continue;
+      // Judged on the scene clock: a sound fired while the scene is held waits for the resume.
+      if (sceneNow(rt) - ev.at > 1500) continue;
       const asset = s.assets.find((a) => a.id === ev.assetId);
       if (!asset) continue;
+      const wallAt = rt.clock.base + ev.at;
       const ac = audio();
       fadeOthersFor(ev, ac.currentTime + Math.max(0, (wallAt - now()) / 1000));
-      void playCueSound(asset.id, asset.url, ac.currentTime + Math.max(0, (wallAt - now()) / 1000), ev.volume, rt.key, !!ev.keepPlaying).catch((e) => console.warn("sound failed", e));
+      void playCueSound(asset.id, asset.url, ev, rt.key, wallAt).catch((e) => console.warn("sound failed", e));
     }
   };
 
@@ -258,7 +371,8 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     const ann = s.program.announce;
     if (ann && ann !== prev.program.announce) handleAnnounce(ann);
     const runKey = s.program.runtime?.key ?? null;
-    if (runKey !== (prev.program.runtime?.key ?? null)) stopSoundsOfOtherRuns(runKey);
+    if (runKey !== (prev.program.runtime?.key ?? null)) stopSoundsOfOtherRuns(runKey, !!s.program.runtime?.scene.stopCarriedSounds);
+    if (s.program.runtime !== prev.program.runtime) followClock(s.program.runtime);
     if (s.program.mix !== prev.program.mix) applyMix();
     const a = s.program.runtime?.strikes;
     if (a && a !== prev.program.runtime?.strikes) handleStrikes(a);

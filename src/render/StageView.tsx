@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clamp, now, smoothstep } from "@/core/clock";
 import type { ScalingMode, SceneRuntime } from "@/core/types";
+import { cn } from "@/lib/utils";
 import { useShow } from "@/store/show";
 import { ErrorBoundary } from "@/ui/ErrorBoundary";
 import { SceneCanvas } from "./SceneCanvas";
@@ -303,7 +304,7 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
         style={{ background: st.color, opacity: 1, zIndex: 7, containerType: "size" }}
       >
         {standbyImg ? (
-          <img src={standbyImg.url} className="h-full w-full object-contain" alt="" />
+          <img src={standbyImg.url} className={cn("h-full w-full", STANDBY_FIT[output.scaling])} alt="" />
         ) : (
           <div className="text-center" style={{ color: "#d9cfb8", fontFamily: "Georgia, 'Times New Roman', serif" }}>
             <div style={{ fontSize: "9cqh", letterSpacing: "0.35em", fontWeight: 400 }}>{st.text}</div>
@@ -315,6 +316,9 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
     </>
   );
 });
+
+/** The standby picture follows the output's Scaling: Stretch fills the whole wall, Fill crops to it, Fit / Native keep its shape. */
+const STANDBY_FIT: Record<ScalingMode, string> = { stretch: "object-fill", fill: "object-cover", fit: "object-contain", native: "object-contain" };
 
 /** Vertical framing of the scene's current media plate (0 = top, 1 = bottom). */
 function plateAnchorY(rt: SceneRuntime): number {

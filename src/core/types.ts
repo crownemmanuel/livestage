@@ -1,4 +1,4 @@
-// Serializable data model for Live Studio.
+// Serializable data model for LiveStage.
 // Everything here must survive JSON round-trips: it is saved to disk and
 // broadcast between the operator and output windows.
 
@@ -39,7 +39,11 @@ export interface Asset {
   problems?: import("./mediaCheck").MediaProblem[];
   /** The file was re-encoded into the wall format on import (the original's name and probe are kept here). */
   optimised?: { from: string; at: number; source?: import("./mediaCheck").MediaProbe };
+  /** Audio only: what kind of sound it is, for its icon and colour on the live mixer. Unset: guessed from the name. */
+  audioRole?: AudioRole;
 }
+
+export type AudioRole = "music" | "voice" | "ambience" | "sfx";
 
 // ---------------------------------------------------------------- output
 
@@ -58,8 +62,6 @@ export interface OutputSettings {
   safeArea: { enabled: boolean; marginPct: number; showOnOutput: boolean };
   testPattern: boolean;
   standby: { text: string; subtext: string; assetId: string | null; color: string };
-  /** Which window plays program audio (thunder, transition audio, layer audio). */
-  audioHost: "output" | "operator";
   /** How a show timer looks when it is put on screen over everything. */
   timerOverlay: TimerOverlayStyle;
 }
@@ -570,6 +572,8 @@ export type CueAction =
       delay: number;
       /** Keep playing when another scene is taken. Default: the sound fades out when the scene changes. */
       keepPlaying?: boolean;
+      /** Start again from the top when it ends, until it is faded out (a music bed under a scene of any length). */
+      loop?: boolean;
       /** When this sound starts, fade other audio out (null/absent = leave it). See AudioFadeOut. */
       fadeOthers?: AudioFadeOut | null;
     }
@@ -637,6 +641,11 @@ export interface Scene {
   markers: Record<string, Vec2>;
   cues: Cue[];
   transition: TransitionSpec;
+  /**
+   * Taking this scene fades out the cue sounds still playing from earlier scenes, music marked "keep playing"
+   * included. Off (default): that music carries on into this scene.
+   */
+  stopCarriedSounds?: boolean;
   thumbnail: string | null;
   look?: LookSettings;
   /** Subtle hand-held drift of the virtual camera (and 2.5D parallax on plates). */
@@ -757,7 +766,7 @@ export type IoMessage =
    * number come from the lighting library at send time (so renumbering a list updates every cue);
    * kind/number here are the fallback and what a custom command uses.
    */
-  | { type: "hog"; op: HogOp; item: string | null; kind: HogKind; number: string; /** GO only, cuelists only; "" = next cue */ cue: string };
+  | { type: "hog"; op: HogOp; item: string | null; kind: HogKind; number: string; /** GO only, cuelists only; "" = next cue */ cue: string; /** GO only: push this master's fader to full first, so a list parked on a lowered fader still shows ("" or missing = leave faders alone) */ master?: string };
 
 export type HogKind = "cuelist" | "scene" | "macro";
 export type HogOp = "go" | "release" | "halt" | "resume";
@@ -881,6 +890,8 @@ export interface SoundEvent {
   volume: number;
   /** Carries on when another scene is taken (see the sound action). */
   keepPlaying?: boolean;
+  /** Loops until faded out (see the sound action). */
+  loop?: boolean;
   /** Other audio this sound fades out as it starts (see the sound action). */
   fadeOthers?: AudioFadeOut;
 }

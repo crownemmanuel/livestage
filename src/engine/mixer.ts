@@ -4,7 +4,7 @@
 import { clipStateAt } from "@/core/clipActor";
 import { videoAudioFade } from "@/core/runtime";
 import { sceneNow } from "@/core/clock";
-import type { Asset, SceneComponent, SceneRuntime } from "@/core/types";
+import type { Asset, AudioRole, SceneComponent, SceneRuntime } from "@/core/types";
 import { useShow } from "@/store/show";
 import { playingCueSounds, soundMixKey } from "./audio";
 
@@ -12,6 +12,8 @@ export interface MixSource {
   /** Mixer key (ProgramState.mix). */
   key: string;
   kind: "sound" | "video" | "background" | "videoActor";
+  /** Cue sounds: music, voice, ambience or effect (the asset's `audioRole`, or guessed from its name). */
+  role?: AudioRole | null;
   name: string;
   /** The operator's trim, 0..1 (1 = as designed). */
   level: number;
@@ -23,8 +25,20 @@ export interface MixSource {
 function hostSounds(): string[] {
   const s = useShow.getState();
   const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
-  if (s.output.audioHost === "output" && outputUp) return s.outputStatus?.sounds ?? [];
+  if (outputUp) return s.outputStatus?.sounds ?? [];
   return playingCueSounds();
+}
+
+/** The kind of a sound file: its `audioRole`, else a guess from the name (narration, song, ambience, sfx…), else null. */
+export function audioRoleOf(asset: Asset | undefined): AudioRole | null {
+  if (!asset) return null;
+  if (asset.audioRole) return asset.audioRole;
+  const n = asset.name;
+  if (/narrat|\bnar-|voice|\bvo\b|dialogue|speech|announce|narrator/i.test(n)) return "voice";
+  if (/\b(music|song|bed|track|underscore|score|hymn|psalm)\b/i.test(n)) return "music";
+  if (/ambien|atmos|room tone|\bwind\b|crowd/i.test(n)) return "ambience";
+  if (/\bsfx\b|\bfx\b|effect|thunder|impact|whoosh|kids|shout/i.test(n)) return "sfx";
+  return null;
 }
 
 const isVideo = (assets: Asset[], id: string | null | undefined) => !!id && assets.find((a) => a.id === id)?.type === "video";
@@ -53,7 +67,7 @@ export function liveAudioSources(): MixSource[] {
   for (const assetId of hostSounds()) {
     const key = soundMixKey(assetId);
     const asset = s.assets.find((a) => a.id === assetId);
-    out.push({ key, kind: "sound", name: asset?.name ?? assetId, level: mix[key] ?? 1, designed: 1 });
+    out.push({ key, kind: "sound", role: audioRoleOf(asset), name: asset?.name ?? assetId, level: mix[key] ?? 1, designed: 1 });
   }
   const rt = s.program.runtime;
   if (rt) {

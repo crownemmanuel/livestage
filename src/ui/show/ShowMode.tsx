@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowRightLeft,
-  ChevronLeft,
   ChevronRight,
   CircleDot,
   Clapperboard,
@@ -20,12 +19,10 @@ import {
   Pause,
   PawPrint,
   Play,
-  Repeat,
   RotateCcw,
   Route,
   Scan,
   Send,
-  SkipForward,
   SlidersHorizontal,
   Snowflake,
   Sparkles,
@@ -46,6 +43,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
+import { nextCueIsAuto } from "@/core/runtime";
 import type { CueAction, TransitionKind, TransitionSpec } from "@/core/types";
 import { describeMessage, useIo } from "@/engine/io";
 import { cancelPending, cueControl, pendingCount, takeScene } from "@/engine/operator";
@@ -56,12 +54,10 @@ import { NumberInput, SelectBox } from "../fields";
 import { FramingBar, FramingOverlay, Timeline } from "../PreviewTools";
 import { SceneList, useSceneCodes } from "../SceneList";
 import { FireIcon, fireLabel } from "../builder/FireField";
-import { flowNext } from "@/core/groups";
 import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 import { MediaPanel, useSceneMediaDrop } from "./MediaPanel";
 import { MixerPanel } from "./MixerPanel";
-import { AnnouncementsPanel, TimersPanel } from "./ShowTools";
 
 export const TRANSITIONS: { value: TransitionKind; label: string }[] = [
   { value: "cut", label: "Cut" },
@@ -134,10 +130,11 @@ function MonitorHeader({ kind, children, info }: { kind: "preview" | "program"; 
 function SceneTitle({ scene }: { scene: { id: string; number: number; name: string } | null | undefined }) {
   const codes = useSceneCodes();
   if (!scene) return <span className="text-muted-foreground">Nothing selected</span>;
+  // Just the code: the name is in the scene list, and on hover here.
   return (
-    <span className="min-w-0 truncate">
-      <span className="font-key font-semibold text-muted-foreground">{codes.get(scene.id) ?? String(scene.number).padStart(2, "0")}</span> {scene.name}
-    </span>
+    <Tip label={scene.name}>
+      <span className="font-key font-semibold text-muted-foreground">{codes.get(scene.id) ?? String(scene.number).padStart(2, "0")}</span>
+    </Tip>
   );
 }
 
@@ -201,35 +198,14 @@ function HeldBadge() {
   );
 }
 
-/** Read-only: the live scene's next cue, even while another scene is in the preview. */
+/** Delayed actions still waiting on the live wall, with a cancel; nothing when there are none. */
 function LiveNextCue() {
-  const rt = useShow((s) => s.program.runtime);
   const standby = useShow((s) => s.program.standby);
   const pend = pendingCount("program");
   useTick(500);
-  const project = useProject((s) => s.project);
-  const codes = useSceneCodes();
-  if (!rt || standby) return <div className="mt-2 text-[12px] text-muted-foreground">Nothing live</div>;
-  const next = rt.scene.cues[rt.cuePointer];
-  const flow = next ? null : flowNext(project, rt.scene.id);
+  if (standby || pend === 0) return null;
   return (
     <div className="mt-2 flex items-center gap-2 text-[12.5px]">
-      <Tip label="The live scene's next cue">
-        <SkipForward className="size-3.5 shrink-0 text-live" />
-      </Tip>
-      <span className="min-w-0 flex-1 truncate">
-        {next ? (
-          <>
-            <span className="font-key font-semibold text-muted-foreground">{rt.cuePointer + 1}</span> {next.name}
-          </>
-        ) : flow ? (
-          <>
-            <span className="text-muted-foreground">GO takes</span> <span className="font-key font-semibold text-muted-foreground">{codes.get(flow.id)}</span> {flow.name}
-          </>
-        ) : (
-          <span className="text-muted-foreground">End of the cue list</span>
-        )}
-      </span>
       {pend > 0 && (
         <Tip label="Delayed actions still waiting to fire. Click (or Esc) to cancel them.">
           <button className="flex items-center gap-1 rounded-full bg-armed/15 px-2 py-0.5 text-[11.5px] font-semibold text-armed" onClick={() => cancelPending("program")}>
@@ -391,10 +367,9 @@ function ActionIcons({ actions }: { actions: CueAction[] }) {
 
 function CueList() {
   const { target, rt } = useControlTarget();
-  const [tab, setTab] = useState<"cues" | "media" | "announce" | "timers">("cues");
+  const [tab, setTab] = useState<"cues" | "media">("cues");
   const mediaDrop = useSceneMediaDrop();
   useTick(400);
-  const runningTimers = useShow((s) => Object.values(s.program.timers ?? {}).filter((r) => r.running).length);
   if (!rt) return null;
   const cues = rt.scene.cues;
   const live = target === "program";
@@ -402,7 +377,7 @@ function CueList() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2">
         <div className="flex rounded-lg bg-well p-0.5">
-          {(["cues", "media", "announce", "timers"] as const).map((k) => (
+          {(["cues", "media"] as const).map((k) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -410,17 +385,15 @@ function CueList() {
               onDragEnter={k === "media" ? () => setTab("media") : undefined}
               className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold", tab === k ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}
             >
-              {k === "cues" ? <ListOrdered className="size-3.5" /> : k === "media" ? <Images className="size-3.5" /> : k === "announce" ? <Megaphone className="size-3.5" /> : <Timer className="size-3.5" />}
-              {k === "cues" ? "Cues" : k === "media" ? "Media" : k === "announce" ? "Announce" : "Timers"}
+              {k === "cues" ? <ListOrdered className="size-3.5" /> : <Images className="size-3.5" />}
+              {k === "cues" ? "Cues" : "Media"}
               {k === "cues" && <span className="text-muted-foreground">{cues.length}</span>}
-              {k === "timers" && runningTimers > 0 && <span className="size-2 rounded-full bg-preview" />}
             </button>
           ))}
         </div>
         <Tip label={live ? "These cues fire on the live wall" : "These cues fire in the preview only"}>
           <span className={cn("size-2.5 shrink-0 rounded-full", live ? "bg-live" : "bg-preview")} />
         </Tip>
-        <span className="min-w-0 flex-1 basis-[120px] truncate text-[12.5px] text-muted-foreground">{rt.scene.name}</span>
         <div className="ml-auto flex items-center gap-1">
           <CueButtons target={target} />
         </div>
@@ -428,10 +401,6 @@ function CueList() {
       <ScrollArea className={cn("min-h-0 flex-1", tab === "media" && mediaDrop.over && "bg-preview/[0.05] ring-2 ring-inset ring-preview/50")} {...(tab === "media" ? mediaDrop.dropProps : {})}>
         {tab === "media" ? (
           <MediaPanel />
-        ) : tab === "announce" ? (
-          <AnnouncementsPanel />
-        ) : tab === "timers" ? (
-          <TimersPanel />
         ) : (
           <ol className="space-y-1.5 px-3 pb-3">
             {cues.map((c, i) => {
@@ -451,8 +420,13 @@ function CueList() {
                   <span className={cn("w-7 shrink-0 text-right font-key text-[20px] font-bold leading-none tabular", next ? (live ? "text-live" : "text-preview") : "text-muted-foreground/70")}>{i + 1}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
+                      {c.fire && c.fire.mode !== "go" && (
+                        <Tip label="Fires by itself (GO fires it early)">
+                          <span className="shrink-0 rounded border border-armed/50 bg-armed/15 px-1.5 py-px font-key text-[10.5px] font-bold tracking-wider text-armed">AUTO</span>
+                        </Tip>
+                      )}
                       <span className="truncate text-[14px] font-semibold leading-tight">{c.name}</span>
-                      {next && <ChevronRight className={cn("size-4 shrink-0", live ? "text-live" : "text-preview")} />}
+                      {next &&<ChevronRight className={cn("size-4 shrink-0", live ? "text-live" : "text-preview")} />}
                     </div>
                     {c.fire && c.fire.mode !== "go" && (
                       <div className="mt-0.5 flex items-center gap-1 text-[11.5px] text-armed">
@@ -469,11 +443,19 @@ function CueList() {
                       <Crosshair />
                     </Button>
                   </Tip>
-                  <Tip label={live ? "Fire this cue on the live wall" : "Fire this cue in the preview"}>
-                    <Button size="icon-sm" className={cn("size-9 rounded-lg", live ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70")} onClick={() => cueControl.fire(target, i)}>
-                      <Zap />
-                    </Button>
-                  </Tip>
+                  {c.fire && c.fire.mode !== "go" ? (
+                    <Tip label={live ? "This cue fires by itself. Trigger it by hand now, on the live wall" : "This cue fires by itself. Trigger it by hand now, in the preview"}>
+                      <Button size="sm" variant="outline" className={cn("h-9 rounded-lg px-2.5 text-[12px] font-semibold", live ? "border-live/60 text-live hover:text-live" : "text-foreground")} onClick={() => cueControl.fire(target, i)}>
+                        Fire now
+                      </Button>
+                    </Tip>
+                  ) : (
+                    <Tip label={live ? "Fire this cue on the live wall" : "Fire this cue in the preview"}>
+                      <Button size="icon-sm" className={cn("size-9 rounded-lg", live ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70")} onClick={() => cueControl.fire(target, i)}>
+                        <Zap />
+                      </Button>
+                    </Tip>
+                  )}
                 </li>
               );
             })}
@@ -487,32 +469,21 @@ function CueList() {
 
 function CueButtons({ target }: { target: Target }) {
   const live = useShow((s) => (s.program.standby ? null : s.program.runtime));
+  const rt = useShow((s) => (target === "program" ? s.program.runtime : s.preview));
+  useTick(250);
+  // The next cue fires by itself: GO still fires it, early.
+  const auto = !!rt && nextCueIsAuto(rt, sceneNow(rt) / 1000);
   return (
     <>
       {target === "preview" && live && (
-        <Tip label="Show the live scene's cues">
-          <Button size="sm" variant="outline" className="h-9 max-w-[200px] gap-1.5 border-live/50 text-live hover:text-live" onClick={() => useProject.getState().selectScene(live.scene.id)}>
+        <Tip label={`Show the live scene's cues (${live.scene.name})`}>
+          <Button size="sm" variant="outline" className="h-9 gap-1.5 border-live/50 text-live hover:text-live" onClick={() => useProject.getState().selectScene(live.scene.id)}>
             <span className="size-2 shrink-0 rounded-full bg-live" />
-            <span className="truncate">{live.scene.name}</span>
+            Live
           </Button>
         </Tip>
       )}
-      <Tip label="Step the next cue back">
-        <Button size="icon-sm" variant="ghost" className="size-9" onClick={() => cueControl.back(target)}>
-          <ChevronLeft />
-        </Button>
-      </Tip>
-      <Tip label="Skip the next cue">
-        <Button size="icon-sm" variant="ghost" className="size-9" onClick={() => cueControl.skip(target)}>
-          <ChevronRight />
-        </Button>
-      </Tip>
-      <Tip label="Fire the last cue again">
-        <Button size="icon-sm" variant="ghost" className="size-9" onClick={() => cueControl.repeat(target)}>
-          <Repeat />
-        </Button>
-      </Tip>
-      <Tip label={target === "program" ? "Fire the next cue on the live wall (G)" : "Fire the next cue in the preview (G)"}>
+      <Tip label={`${target === "program" ? "Fire the next cue on the live wall (G)" : "Fire the next cue in the preview (G)"}${auto ? ". It would fire by itself; GO fires it now." : ""}`}>
         <Button
           className={cn(
             "h-10 min-w-[120px] gap-2 rounded-lg font-key text-[17px] font-bold tracking-wide",
@@ -636,7 +607,7 @@ export function describeAction(a: import("@/core/types").CueAction): string {
   }
 }
 
-/** The operator plays the live wall's video sound when it is the audio host, or when no output window is up (same rule as cue sounds). */
+/** The operator plays the live wall's video sound only while no output window is up (same rule as cue sounds). */
 function useOperatorIsAudioHost(): boolean {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -645,5 +616,5 @@ function useOperatorIsAudioHost(): boolean {
   }, []);
   const s = useShow.getState();
   const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
-  return s.output.audioHost === "operator" || !outputUp;
+  return !outputUp;
 }

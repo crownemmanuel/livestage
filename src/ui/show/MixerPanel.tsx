@@ -2,16 +2,26 @@
 // with its sound on). The faders trim the designed volume; the trims are show-wide live state.
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Clapperboard, Film, Mountain, Music, RotateCcw, SlidersVertical, Volume2, VolumeX } from "lucide-react";
+import { AudioLines, ChevronDown, ChevronRight, Clapperboard, Film, Mic, Mountain, Music, RotateCcw, SlidersVertical, Sparkles, Trees, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { liveAudioSources, type MixSource } from "@/engine/mixer";
 import { useShow } from "@/store/show";
 import { InfoTip } from "../kit";
-import { AudioOutputPicker } from "./AudioOutputPicker";
 
-const ICONS: Record<MixSource["kind"], typeof Music> = { sound: Music, video: Film, background: Mountain, videoActor: Clapperboard };
+/** Icon, colour and label for each kind of source: cue sounds by what they are, video sound in amber. */
+const LOOKS: Record<string, { icon: typeof Music; color: string; label: string }> = {
+  music: { icon: Music, color: "text-violet-400", label: "Music" },
+  voice: { icon: Mic, color: "text-sky-400", label: "Voice / narration" },
+  ambience: { icon: Trees, color: "text-emerald-400", label: "Ambience" },
+  sfx: { icon: Sparkles, color: "text-orange-400", label: "Sound effect" },
+  sound: { icon: AudioLines, color: "text-muted-foreground", label: "Cue sound" },
+  video: { icon: Film, color: "text-armed", label: "Video sound" },
+  background: { icon: Mountain, color: "text-armed", label: "Background video sound" },
+  videoActor: { icon: Clapperboard, color: "text-armed", label: "Video actor sound" },
+};
+const lookOf = (src: MixSource) => LOOKS[src.kind === "sound" ? (src.role ?? "sound") : src.kind];
 
 export function MixerPanel() {
   const [open, setOpen] = useState(true);
@@ -37,7 +47,7 @@ export function MixerPanel() {
           <span className="text-[12px] text-muted-foreground">{sources.length ? `${sources.length} playing` : "nothing playing"}</span>
         </button>
         <InfoTip side="left">
-          Every sound on the live wall right now: cue sounds and video with its sound on. Each fader trims that source on the speakers (100% = as designed). The trims stay through takes and reloads, and come back the next time the
+          Every sound on the live wall right now: music (violet), voice (blue), ambience (green), effects (orange) and video with its sound on (amber). The speakers it plays on are chosen under Settings → Audio output. Each fader trims that source on the speakers (100% = as designed). The trims stay through takes and reloads, and come back the next time the
           same sound or video plays.
         </InfoTip>
         {trimmed && (
@@ -48,11 +58,11 @@ export function MixerPanel() {
           </Button>
         )}
       </div>
-      {open && <AudioOutputPicker />}
       {open && sources.length > 0 && (
         <div className="max-h-56 space-y-1.5 overflow-y-auto px-3 pb-3">
           {sources.map((src) => {
-            const Icon = ICONS[src.kind];
+            const look = lookOf(src);
+            const Icon = look.icon;
             const muted = src.level <= 0.001;
             return (
               <div key={src.key} className="grid grid-cols-[1.5rem_minmax(0,1fr)_2.6rem] items-center gap-x-2">
@@ -73,7 +83,9 @@ export function MixerPanel() {
                 </Button>
                 <div className="min-w-0">
                   <div className="flex items-center gap-1 text-[12px] text-foreground/85">
-                    <Icon className="size-3 shrink-0 text-muted-foreground" />
+                    <span title={look.label} className="flex shrink-0">
+                      <Icon className={cn("size-3.5", look.color)} />
+                    </span>
                     <span className="truncate" title={src.name}>{src.name}</span>
                   </div>
                   <Slider className="mt-1" value={[src.level]} min={0} max={1} step={0.01} onValueChange={(v) => setMix(src.key, v[0])} />

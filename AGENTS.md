@@ -2,7 +2,7 @@
 
 Guidance for AI coding agents working in this repository (Claude Code reads it through `CLAUDE.md`).
 
-Live Studio is a Tauri 2 + React + Three.js show-control app for an LED wall. Start with [README.md](README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The app runs a real show: stability matters more than new visuals.
+LiveStage is a Tauri 2 + React + Three.js show-control app for an LED wall. Start with [README.md](README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The app runs a real show: stability matters more than new visuals.
 
 ## The MCP must stay compatible with the app
 
@@ -27,4 +27,5 @@ Checklist for every feature change:
 - Only the operator window is authoritative; the output window is a view.
 - Dev server port is 1430 (another project uses 1420). The agent bridge uses 1431.
 - Ask before spending generation credits (Runway, ElevenLabs) and before firing cues on the real lighting console.
+- The LED wall is part of the set, kept at life-size scale next to the actors (no push-ins that blow things past life size): read [docs/SCENE_BACKDROPS.md](docs/SCENE_BACKDROPS.md) before designing any backdrop or camera move.
 - Making AI video for the wall (Runway pipeline, 4:1 crops, no music, lip-sync to a recorded voice with the black-video trick): read [docs/MEDIA_GENERATION.md](docs/MEDIA_GENERATION.md).

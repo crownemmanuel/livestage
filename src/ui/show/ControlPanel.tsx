@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, Clapperboard, Eye, EyeOff, Flame, Keyboard, Layers, Mountain, PawPrint, RotateCcw, Route, Sparkles, Video, Zap } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { BookOpen, ChevronDown, ChevronRight, ChevronUp, Clapperboard, Eye, EyeOff, Flame, Keyboard, Layers, Mountain, PawPrint, RotateCcw, Route, Sparkles, Video, Zap } from "lucide-react";
 import { InfoTip } from "../kit";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,7 +16,6 @@ import { clipFits, clipStateAt } from "@/core/clipActor";
 import { useShow, type Target } from "@/store/show";
 import { useModelInfo } from "@/store/modelInfo";
 import { useProject } from "@/store/project";
-import { Section } from "../fields";
 
 /** Re-render periodically so fades/levels shown in the UI stay current. */
 function useTicker(ms = 250) {
@@ -47,8 +46,90 @@ export function TargetBanner({ target }: { target: Target }) {
   );
 }
 
+// ---------------------------------------------------------------- sections
+
+/** One hue per section so the eye finds it by colour in a dark room. Red stays reserved for LIVE. */
+type Tint = "sky" | "violet" | "cyan" | "emerald" | "amber" | "indigo" | "teal";
+const TINT: Record<Tint, { fg: string; chip: string; rail: string; dot: string }> = {
+  sky: { fg: "text-sky-300", chip: "bg-sky-400/15", rail: "bg-sky-400/50", dot: "bg-sky-300" },
+  violet: { fg: "text-violet-300", chip: "bg-violet-400/15", rail: "bg-violet-400/50", dot: "bg-violet-300" },
+  cyan: { fg: "text-cyan-300", chip: "bg-cyan-400/15", rail: "bg-cyan-400/50", dot: "bg-cyan-300" },
+  emerald: { fg: "text-emerald-300", chip: "bg-emerald-400/15", rail: "bg-emerald-400/50", dot: "bg-emerald-300" },
+  amber: { fg: "text-amber-300", chip: "bg-amber-400/15", rail: "bg-amber-400/50", dot: "bg-amber-300" },
+  indigo: { fg: "text-indigo-300", chip: "bg-indigo-400/15", rail: "bg-indigo-400/50", dot: "bg-indigo-300" },
+  teal: { fg: "text-teal-300", chip: "bg-teal-400/15", rail: "bg-teal-400/50", dot: "bg-teal-300" },
+};
+
+type Sec = {
+  id: string;
+  title: string;
+  icon: ReactNode;
+  tint: Tint;
+  info: ReactNode;
+  /** Something is on stage / running: lights the dot so a collapsed section still reads. */
+  live: boolean;
+  /** One line of current state, readable while collapsed. */
+  summary: string;
+  body: ReactNode;
+};
+
+const OPEN_KEY = "sls.panel.sections";
+
+/** Which sections are open, remembered across reloads. Everything starts collapsed. */
+function useOpenSections() {
+  const [open, setOpen] = useState<Record<string, boolean>>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "null");
+      if (v && typeof v === "object") return v as Record<string, boolean>;
+    } catch {
+      /* storage unavailable */
+    }
+    return {};
+  });
+  const toggle = useCallback((id: string) => {
+    setOpen((o) => {
+      const next = { ...o, [id]: !o[id] };
+      try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify(next));
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
+  }, []);
+  return [open, toggle] as const;
+}
+
+function SectionHead({ sec, open, onToggle, compact }: { sec: Sec; open: boolean; onToggle: () => void; compact?: boolean }) {
+  const t = TINT[sec.tint];
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onToggle}
+      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onToggle())}
+      className={cn("flex w-full cursor-pointer items-center gap-2 px-3 transition-colors hover:bg-muted/40", compact ? "py-1.5" : "py-2")}
+    >
+      <span className={cn("grid shrink-0 place-items-center rounded [&_svg]:size-3.5", compact ? "size-5" : "size-6", t.chip, t.fg)}>{sec.icon}</span>
+      <h3 className={cn("shrink-0 font-semibold text-foreground/90", compact ? "text-[12px]" : "text-[12.5px]")}>{sec.title}</h3>
+      {sec.live && <span className={cn("size-1.5 shrink-0 rounded-full", t.dot)} />}
+      {!compact && (
+        <span onClick={(e) => e.stopPropagation()}>
+          <InfoTip>{sec.info}</InfoTip>
+        </span>
+      )}
+      <span className="ml-auto min-w-0 truncate pl-2 text-right text-[11px] text-muted-foreground" title={sec.summary}>
+        {sec.summary}
+      </span>
+      <span className="shrink-0 text-muted-foreground/70 [&_svg]:size-3.5">{open ? <ChevronDown /> : compact ? <ChevronUp /> : <ChevronRight />}</span>
+    </div>
+  );
+}
+
 export function ControlPanel() {
   const { target, rt } = useControlTarget();
+  const [open, toggle] = useOpenSections();
+  const poses = useShow((s) => (target === "program" ? s.programPoses : s.previewPoses));
   useTicker(300);
   if (!rt) return <div className="p-4 text-muted-foreground">Select a scene.</div>;
   const comps = rt.scene.components;
@@ -62,104 +143,217 @@ export function ControlPanel() {
   const effects = comps.filter((c): c is EffectComponent => c.kind === "effect");
   const dispatch = (cmd: Parameters<ReturnType<typeof useShow.getState>["dispatch"]>[1]) => useShow.getState().dispatch(target, cmd);
   const t = sceneNow(rt);
+  const shown = (id: string) => !!rt.layers[id]?.visible;
+  const secs: Sec[] = [];
+
+  // A single background is not a choice, so the section would only take up room.
+  if (bgs.length > 1) {
+    const cur = bgs.find((b) => b.id === rt.background.current);
+    secs.push({
+      id: "backgrounds",
+      title: "Backgrounds",
+      icon: <Mountain />,
+      tint: "sky",
+      live: !!cur,
+      summary: cur?.name ?? "none",
+      info: "Switch the background plate or 3D look. Changes crossfade over the background change time.",
+      body: (
+        <div className="grid grid-cols-2 gap-1.5">
+          {bgs.map((b) => {
+            const active = rt.background.current === b.id;
+            const k = rt.background.dur > 0 ? clamp((t - rt.background.changedAt) / rt.background.dur, 0, 1) : 1;
+            return (
+              <Button key={b.id} variant={active ? "secondary" : "outline"} size="sm" className={cn("relative min-w-0 justify-start overflow-hidden", active && "border border-foreground/30")} onClick={() => dispatch({ type: "background", backgroundId: b.id, delay: 0 })}>
+                {active && k < 1 && <span className="absolute inset-y-0 left-0 bg-foreground/10" style={{ width: `${k * 100}%` }} />}
+                <span className={cn("size-1.5 rounded-full", active ? "bg-preview" : "bg-muted-foreground/40")} />
+                <span className="truncate">{b.name}</span>
+              </Button>
+            );
+          })}
+        </div>
+      ),
+    });
+  }
+
+  if (names.length > 0 || routes.length > 0) {
+    const n = names[0] ? (rt.names?.[names[0].id] ?? initialNames()) : null;
+    secs.push({
+      id: "storybook",
+      title: "Storybook",
+      icon: <BookOpen />,
+      tint: "violet",
+      live: (n?.shown ?? 0) > 0,
+      summary: n ? `${n.shown} / ${names[0].names.length} names` : `${routes.length} route${routes.length === 1 ? "" : "s"}`,
+      info: "The family tree of names and map routes: reveal names one at a time, burn the tree, blossom it, draw a journey.",
+      body: (
+        <>
+          {names.map((c) => (
+            <NamesControls key={c.id} comp={c} rt={rt} target={target} />
+          ))}
+          {routes.map((r) => (
+            <RouteControls key={r.id} comp={r} rt={rt} target={target} />
+          ))}
+        </>
+      ),
+    });
+  }
+
+  if (videoActors.length > 0) {
+    const states = videoActors.map((a) => ({ a, st: clipStateAt(a, rt.clipActors?.[a.id], t) }));
+    const playing = states.filter((s) => s.st.clip);
+    secs.push({
+      id: "videoActors",
+      title: "Video characters",
+      icon: <Clapperboard />,
+      tint: "cyan",
+      live: playing.length > 0,
+      summary: playing.length ? playing.map((s) => s.st.clip!.name).join(", ") : "none on stage",
+      info: "AI video characters made of clips. A clip waits for the current one to end so the cut lands on a matching frame; amber clips start on a different pose (a visible jump).",
+      body: (
+        <>
+          {videoActors.map((a) => (
+            <VideoActorControls key={a.id} comp={a} rt={rt} target={target} />
+          ))}
+        </>
+      ),
+    });
+  }
+
+  if (actors.length > 0 || elements.length > 0) {
+    const on = [...actors.filter((a) => poses[a.id]?.visible).map((a) => a.name), ...elements.filter((e) => shown(e.id)).map((e) => e.name)];
+    secs.push({
+      id: "characters",
+      title: "Characters",
+      icon: <PawPrint />,
+      tint: "emerald",
+      live: on.length > 0,
+      summary: on.length ? on.join(", ") : "all hidden",
+      info: "The 3D lion and built-in elements (sheep, birds, fire, town lights).",
+      body: (
+        <>
+          {actors.map((a) => (
+            <LionControls key={a.id} comp={a} target={target} rt={rt} />
+          ))}
+          {elements.map((e) => (
+            <LayerRow key={e.id} comp={e} rt={rt} onToggle={() => dispatch({ type: "layer", layerId: e.id, op: "toggle", delay: 0 })} />
+          ))}
+        </>
+      ),
+    });
+  }
+
+  if (effects.length > 0) {
+    const on = effects.filter((e) => rt.effects[e.id]?.active);
+    secs.push({
+      id: "effects",
+      title: "Effects",
+      icon: <Sparkles />,
+      tint: "amber",
+      live: on.length > 0,
+      summary: on.length ? on.map((e) => `${e.name} ${Math.round(effectLevel(e.effect, true, rt.effects[e.id].changedAt, rt.effects[e.id].params, t) * 100)}%`).join(", ") : "all clear",
+      info: "Weather and light over the scene. Open a row to adjust it live.",
+      body: (
+        <>
+          {effects.map((e) => (
+            <EffectControl key={e.id} comp={e} rt={rt} target={target} />
+          ))}
+        </>
+      ),
+    });
+  }
+
+  if (layers.length > 0) {
+    const on = layers.filter((l) => shown(l.id));
+    secs.push({
+      id: "layers",
+      title: "Layers & titles",
+      icon: <Layers />,
+      tint: "indigo",
+      live: on.length > 0,
+      summary: on.length ? `${on.length} showing · ${on.map((l) => l.name).join(", ")}` : `${layers.length} hidden`,
+      info: "Show or hide video and image layers, models and titles.",
+      body: (
+        <>
+          {layers.map((l) => (
+            <LayerRow
+              key={l.id}
+              comp={l}
+              rt={rt}
+              onToggle={() => dispatch({ type: "layer", layerId: l.id, op: "toggle", delay: 0 })}
+              onRestart={l.kind !== "image" ? () => dispatch({ type: "layer", layerId: l.id, op: "restart", delay: 0 }) : undefined}
+            />
+          ))}
+        </>
+      ),
+    });
+  }
+
+  // One saved pose is where the camera already is: nothing to choose.
+  if (rt.scene.cameraShots.length > 1) {
+    const cam = rt.camera;
+    const moving = t < cam.at + cam.dur;
+    const at = evalCamera(cam, t);
+    const here = rt.scene.cameraShots.find((s) => at.position.join() === s.pose.position.join() && at.target.join() === s.pose.target.join());
+    secs.push({
+      id: "camera",
+      title: "Camera",
+      icon: <Video />,
+      tint: "teal",
+      live: moving,
+      summary: moving ? "moving…" : (here?.name ?? "free"),
+      info: "Saved camera moves. A move glides from wherever the camera is, carrying its speed into the next move.",
+      body: (
+        <div className="grid grid-cols-2 gap-1.5">
+          {rt.scene.cameraShots.map((s) => {
+            const isHere = !moving && here?.id === s.id;
+            return (
+              <Button key={s.id} size="sm" variant={isHere ? "secondary" : "outline"} className="justify-start" onClick={() => dispatch({ type: "camera", shotId: s.id, delay: 0 })}>
+                <span className="truncate">{s.name}</span>
+                <span className="ml-auto text-[10px] text-muted-foreground tabular">{s.duration}s</span>
+              </Button>
+            );
+          })}
+        </div>
+      ),
+    });
+  }
+
+  const opened = secs.filter((s) => open[s.id]);
+  const closed = secs.filter((s) => !open[s.id]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TargetBanner target={target} />
       <ScrollArea className="min-h-0 flex-1">
-        {bgs.length > 0 && (
-          <Section title="Backgrounds" icon={<Mountain />} info="Switch the background plate or 3D look. Changes crossfade over the background change time.">
-            <div className="grid grid-cols-2 gap-1.5">
-              {bgs.map((b) => {
-                const active = rt.background.current === b.id;
-                const k = rt.background.dur > 0 ? clamp((t - rt.background.changedAt) / rt.background.dur, 0, 1) : 1;
-                return (
-                  <Button key={b.id} variant={active ? "secondary" : "outline"} size="sm" className={cn("relative min-w-0 justify-start overflow-hidden", active && "border border-foreground/30")} onClick={() => dispatch({ type: "background", backgroundId: b.id, delay: 0 })}>
-                    {active && k < 1 && <span className="absolute inset-y-0 left-0 bg-foreground/10" style={{ width: `${k * 100}%` }} />}
-                    <span className={cn("size-1.5 rounded-full", active ? "bg-preview" : "bg-muted-foreground/40")} />
-                    <span className="truncate">{b.name}</span>
-                  </Button>
-                );
-              })}
+        {opened.map((s) => (
+          <section key={s.id} className={cn("border-b border-border", target === "program" && "bg-live/[0.03]")}>
+            <SectionHead sec={s} open onToggle={() => toggle(s.id)} />
+            <div className="flex gap-2 px-3 pb-3">
+              <span className={cn("w-0.5 shrink-0 rounded-full", TINT[s.tint].rail)} />
+              <div className="min-w-0 flex-1 space-y-2">{s.body}</div>
             </div>
-          </Section>
-        )}
-
-        {(names.length > 0 || routes.length > 0) && (
-          <Section title="Storybook" icon={<BookOpen />} info="The family tree of names and map routes: reveal names one at a time, burn the tree, blossom it, draw a journey.">
-            {names.map((n) => (
-              <NamesControls key={n.id} comp={n} rt={rt} target={target} />
-            ))}
-            {routes.map((r) => (
-              <RouteControls key={r.id} comp={r} rt={rt} target={target} />
-            ))}
-          </Section>
-        )}
-
-        {videoActors.length > 0 && (
-          <Section title="Video actors" icon={<Clapperboard />} info="AI video characters made of clips. A clip waits for the current one to end so the cut lands on a matching frame; amber clips start on a different pose (a visible jump).">
-            {videoActors.map((a) => (
-              <VideoActorControls key={a.id} comp={a} rt={rt} target={target} />
-            ))}
-          </Section>
-        )}
-
-        {(actors.length > 0 || elements.length > 0) && (
-          <Section title="Characters" icon={<PawPrint />} info="The 3D lion and built-in elements (sheep, birds, fire, town lights).">
-            {actors.map((a) => (
-              <LionControls key={a.id} comp={a} target={target} rt={rt} />
-            ))}
-            {elements.map((e) => (
-              <LayerRow key={e.id} comp={e} rt={rt} onToggle={() => dispatch({ type: "layer", layerId: e.id, op: "toggle", delay: 0 })} />
-            ))}
-          </Section>
-        )}
-
-        {effects.length > 0 && (
-          <Section title="Effects" icon={<Sparkles />} info="Weather and light over the scene. Open a row to adjust it live.">
-            {effects.map((e) => (
-              <EffectControl key={e.id} comp={e} rt={rt} target={target} />
-            ))}
-          </Section>
-        )}
-
-        {layers.length > 0 && (
-          <Section title="Layers & titles" icon={<Layers />} info="Show or hide video and image layers, models and titles.">
-            {layers.map((l) => (
-              <LayerRow
-                key={l.id}
-                comp={l}
-                rt={rt}
-                onToggle={() => dispatch({ type: "layer", layerId: l.id, op: "toggle", delay: 0 })}
-                onRestart={l.kind !== "image" ? () => dispatch({ type: "layer", layerId: l.id, op: "restart", delay: 0 }) : undefined}
-              />
-            ))}
-          </Section>
-        )}
-
-        {rt.scene.cameraShots.length > 0 && (
-          <Section title="Camera" icon={<Video />} info="Saved camera moves. A move glides from wherever the camera is, carrying its speed into the next move.">
-            <div className="grid grid-cols-2 gap-1.5">
-              {rt.scene.cameraShots.map((s) => {
-                const cam = rt.camera;
-                const moving = t < cam.at + cam.dur;
-                const at = evalCamera(cam, t);
-                const isHere = !moving && at.position.join() === s.pose.position.join() && at.target.join() === s.pose.target.join();
-                return (
-                  <Button key={s.id} size="sm" variant={isHere ? "secondary" : "outline"} className="justify-start" onClick={() => dispatch({ type: "camera", shotId: s.id, delay: 0 })}>
-                    <span className="truncate">{s.name}</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground tabular">{s.duration}s</span>
-                  </Button>
-                );
-              })}
-            </div>
-          </Section>
+          </section>
+        ))}
+        {opened.length === 0 && (
+          <p className="px-3 py-6 text-center text-[11.5px] leading-relaxed text-muted-foreground">
+            Everything is tucked away below.
+            <br />
+            Open the sections you need for this scene.
+          </p>
         )}
       </ScrollArea>
+      {closed.length > 0 && (
+        <div className="max-h-[55%] shrink-0 overflow-y-auto border-t-2 border-border bg-background/70">
+          {closed.map((s) => (
+            <div key={s.id} className="border-b border-border/60 last:border-b-0">
+              <SectionHead sec={s} open={false} compact onToggle={() => toggle(s.id)} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-
 function LayerRow({ comp, rt, onToggle, onRestart }: { comp: SceneComponent; rt: SceneRuntime; onToggle: () => void; onRestart?: () => void }) {
   const l = rt.layers[comp.id];
   const on = !!l?.visible;

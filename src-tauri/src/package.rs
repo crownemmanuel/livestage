@@ -65,6 +65,54 @@ pub fn bundled_on_disk(urls: Vec<String>) -> Vec<bool> {
     urls.iter().map(|u| dir.as_ref().is_some_and(|d| d.join(u.trim_start_matches('/')).is_file())).collect()
 }
 
+/// Show a file in the desktop's file manager (Finder, Explorer, Files), selected in its folder.
+/// Takes the same two ways of naming a file as an export: a path on disk and/or a bundled media URL,
+/// so media that lives in the repo's public/ folder on the build computer is found there first.
+#[tauri::command]
+pub fn reveal_in_file_manager(path: Option<String>, bundled: Option<String>) -> Result<String, String> {
+    let from_public = bundled
+        .as_deref()
+        .and_then(|u| dev_public_dir().map(|d| d.join(u.trim_start_matches('/'))))
+        .filter(|p| p.exists());
+    let target = match from_public.or_else(|| path.map(PathBuf::from).filter(|p| p.exists())) {
+        Some(p) => p,
+        None => return Err("That file is not on this computer (it plays from inside the app).".into()),
+    };
+    reveal(&target)?;
+    Ok(target.display().to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal(p: &Path) -> Result<(), String> {
+    std::process::Command::new("open").arg("-R").arg(p).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal(p: &Path) -> Result<(), String> {
+    // explorer.exe exits non-zero even when it worked, so the status is not checked.
+    std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal(p: &Path) -> Result<(), String> {
+    // The freedesktop file-manager interface selects the file; without it, just open the folder.
+    let selected = std::process::Command::new("dbus-send")
+        .args(["--session", "--dest=org.freedesktop.FileManager1", "--type=method_call", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowItems"])
+        .arg(format!("array:string:file://{}", p.display()))
+        .arg("string:")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if selected {
+        return Ok(());
+    }
+    let dir = p.parent().ok_or("No folder to open")?;
+    std::process::Command::new("xdg-open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Size and SHA-256 of a source.
 pub(crate) fn hash_source(cache: &HashCache, src: &Source) -> Result<(u64, String), String> {
     match src {

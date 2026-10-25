@@ -9,7 +9,7 @@ import * as factories from "@/core/factories";
 import { defaultTransition, makeClip, makeCue, makeScene, makeShot } from "@/core/factories";
 import { normalizeGroups, sceneCodes, sceneRows } from "@/core/groups";
 import { uid } from "@/core/ids";
-import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, saveGeneratedAsset } from "@/core/platform";
+import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, revealAsset, saveGeneratedAsset } from "@/core/platform";
 import type { MergeChoice } from "@/core/showMerge";
 import { CloudAheadError, listCloudShows, loadCloudSettings } from "@/core/cloud";
 import type { ImportPreview, IncomingPackage } from "@/core/showPackage";
@@ -22,7 +22,7 @@ import * as ops from "@/engine/operator";
 import * as transport from "@/engine/transport";
 import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
 import { describeProbe } from "@/core/mediaCheck";
-import { liveAudioSources } from "@/engine/mixer";
+import { audioRoleOf, liveAudioSources } from "@/engine/mixer";
 import { getAudioRoute, nativeOutputs, setAudioRoute, webOutputs, type AudioRoute } from "@/engine/audioOutput";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { requestSnap } from "@/render/snap";
@@ -138,6 +138,7 @@ function runtimeSummary(target: Target, rt: SceneRuntime) {
     frozen: rt.clock.pausedAt !== null,
     cuePointer: rt.cuePointer,
     nextCue: cueBrief(sc.cues[rt.cuePointer], rt.cuePointer),
+    nextCueAuto: runtime.nextCueIsAuto(rt, t / 1000),
     cues: sc.cues.map((c, i) => ({ index: i, id: c.id, name: c.name, fired: fired.has(c.id), fire: c.fire ?? { mode: "go" } })),
     background: rt.background.current ? { id: rt.background.current, name: sc.components.find((c) => c.id === rt.background.current)?.name } : null,
     layers: Object.entries(rt.layers).map(([id, l]) => ({ id, name: sc.components.find((c) => c.id === id)?.name, visible: l.visible })),
@@ -188,7 +189,7 @@ function schemaDoc(topic: string) {
   if (topic === "cueActions" || topic === "all") {
     out.cueActions = {
       note: "Examples are built for the selected scene, so ids are real where it has such components. Every action has delay (seconds after the cue fires).",
-      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); null leaves other audio alone.',
+      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take); a scene with stopCarriedSounds: true fades such carried sounds out when it is taken. loop = start again from the top until faded out (a music bed). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); null leaves other audio alone.',
       fire: 'Cue.fire: {mode: "go"} (default) | {mode: "time", at: seconds after TAKE} | {mode: "follow", after: seconds after the previous cue} | {mode: "video"} (fired by a media marker whose cueId is this cue).',
       types: (Object.keys(ACTION_INFO) as (CueActionType | "hog")[]).map((t) =>
         t === "hog"
@@ -404,6 +405,7 @@ export const handlers: Record<AgentCommand, Handler> = {
           type: x.type,
           url: x.url.startsWith("blob:") || x.url.length > 200 ? undefined : x.url,
           hasAlpha: x.hasAlpha || undefined,
+          audioRole: x.type === "audio" ? (audioRoleOf(x) ?? undefined) : undefined,
           builtIn: x.builtIn || undefined,
           ephemeral: x.ephemeral || undefined,
           format: x.probe ? describeProbe(x.probe) : undefined,
@@ -448,6 +450,11 @@ export const handlers: Record<AgentCommand, Handler> = {
     const x = byIdOrName(P().project.assets, a.asset, "asset");
     const r = await optimiseAsset(x.id, { force: !!a.force });
     return { id: r.asset.id, name: r.asset.name, file: r.asset.file, skipped: r.skipped, format: describeProbe(r.asset.probe), problems: r.problems, optimised: r.asset.optimised ? { from: r.asset.optimised.from, was: describeProbe(r.asset.optimised.source) || undefined } : undefined };
+  },
+
+  async asset_reveal(a) {
+    const x = byIdOrName(P().project.assets, a.asset, "asset");
+    return { id: x.id, name: x.name, revealed: await revealAsset(x) };
   },
 
   get(a) {
@@ -524,7 +531,7 @@ export const handlers: Record<AgentCommand, Handler> = {
         throw new Error(`Unknown op ${op}`);
     }
     const rt = rtFor(target)!;
-    return { scene: brief(rt.scene), cuePointer: rt.cuePointer, nextCue: cueBrief(rt.scene.cues[rt.cuePointer], rt.cuePointer), pendingActions: pendingCount(target) };
+    return { scene: brief(rt.scene), cuePointer: rt.cuePointer, nextCue: cueBrief(rt.scene.cues[rt.cuePointer], rt.cuePointer), nextCueAuto: runtime.nextCueIsAuto(rt, sceneNow(rt) / 1000), pendingActions: pendingCount(target) };
   },
 
   preview_step(a) {

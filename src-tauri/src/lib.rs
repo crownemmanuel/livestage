@@ -23,7 +23,7 @@ async fn ensure_output_window(app: tauri::AppHandle, x: f64, y: f64, width: f64,
     }
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(&app, "output", WebviewUrl::App("output.html".into()))
-        .title("Live Studio — Audience Output")
+        .title("LiveStage — Audience Output")
         .decorations(false)
         .resizable(true)
         .focused(false)
@@ -62,6 +62,7 @@ pub fn run() {
             package::package_import_files,
             package::hash_files,
             package::bundled_on_disk,
+            package::reveal_in_file_manager,
             cloud::cloud_http,
             cloud::cloud_hash_sources,
             cloud::cloud_upload,
@@ -96,7 +97,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while running Live Studio")
+        .expect("error while running LiveStage")
         .run(|_, event| {
             // Give the Mac back the sound output it had before the show routed it.
             if let tauri::RunEvent::Exit = event {

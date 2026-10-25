@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 7;
+export const AGENT_SPEC_VERSION = 14;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -80,12 +80,12 @@ export const AGENT_COMMANDS = {
   get_runtime: {
     readOnly: true,
     description:
-      "Playback state of the preview or live scene: scene time, frozen?, GO pointer and next cue, cues fired, visible layers, active effects, current background, video-actor clips, pending delayed actions.",
+      "Playback state of the preview or live scene: scene time, frozen?, GO pointer and next cue, nextCueAuto (the next cue would fire by itself; go fires it early), cues fired, visible layers, active effects, current background, video-actor clips, pending delayed actions.",
     params: args({ target }, ["target"]),
   },
   list_assets: {
     readOnly: true,
-    description: "The media library (images, videos, 3D models, audio) with ids to use in components and cues. Videos carry a one-line `format` and `problems` when the wall may not play them well (see asset_check).",
+    description: "The media library (images, videos, 3D models, audio) with ids to use in components and cues. Videos carry a one-line `format` and `problems` when the wall may not play them well (see asset_check). Audio carries `audioRole` (music, voice, ambience, sfx: its icon and colour on the live mixer), set with patch project/assets/<id>/audioRole or guessed from the name.",
     params: args({ type: oneOf(["image", "video", "model", "audio"], "Only this type."), query: str("Name contains (case-insensitive).") }),
   },
   get: {
@@ -128,7 +128,7 @@ export const AGENT_COMMANDS = {
   },
   cue: {
     description:
-      "Cue list control. go = fire the next cue (past the last cue a flowing group takes its next scene); fire = fire cue `index`; back/skip = move the GO pointer; set = put the pointer on `index`; repeat = re-run the last fired cue.",
+      "Cue list control. go = fire the next cue (past the last cue a flowing group takes its next scene), including one that would fire by itself (nextCueAuto: true), which then fires early; fire = fire cue `index` and rewind the list to it (the cues after it are un-fired, GO points at the next one; time cues already behind the clock wait for GO); back/skip = move the GO pointer; set = put the pointer on `index`; repeat = re-run the last fired cue.",
     params: args({ target, op: oneOf(["go", "fire", "back", "skip", "set", "repeat"], "What to do."), index: int("0-based cue index for fire/set.") }, ["target", "op"]),
   },
   preview_step: {
@@ -228,7 +228,7 @@ export const AGENT_COMMANDS = {
     live: true,
     description:
       "Send a MIDI / OSC / MIDI Show Control / Hog 4 message to the outside world now (lighting console, sound desk). See schema topic io for shapes. Hog playback numbers go as strings.",
-    params: args({ message: obj("An IoMessage, e.g. {type: \"hog\", op: \"go\", item: \"House Light\", kind: \"cuelist\", number: \"205\", cue: \"\"}.") }, ["message"]),
+    params: args({ message: obj("An IoMessage, e.g. {type: \"hog\", op: \"go\", item: \"House Light\", kind: \"cuelist\", number: \"205\", cue: \"\", master: \"\"}. master (GO only) = a master number whose fader goes to full first, for a list parked on a lowered fader.") }, ["message"]),
   },
   io_inject: {
     description: "Pretend a MIDI or OSC message arrived (tests triggers without hardware). The matching trigger acts on the show as if it were real.",
@@ -269,7 +269,7 @@ export const AGENT_COMMANDS = {
     }),
   },
   scene_update: {
-    description: "Change scene fields by deep merge (objects merge, arrays and values replace): name, notes, environment, transition, look, cameraMotion, plateLight, framing, markers, cameraShots, defaultShotId...",
+    description: "Change scene fields by deep merge (objects merge, arrays and values replace): name, notes, environment, transition, stopCarriedSounds (true: taking it fades out music still playing from earlier scenes), look, cameraMotion, plateLight, framing, markers, cameraShots, defaultShotId...",
     params: args({ scene: sceneRef, patch: obj("Fields to merge.") }, ["scene", "patch"]),
   },
   scene_duplicate: {
@@ -413,13 +413,18 @@ export const AGENT_COMMANDS = {
       "Re-encode a library video into the wall format: H.264 High, scaled to fit the wall canvas (never upscaled), a keyframe every half second, stereo AAC, fast start. The asset then points at the new file and the old library copy is deleted. Skipped when the file already plays well unless force. Refuses alpha video and media that ships with the app. Reports progress to the operator; takes seconds to minutes.",
     params: args({ asset: str("Asset id or exact name."), force: bool("Re-encode even when no problem was found.") }, ["asset"]),
   },
+  asset_reveal: {
+    description:
+      "Open the operator's file manager (Finder, Explorer) with an asset's file selected, the same as the folder button on a media field in Scene Builder. Useful when the operator asks where a file lives. Desktop app only; media embedded in a release build has no file to show.",
+    params: args({ asset: str("Asset id or exact name.") }, ["asset"]),
+  },
   asset_remove: {
     destructive: true,
     description: "Remove an asset from the library (components using it lose their media).",
     params: args({ asset: str("Asset id or exact name.") }, ["asset"]),
   },
   output_settings: {
-    description: "Change output settings by deep merge: canvasWidth/Height (LED canvas pixels), scaling (fit | fill | stretch | native; stretch fills a display of another shape, e.g. 1920×720 that the LED processor rescales onto a 3072×768 wall), targetFps, backgroundColor, safeArea, testPattern, standby card, audioHost, timerOverlay style, monitorName, fullscreen.",
+    description: "Change output settings by deep merge: canvasWidth/Height (LED canvas pixels), scaling (fit | fill | stretch | native; stretch fills a display of another shape, e.g. 1920×720 that the LED processor rescales onto a 3072×768 wall), targetFps, backgroundColor, safeArea, testPattern, standby card, timerOverlay style, monitorName, fullscreen.",
     params: args({ patch: obj("Fields to merge.") }, ["patch"]),
   },
   project: {

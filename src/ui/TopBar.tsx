@@ -2,10 +2,8 @@ import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Bot,
-  Cable,
   Check,
   CircleArrowUp,
-  Clapperboard,
   Cloud,
   FileDown,
   FileUp,
@@ -22,6 +20,7 @@ import {
   Power,
   RotateCcw,
   Save,
+  Settings as SettingsIcon,
   TvMinimalPlay,
   Timer,
 } from "lucide-react";
@@ -35,17 +34,17 @@ import { useShow } from "@/store/show";
 import { useIo } from "@/engine/io";
 import { clearLiveState } from "@/engine/persist";
 import { OutputSettingsDialog } from "./OutputSettings";
-import { IoDialog } from "./io/IoDialog";
+import { SettingsDialog } from "./io/IoDialog";
 import { ShowPackageDialog, startPackageExport, startPackageImport } from "./ShowPackage";
 import { CloudSyncDialog } from "./CloudSync";
 import { getErrors, onErrors } from "./ErrorBoundary";
 import { RoundToggle, Tip, ToolbarButton } from "./kit";
-import { useSceneCodes } from "./SceneList";
 import { now } from "@/core/clock";
 import { formatClock, timerLeft } from "@/core/timers";
 import { useAgent } from "@/agent/bridge";
 import { openUpdates, useUpdater } from "@/engine/updater";
 import { UpdateDialog } from "./Updates";
+import { QuickActionsButton } from "./show/QuickActionsButton";
 
 export function TopBar() {
   const mode = useProject((s) => s.mode);
@@ -74,8 +73,6 @@ export function TopBar() {
     return () => clearInterval(h);
   }, []);
   const connected = !!status && Date.now() - seenAt < 3500;
-  const live = program.standby ? null : program.runtime?.scene;
-  const codes = useSceneCodes();
   const ioOn = midiStatus === "open" || oscStatus === "listening";
   const blackout = !!program.blackout?.on;
   const updateVersion = useUpdater((s) => s.available?.version ?? null);
@@ -83,11 +80,9 @@ export function TopBar() {
   return (
     <header className="flex h-[60px] shrink-0 items-center gap-2 border-b border-border bg-card px-2">
       <div className="flex items-center gap-2 pl-1 pr-2">
-        <span className="grid size-8 place-items-center rounded-md bg-armed/15 text-armed">
-          <Clapperboard className="size-4" />
-        </span>
+        <img src="/branding/app-icon.png" alt="LiveStage" className="size-8 shrink-0 object-contain" width={32} height={32} />
         <div className="hidden leading-tight xl:block">
-          <div className="font-key text-[14px] font-bold">Live Studio</div>
+          <div className="font-key text-[14px] font-bold">LiveStage</div>
           <div className="max-w-[180px] truncate text-[11px] text-muted-foreground">{name}</div>
         </div>
       </div>
@@ -97,17 +92,8 @@ export function TopBar() {
         <ToolbarButton icon={<PencilRuler />} label="Build" active={mode === "builder"} onClick={() => useProject.getState().setMode("builder")} tip="Build scenes: components, cues, camera. Edits only touch the preview." />
       </div>
 
-      {/* On-air tally: what the audience is looking at right now. */}
+      {/* Wall warnings only (what is on air shows on the Program monitor). */}
       <div className="mx-auto flex min-w-0 items-center gap-2">
-        <div className={cn("flex min-w-0 items-center gap-2 rounded-full border px-3 py-1.5", live ? "border-live/50 bg-live/10" : "border-border bg-well")}>
-          <span className={cn("size-2.5 shrink-0 rounded-full", live ? "tally-pulse bg-live" : "bg-muted-foreground/50")} />
-          <span className={cn("font-key text-[13px] font-bold", live ? "text-live" : "text-muted-foreground")}>{live ? "On air" : "Standby"}</span>
-          {live && (
-            <span className="min-w-0 truncate text-[13px]">
-              <span className="font-key font-semibold text-muted-foreground">{codes.get(live.id) ?? live.number}</span> {live.name}
-            </span>
-          )}
-        </div>
         {blackout && (
           <Tip label="The wall is blacked out" side="bottom">
             <span className="grid size-7 place-items-center rounded-full bg-armed text-black">
@@ -132,10 +118,10 @@ export function TopBar() {
       <div className="flex items-center gap-0.5">
         <ToolbarButton icon={<MonitorCog />} label="Screens" onClick={() => setSettings(true)} tip="Wall size, output display, standby picture, safe area" />
         <ToolbarButton
-          icon={<Cable className={cn(ioErr ? "text-destructive" : ioOn && "text-preview")} />}
-          label="Control"
+          icon={<SettingsIcon className={cn(ioErr ? "text-destructive" : ioOn && "text-preview")} />}
+          label="Settings"
           onClick={() => setIo(true)}
-          tip={`MIDI / OSC show control (lighting console, sound)${ioOn ? `: ${[midiStatus === "open" && "MIDI", oscStatus === "listening" && "OSC"].filter(Boolean).join(" + ")} on` : ""}`}
+          tip={`Lighting console, MIDI / OSC, audio output${ioOn ? `: ${[midiStatus === "open" && "MIDI", oscStatus === "listening" && "OSC"].filter(Boolean).join(" + ")} on` : ""}`}
         />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -206,6 +192,7 @@ export function TopBar() {
         />
         <RoundToggle on={blackout} tone="armed" label="Blackout" icon={<Moon />} tip="Fade the whole wall to black, and back (Shift+B)" onClick={() => useShow.getState().setBlackout(!blackout)} />
         <RoundToggle on={program.standby} tone="armed" label="Standby" icon={<Power />} tip="Fade the wall to the safe standby picture, and back" onClick={() => useShow.getState().setStandby(!program.standby)} />
+        <QuickActionsButton />
       </div>
 
       <div className="flex items-center gap-2 border-l border-border pl-2.5 pr-1">
@@ -227,7 +214,7 @@ export function TopBar() {
       </div>
 
       <OutputSettingsDialog open={settings} onOpenChange={setSettings} />
-      <IoDialog open={io} onOpenChange={setIo} />
+      <SettingsDialog open={io} onOpenChange={setIo} />
       <ShowPackageDialog />
       <CloudSyncDialog open={cloud} onOpenChange={setCloud} />
       <UpdateDialog />
@@ -294,7 +281,7 @@ function RunningTimers() {
       {running.map((d) => {
         const left = timerLeft(runs?.[d.id], d.duration, now());
         return (
-          <Tip key={d.id} label={`${d.name} timer (Show Mode → Timers)`} side="bottom">
+          <Tip key={d.id} label={`${d.name} timer (Quick actions → Timers)`} side="bottom">
             <span className={cn("flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]", left <= 60 ? "border-armed/60 text-armed" : "border-preview/50 text-preview")}>
               <Timer className="size-3.5" />
               <span className="max-w-[90px] truncate">{d.name}</span>

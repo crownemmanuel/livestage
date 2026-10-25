@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { AudioLines, Box, Check, ChevronDown, Film, Image as ImageIcon, Maximize2, Search, Trash2, Upload, X } from "lucide-react";
+import { AudioLines, Box, Check, ChevronDown, Film, FolderOpen, Image as ImageIcon, Maximize2, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { importAssets, playableUrl } from "@/core/platform";
+import { fileManagerName, importAssets, isTauri, playableUrl, revealAsset } from "@/core/platform";
 import type { Asset, AssetType } from "@/core/types";
 import { useProject } from "@/store/project";
 import { useAssetInfo } from "../assetThumbs";
@@ -117,6 +117,33 @@ const FILTERS: { value: AssetType | "all"; label: string }[] = [
 ];
 
 /** Choosing media for a field: which kinds fit, what is chosen now, and where the choice goes. */
+/**
+ * Open the asset's own file in Finder / Explorer. Hidden in the browser (no file manager to open) and
+ * on a file that lives inside the app bundle; a failure shows as a red button with the reason.
+ */
+export function RevealButton({ asset, className }: { asset: Asset; className?: string }) {
+  const [err, setErr] = useState<string | null>(null);
+  if (!isTauri) return null;
+  const go = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setErr(null);
+    void revealAsset(asset).catch((x) => setErr(x instanceof Error ? x.message : String(x)));
+  };
+  return (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      className={cn("shrink-0", err ? "text-destructive" : "text-muted-foreground hover:text-foreground", className)}
+      aria-label={`Show the file in ${fileManagerName}`}
+      title={err ?? `Show \u201c${asset.name}\u201d in ${fileManagerName}`}
+      onClick={go}
+    >
+      <FolderOpen />
+    </Button>
+  );
+}
+
 export interface AssetPick {
   types: AssetType[];
   value: string | null;
@@ -207,6 +234,7 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
                       </div>
                     </div>
                     {pick?.value === a.id && <Check className="mt-0.5 size-4 shrink-0 text-preview" />}
+                    {!pick && <RevealButton asset={a} className="opacity-0 group-hover:opacity-100" />}
                     {!pick && !isUsed && !a.builtIn && (
                       <Button size="icon-xs" variant="ghost" className="opacity-0 hover:text-destructive group-hover:opacity-100" aria-label="Remove asset" title="Remove from the library" onClick={() => useProject.getState().removeAsset(a.id)}>
                         <Trash2 />
@@ -231,16 +259,17 @@ export function AssetPickerButton({ types, value, onChange, placeholder = "Choos
   const { over, dropProps } = useMediaDrop(types, (list) => onChange(list[0].id));
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
+      <div
         {...dropProps}
-        className={cn("flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-transparent px-1.5 text-left text-[12px] hover:bg-accent/40", over && "border-preview bg-preview/10 ring-2 ring-preview/50", className)}
+        className={cn("flex h-8 w-full min-w-0 items-center rounded-md border border-input bg-transparent text-[12px]", over && "border-preview bg-preview/10 ring-2 ring-preview/50", className)}
       >
-        {asset ? <AssetThumb asset={asset} className="h-6 w-10" /> : <span className="grid h-6 w-10 place-items-center rounded bg-black/40 text-muted-foreground">{types.length === 1 ? (() => { const I = TYPE_ICON[types[0]]; return <I className="size-3.5" />; })() : <Film className="size-3.5" />}</span>}
-        <span className={cn("min-w-0 flex-1 truncate", !asset && "text-muted-foreground")}>{asset ? asset.name : value ? "missing asset" : placeholder}</span>
-        <ChevronDown className="size-3.5 shrink-0 opacity-60" />
-      </button>
+        <button type="button" onClick={() => setOpen(true)} className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-l-md px-1.5 text-left hover:bg-accent/40">
+          {asset ? <AssetThumb asset={asset} className="h-6 w-10" /> : <span className="grid h-6 w-10 place-items-center rounded bg-black/40 text-muted-foreground">{types.length === 1 ? (() => { const I = TYPE_ICON[types[0]]; return <I className="size-3.5" />; })() : <Film className="size-3.5" />}</span>}
+          <span className={cn("min-w-0 flex-1 truncate", !asset && "text-muted-foreground")}>{asset ? asset.name : value ? "missing asset" : placeholder}</span>
+          <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+        </button>
+        {asset && <RevealButton asset={asset} className="mr-0.5" />}
+      </div>
       <AssetBrowser open={open} onOpenChange={setOpen} pick={{ types, value, onPick: onChange, title }} />
     </>
   );

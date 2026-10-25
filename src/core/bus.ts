@@ -17,6 +17,8 @@ export interface OutputStatus {
   video?: VideoSyncStat[];
   /** Asset ids of the cue sounds playing in this window (one entry per sound; a re-fired sound replaces itself). */
   sounds?: string[];
+  /** Of `sounds`, the ones silent while the live scene is held. */
+  heldSounds?: string[];
   /** Time spent handing video frames to WebGL in the last second, and how many frames. */
   upload?: { ms: number; count: number };
   /** <video> elements in the window, and how many hold a loaded file (a decoder each). */
