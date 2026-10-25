@@ -73,7 +73,8 @@ pub fn run() {
             media::media_optimise,
             audio::audio_outputs,
             audio::audio_output_route,
-            audio::audio_output_restore
+            audio::audio_output_restore,
+            audio::audio_asio_drivers
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

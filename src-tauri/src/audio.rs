@@ -253,6 +253,41 @@ mod windows_mic {
     }
 }
 
+/// Windows: the ASIO drivers installed (HKLM\SOFTWARE\ASIO), e.g. "Dante Virtual Soundcard (x64)".
+/// The app cannot play to them (the webview reaches only Windows' own outputs), but knowing Dante
+/// Virtual Soundcard is installed lets it say how to make it visible: run it in WDM mode.
+#[cfg(windows)]
+fn asio_drivers() -> Vec<String> {
+    use windows::core::{w, PWSTR};
+    use windows::Win32::System::Registry::*;
+    let mut names = Vec::new();
+    unsafe {
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, w!("SOFTWARE\\ASIO"), None, KEY_READ, &mut key).0 != 0 {
+            return names;
+        }
+        let mut buf = [0u16; 256];
+        for i in 0.. {
+            let mut len = buf.len() as u32;
+            if RegEnumKeyExW(key, i, Some(PWSTR(buf.as_mut_ptr())), &mut len, None, None, None, None).0 != 0 {
+                break;
+            }
+            names.push(String::from_utf16_lossy(&buf[..len as usize]));
+        }
+        let _ = RegCloseKey(key);
+    }
+    names
+}
+
+/// The ASIO drivers installed on this computer (Windows; empty elsewhere).
+#[tauri::command]
+pub fn audio_asio_drivers() -> Vec<String> {
+    #[cfg(windows)]
+    return asio_drivers();
+    #[cfg(not(windows))]
+    Vec::new()
+}
+
 /// Sets up every webview to see the computer's audio outputs (Windows; nothing to do elsewhere).
 pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("audio-outputs")

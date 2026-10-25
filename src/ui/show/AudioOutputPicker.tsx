@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
+  DANTE_WDM_STEPS,
+  danteAsioOnly,
   getAudioRoute,
   nativeOutputs,
   nativeRouting,
@@ -55,6 +57,7 @@ export function AudioOutputPicker({ inCard = false }: { inCard?: boolean }) {
   const [web, setWeb] = useState<WebOutput[]>([]);
   const [webDefault, setWebDefault] = useState<string | null>(null);
   const [webHidden, setWebHidden] = useState(false);
+  const [asioDante, setAsioDante] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -63,6 +66,7 @@ export function AudioOutputPicker({ inCard = false }: { inCard?: boolean }) {
     setWeb(w);
     setWebDefault(await webDefaultName());
     setWebHidden(await webOutputsHidden());
+    setAsioDante(await danteAsioOnly(w));
   }, []);
 
   useEffect(() => {
@@ -173,7 +177,7 @@ export function AudioOutputPicker({ inCard = false }: { inCard?: boolean }) {
         <InfoTip side="left">
           Where all of the app&apos;s sound goes: cue sounds, thunder, announcements and video sound. Native devices come from the computer itself and include Dante Virtual Soundcard and Dante Via;
           on the Mac, choosing one makes it the Mac&apos;s sound output while the app runs (other apps follow it too) and the previous output comes back when the app quits. On
-          Windows every playback device is listed (Dante Virtual Soundcard too, while it runs); choosing one only changes this app. Windows only names them once the app may use a
+          Windows every playback device is listed (Dante Virtual Soundcard too, while it runs in WDM mode: one entry per stereo pair); choosing one only changes this app. Windows only names them once the app may use a
           microphone, which the app takes on its own: it never records. Stereo plays on the device&apos;s first two channels (on the Mac, pick others in Audio MIDI Setup →
           Configure Speakers). The choice belongs to this computer, not the show file.
           {!nativeRouting && " Native devices are listed in the desktop app on macOS."}
@@ -206,6 +210,7 @@ export function AudioOutputPicker({ inCard = false }: { inCard?: boolean }) {
           Show all outputs
         </button>
       )}
+      {asioDante && !webHidden && <Warn>{DANTE_WDM_STEPS}</Warn>}
       {error && <Warn>{error}</Warn>}
     </div>
   );

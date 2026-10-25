@@ -29,7 +29,7 @@ export interface NativeOutput {
 export interface WebOutput {
   deviceId: string;
   label: string;
-  /** Dante Virtual Soundcard (Windows lists it as an ordinary playback device). */
+  /** Dante Virtual Soundcard in WDM mode: Windows lists each stereo pair as a playback device ("DVS Transmit 1-2"). */
   dante: boolean;
 }
 
@@ -119,8 +119,34 @@ export async function webOutputs(): Promise<WebOutput[]> {
   const all = await autoUnlock(await rawOutputs());
   return all
     .filter((d) => d.deviceId && !ALIASES.has(d.deviceId))
-    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Output ${i + 1}`, dante: /dante/i.test(d.label) }));
+    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Output ${i + 1}`, dante: isDante(d.label) }));
 }
+
+const isDante = (name: string) => /dante|\bDVS\b/i.test(name);
+
+/**
+ * Windows: Dante Virtual Soundcard is installed (its ASIO driver is) but Windows lists none of its
+ * outputs. It runs either ASIO or WDM, never both, and only WDM reaches Windows' own outputs, so it
+ * is stopped or in ASIO mode (the mode vMix and other ASIO apps use). Returns the driver's name.
+ */
+export async function danteAsioOnly(web?: WebOutput[]): Promise<string | null> {
+  if (!webRouting || (await webOutputsHidden())) return null; // a hidden list says nothing yet
+  let drivers: string[] = [];
+  try {
+    drivers = await invoke<string[]>("audio_asio_drivers");
+  } catch {
+    return null;
+  }
+  const dvs = drivers.find(isDante);
+  if (!dvs) return null;
+  return (web ?? (await webOutputs())).some((o) => o.dante) ? null : dvs;
+}
+
+/** What to do about danteAsioOnly, in words for the operator (and the MCP). */
+export const DANTE_WDM_STEPS =
+  "Dante Virtual Soundcard is installed but Windows lists none of its outputs: it is stopped, or set to ASIO, which only ASIO apps such as vMix can use. " +
+  "In the Dante Virtual Soundcard window: Stop, Settings → Audio Interface → WDM, Start. Its 8 stereo pairs then show here as DVS Transmit 1-2, 3-4 … (1-2 = Dante channels 1 and 2). " +
+  "In WDM mode ASIO apps on this computer no longer see it: point them at the DVS Transmit outputs too.";
 
 /** What the webview's default output is called ("Speakers (Realtek(R) Audio)"), when it says. */
 export async function webDefaultName(): Promise<string | null> {

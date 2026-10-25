@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 15;
+export const AGENT_SPEC_VERSION = 16;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -209,7 +209,7 @@ export const AGENT_COMMANDS = {
   audio_output: {
     live: true,
     description:
-      "Where the whole app's sound goes (cue sounds, thunder, announcements, video sound), for this computer. Lists the native devices (CoreAudio on macOS, Dante Virtual Soundcard / Dante Via included; on the Mac choosing one makes it the Mac's default output while the app runs) and the web engine's outputs (setSinkId; on Windows every playback device, Dante Virtual Soundcard included, each with dante: true/false), plus the current choice, the computer's default output (webDefault) and webNamesHidden (true = the webview still hides its outputs: on Windows that means no microphone-capable input exists to unlock them, e.g. Dante Virtual Soundcard is not running). Pass device to route: a native UID, a web deviceId or an exact device name; null goes back to the computer's default. Without device it only reads.",
+      "Where the whole app's sound goes (cue sounds, thunder, announcements, video sound), for this computer. Lists the native devices (CoreAudio on macOS, Dante Virtual Soundcard / Dante Via included; on the Mac choosing one makes it the Mac's default output while the app runs) and the web engine's outputs (setSinkId; on Windows every playback device, Dante Virtual Soundcard included when it runs in WDM mode as 'DVS Transmit 1-2' … one per stereo pair, each with dante: true/false), plus the current choice, the computer's default output (webDefault) and webNamesHidden (true = the webview still hides its outputs: on Windows that means no microphone-capable input exists to unlock them, e.g. Dante Virtual Soundcard is not running). danteNotListed appears when Dante Virtual Soundcard is installed but Windows lists none of its outputs (stopped or in ASIO mode): it says what the operator must change in Dante Virtual Soundcard; the app cannot play to ASIO. Pass device to route: a native UID, a web deviceId or an exact device name; null goes back to the computer's default. Without device it only reads.",
     params: args({
       device: { type: ["string", "null"], description: "Device UID / deviceId / exact name to route to; null = computer default. Omit to read." },
       engine: oneOf(["native", "web"], "Which engine's device to pick when a name exists in both (default: native)."),
