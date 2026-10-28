@@ -265,7 +265,7 @@ async function prepare(name: string, args: Record<string, unknown>): Promise<Rec
   if (name === "project" && args.op === "import") {
     const file = String(args.file ?? "");
     if (!isAbsolute(file) || !existsSync(file)) throw new Error("import needs file: an absolute path to a show file (.json)");
-    return { op: "import", json: readFileSync(file, "utf8") };
+    return { op: "import", json: readFileSync(file, "utf8"), levels: args.levels };
   }
   return args;
 }

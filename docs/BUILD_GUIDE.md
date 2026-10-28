@@ -17,7 +17,7 @@ Example, the lion: one scene (*The Lion on the Rock*), one video character (*Lio
 - It shows the **whole scene** (the label above it says so) and never reaches the wall.
 - **Show at:** *Start · 1 · 2 …* puts the preview at the moment after that step (delays dropped).
 - **Isolate** (⊙ on a row of *On stage*) shows one item on its own on black; the timeline follows it.
-- **Timeline** under the preview: pick a video or clip, drag to scrub, **Marker at …** adds a marker at the playhead. Ticks: green = fires a step, amber = sends lighting / MIDI / OSC. Click a tick to jump to it; the list below edits them.
+- **Timeline** under the preview: pick a video or clip, drag to scrub, **Marker at …** adds a marker at the playhead (it starts as a StageLight GO when the StageLight link is on, else a Hog GO). Ticks: green = fires a step, amber = sends lighting (Hog or StageLight) / MIDI / OSC. Click a tick to jump to it; the list below edits them.
 
 ## On stage
 

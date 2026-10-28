@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { now } from "@/core/clock";
-import { onBus, send } from "@/core/bus";
+import { onBus, send, unpackProgram } from "@/core/bus";
 import { isTauri } from "@/core/platform";
+import { steadyInterval } from "@/core/steadyTimer";
+import type { Scene } from "@/core/types";
 import { heldCueSounds, playingCueSounds, startProgramAudio, unlockAudio } from "@/engine/audio";
 import { startAudioRouting } from "@/engine/audioOutput";
 import { StageView } from "@/render/StageView";
@@ -34,12 +36,23 @@ export function OutputApp() {
     preloadPhotoAssets();
     let lastBusAt = 0;
     let lastBusType = "";
+    // Scene definitions by runtime key: a live-state update keeps the scene object the view already
+    // renders, so nothing keyed on component identity (text textures, material settings) redoes its work.
+    const scenes = new Map<string, Scene>();
+    let resyncAt = 0;
     const off = onBus((msg) => {
       lastBusAt = performance.now();
       lastBusType = msg.type;
       if (msg.type === "project") useShow.setState({ assets: msg.assets, output: msg.output });
-      else if (msg.type === "program") useShow.setState({ program: msg.program });
-      else if (msg.type === "poses") useShow.setState({ programPoses: msg.program, fromPoses: msg.from, posesAt: now() });
+      else if (msg.type === "program") {
+        const program = unpackProgram(msg, scenes);
+        if (program) useShow.setState({ program });
+        else if (performance.now() - resyncAt > 1000) {
+          // A run whose scene never arrived (started late, or a message was lost): ask for everything.
+          resyncAt = performance.now();
+          void send({ type: "hello" });
+        }
+      } else if (msg.type === "poses") useShow.setState({ programPoses: msg.program, fromPoses: msg.from, posesAt: now() });
     });
     void send({ type: "hello" });
     const stopRouting = startAudioRouting();
@@ -61,7 +74,8 @@ export function OutputApp() {
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    const hb = setInterval(() => {
+    // From a worker, so the heartbeat keeps its second even if this window is ever hidden or covered.
+    const stopHeartbeat = steadyInterval(() => {
       void send({
         type: "output-status",
         status: {
@@ -103,7 +117,7 @@ export function OutputApp() {
       stopAudio();
       stopRouting();
       cancelAnimationFrame(raf);
-      clearInterval(hb);
+      stopHeartbeat();
       bye();
       window.removeEventListener("beforeunload", bye);
       window.removeEventListener("dblclick", dbl);

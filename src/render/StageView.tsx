@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useShow } from "@/store/show";
 import { ErrorBoundary } from "@/ui/ErrorBoundary";
 import { SceneCanvas } from "./SceneCanvas";
+import { usePreviewHeard } from "@/engine/previewAudio";
 import { TimerOverlay } from "./TimerOverlay";
 import type { SlotRole, TransitionView } from "./frame";
 
@@ -133,8 +134,17 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
     return { poses: s.previewPoses, at: s.previewPosesAt };
   }, []);
   const getTransition = useCallback(() => null, []);
-  // No thumbnails from an isolated view: they would not show the scene.
-  const capture = useCallback((d: string) => rt && !solo && !hidden.length && onCapture?.(rt.scene.id, d), [rt, solo, hidden, onCapture]);
+  // No thumbnails from an isolated view: they would not show the scene. Reads the scene id at call
+  // time so this callback (a SceneContent prop) keeps its identity across preview state updates.
+  const capture = useCallback(
+    (d: string) => {
+      const cur = useShow.getState().preview;
+      if (cur && !solo && !hidden.length) onCapture?.(cur.scene.id, d);
+    },
+    [solo, hidden, onCapture],
+  );
+  // Videos and clips sound in the preview only while Build's preview sound is on.
+  const heard = usePreviewHeard();
   if (!rt) return <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">No scene selected</div>;
   return (
     <ErrorBoundary name="preview canvas" retryAfter={1500} fallback={null}>
@@ -149,7 +159,7 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
       canvasW={W}
       canvasH={H}
       isOutput={false}
-      audio={false}
+      audio={heard}
       dpr={dpr}
       targetFps={Math.min(targetFps, 60)}
       background={bg}

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, createPortal, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { clamp, easeIn, easeOut, now } from "@/core/clock";
@@ -45,6 +45,9 @@ export interface SceneCanvasProps {
   background: string;
   onCapture?: (dataUrl: string) => void;
 }
+
+/** How long a lost WebGL context may take to come back before the canvas is rebuilt without it. */
+const RESTORE_WAIT_MS = 3000;
 
 /** One scene instance rendered into its own WebGL canvas. Re-creates itself if the GPU context is lost. */
 export function SceneCanvas(p: SceneCanvasProps) {
@@ -97,15 +100,25 @@ export function SceneCanvas(p: SceneCanvasProps) {
         instrumentUploads(gl.getContext());
         const el = gl.domElement;
         // A lost context (driver reset, GPU hiccup) must never leave the wall frozen: let the
-        // browser restore it, then rebuild this canvas from the same runtime.
+        // browser restore it, then rebuild this canvas from the same runtime. Not every browser
+        // restores a lost context (WebKit may not): if nothing comes within RESTORE_WAIT_MS a new
+        // canvas is built anyway. `retired` marks this context once its successor is on the way.
+        let retired = false;
+        let restoreTimer: ReturnType<typeof setTimeout> | null = null;
+        const rebuild = () => {
+          if (retired || dead.current) return;
+          retired = true;
+          if (restoreTimer) clearTimeout(restoreTimer);
+          restoreTimer = null;
+          setGen((g) => g + 1);
+        };
         el.addEventListener("webglcontextlost", (e) => {
-          if (dead.current) return;
+          if (retired || dead.current) return;
           e.preventDefault();
           recordError(`WebGL context lost (${p.role}); rebuilding`);
+          if (!restoreTimer) restoreTimer = setTimeout(rebuild, RESTORE_WAIT_MS);
         });
-        el.addEventListener("webglcontextrestored", () => {
-          if (!dead.current) setGen((g) => g + 1);
-        });
+        el.addEventListener("webglcontextrestored", rebuild);
       }}
       style={{ position: "absolute", inset: 0 }}
     >
@@ -300,7 +313,13 @@ function Compositor({ back, front, fx, children, background, onCapture, look }: 
   );
 }
 
-function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntime; background: string; onCapture?: (d: string) => void }) {
+/**
+ * The scene's content tree. Memoised on the scene definition: live state (clocks, cues, effects) is
+ * read each frame through getRt, so a live-state update must not re-render the React tree beneath
+ * (up to 30 times a second during a scrub, and on every program broadcast in the output window).
+ */
+const SceneContent = memo(
+  function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntime; background: string; onCapture?: (d: string) => void }) {
   const { getRt } = useStage();
   const scene = runtime.scene;
   const preset = scene.environment;
@@ -316,6 +335,10 @@ function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntim
   });
 
   const flat = preset === "none";
+  // Shadows cost a depth pass per frame and shadow chunks in every lit shader. A media plate with
+  // nothing 3D on it (most of the show) has nothing to cast them, so the sun casts none there.
+  const casters = comps.some((c) => c.kind === "actor" || c.kind === "model" || c.kind === "procedural");
+  const shadows = !flat || casters;
   const back = (
     <>
       {comps.map((c) => (c.kind === "background" && c.source === "media" ? <MediaBackground key={c.id} comp={c} /> : null))}
@@ -363,7 +386,7 @@ function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntim
 
   return (
     <Compositor back={back} front={front} fx={fx} background={background} onCapture={onCapture} look={scene.look}>
-      <Lights plate={flat ? scene.plateLight ?? null : null} />
+      <Lights shadows={shadows} plate={flat ? scene.plateLight ?? null : null} />
       {shakes.length > 0 && <ShakeDriver comps={shakes} />}
       {preset === "shepherd-photoreal" ? (
         <group ref={envGroup}>
@@ -378,9 +401,9 @@ function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntim
           <Trees preset={preset} />
           <Grass preset={preset} />
         </group>
-      ) : (
+      ) : casters ? (
         <ShadowCatcher opacity={scene.plateLight?.shadow ?? 0.45} />
-      )}
+      ) : null}
       {comps.map((c) => {
         switch (c.kind) {
           case "actor":
@@ -402,7 +425,9 @@ function SceneContent({ runtime, background, onCapture }: { runtime: SceneRuntim
       })}
     </Compositor>
   );
-}
+  },
+  (a, b) => a.runtime.scene === b.runtime.scene && a.background === b.background && a.onCapture === b.onCapture,
+);
 
 /** Invisible ground that only receives shadows, so 3D actors sit on flat video plates. */
 function ShadowCatcher({ opacity }: { opacity: number }) {

@@ -1,5 +1,6 @@
 mod audio;
 mod cloud;
+mod dlive;
 mod fonts;
 mod io;
 mod media;
@@ -9,9 +10,14 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 /// Both webviews must share identical WebView2 arguments on Windows, otherwise the
 /// second window fails to start. Keep in sync with `additionalBrowserArgs` in tauri.conf.json.
+///
+/// Besides the Edge UI features and autoplay: Chromium throttles timers and rendering of a hidden
+/// or occluded window (the operator window behind StageMics would run its cue loop at 1 Hz), so
+/// backgrounding is switched off for both windows, and the GPU is used even on a driver Chromium
+/// would otherwise blocklist (software WebGL cannot draw a 3072 x 768 wall at 60 fps anyway).
 #[cfg(windows)]
 const BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --ignore-gpu-blocklist";
 
 /// Create the borderless audience output window if it does not exist yet, already at
 /// its target position (logical px). It is created visible: on macOS a webview that
@@ -49,6 +55,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(audio::plugin())
         .manage(io::IoState::default())
+        .manage(dlive::DliveState::default())
         .manage(package::HashCache::default())
         .invoke_handler(tauri::generate_handler![
             ensure_output_window,
@@ -57,6 +64,9 @@ pub fn run() {
             io::midi_send,
             io::osc_listen,
             io::osc_send,
+            dlive::dlive_connect,
+            dlive::dlive_disconnect,
+            dlive::dlive_send,
             fonts::system_fonts,
             package::package_export,
             package::package_read,

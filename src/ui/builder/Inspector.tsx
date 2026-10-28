@@ -4,6 +4,7 @@ import { EFFECT_DEFS, bool, num, str } from "@/core/effects";
 import { uid } from "@/core/ids";
 import { LION_ACTION_INFO } from "@/core/lion";
 import { LION_ACTIONS } from "@/core/types";
+import { clipLabel } from "@/core/clipActor";
 import { defaultActorLayout, defaultKenBurns, makeClip } from "@/core/factories";
 import { MarkersEditor } from "../io/MarkersEditor";
 import { probeDuration } from "@/engine/operator";
@@ -702,6 +703,9 @@ function ClipActorForm({ c, up }: { c: ClipActorComponent; up: Updater<ClipActor
               <div className="flex-1">
                 <TextField label="Name" value={k.name} onChange={(v) => upClip(k.id, (x) => (x.name = v))} />
               </div>
+              <div className="w-[38%]">
+                <TextField label="Button" value={k.label ?? ""} placeholder={clipLabel({ ...k, label: "" })} onChange={(v) => upClip(k.id, (x) => (x.label = v))} />
+              </div>
               <Button size="xs" variant="ghost" onClick={() => up((x) => (x.clips = x.clips.filter((z) => z.id !== k.id)))}>
                 Remove
               </Button>
@@ -729,7 +733,7 @@ function ClipActorForm({ c, up }: { c: ClipActorComponent; up: Updater<ClipActor
             {k.loop && k.startPose === k.endPose && (
               <SwitchField
                 label="Auto idle"
-                hint={`Plays automatically whenever another clip finishes on "${k.startPose}", so the actor never freezes`}
+                hint={`Plays automatically whenever another clip finishes on "${k.startPose}", so the actor never freezes. Several auto idles on one pose take turns, in list order`}
                 value={!!k.autoIdle}
                 onChange={(v) => upClip(k.id, (x) => (x.autoIdle = v))}
               />

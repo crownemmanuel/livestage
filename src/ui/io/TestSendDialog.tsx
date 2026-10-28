@@ -3,18 +3,21 @@ import { CircleCheck, CircleX, RotateCcw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { IoMessage } from "@/core/types";
-import { describeMessage, hogMaster, hogOsc, hogTarget, resolveHog, sendMessage, useIo } from "@/engine/io";
+import { describeMessage, hogMaster, hogOsc, hogTarget, resolveHog, sendMessage, soundWire, useIo, type SendContext } from "@/engine/io";
+import { stageLightAnswer, stageLightReach, stageLightWire } from "@/engine/stageLight";
 import { useProject } from "@/store/project";
 
 /**
  * What a Test press did: UDP and MIDI get no reply, so the app cannot know whether the console
  * reacted. The operator says so, and a "no" opens the checklist for that kind of message.
  */
-type Result = { lines: string[]; error: string | null };
+type Result = { lines: string[]; error: string | null; /** What StageLight said back, if anything (it answers refusals, and announces GOs). */ answer?: { error: string } | { live: string } | null };
 
 /** The exact packets a message becomes, so the operator can compare them with the console's own log. */
-function wireLines(m: IoMessage): string[] {
+function wireLines(m: IoMessage, ctx: SendContext): string[] {
   const io = useProject.getState().project.io;
+  if (m.type === "sound") return soundWire(m, ctx);
+  if (m.type === "stagelight") return stageLightWire(m);
   if (m.type === "hog") {
     const t = hogTarget(io);
     const to = t ? ` → ${t.host}:${t.port}` : "";
@@ -68,6 +71,32 @@ function Troubleshooting({ m }: { m: IoMessage }) {
       </ol>
     );
   }
+  if (m.type === "sound") {
+    const so = io?.sound;
+    return (
+      <ol className="grid gap-1.5 text-[12px]">
+        <Check title="Is StageMics running, at that address?">
+          Settings → StageMics: {mono(so ? `${so.host}:${so.port}` : "not set")} (its OSC port is 1451). The status there says whether it answers; switch on Receive from console → Listen for OSC to see its replies.
+        </Check>
+        <Check title="Does StageMics know that mic or scene?">A mic is its number or the character's name as StageMics has it. Scenes match by LiveStage scene id, so StageMics' scenes must come from this show.</Check>
+      </ol>
+    );
+  }
+  if (m.type === "stagelight") {
+    const sl = io?.stagelight;
+    return (
+      <ol className="grid gap-1.5 text-[12px]">
+        <Check title="Is StageLight running, at that address and port?">
+          Settings → StageLight: {mono(sl ? `${sl.host}:${sl.port}` : "not set")}. The show desk listens on {mono("1461")}; dev desks on other ports (1471). The status there says whether StageLight answers its pings; switch on Receive from console → Listen for OSC to see its replies.
+        </Check>
+        <Check title="Does StageLight know that page, cue or trigger?">
+          In StageLight, ☰ → Network & triggers lists every message it received with its result. A page or cue is its name, ID or number (1 = the first); a named trigger must be set up there first.
+        </Check>
+        <Check title="Is StageLight on another computer?">StageLight listens on This Mac only unless it is switched to Show network, and then only hears the addresses on its allowlist.</Check>
+        <Check title="Did the lights not change, though StageLight GOed?">StageLight's physical output may not be armed (it then runs in preview only), or the master or blackout may be holding the look down.</Check>
+      </ol>
+    );
+  }
   if (m.type === "osc") {
     return (
       <ol className="grid gap-1.5 text-[12px]">
@@ -94,12 +123,17 @@ export function TestSendButton({ m, className, size = "xs", variant = "ghost" }:
   const [result, setResult] = useState<Result | null>(null);
   const [failed, setFailed] = useState(false);
 
+  // A message being edited belongs to the scene in the builder (a Sound-app "this scene").
+  const sceneId = useProject((s) => s.selectedSceneId);
   const send = async () => {
     const before = useIo.getState().log.length;
-    await sendMessage(m);
+    const at = Date.now();
+    await sendMessage(m, { sceneId });
     const err = useIo.getState().log.slice(before).find((l) => l.dir === "error");
-    setResult({ lines: wireLines(m), error: err ? err.text : null });
-    setFailed(!!err);
+    // StageLight answers a refusal within milliseconds; wait a moment for it (only while it answers pings).
+    const answer = m.type === "stagelight" && !err && stageLightReach() === "answering" ? await stageLightAnswer(at) : undefined;
+    setResult({ lines: wireLines(m, { sceneId }), error: err ? err.text : null, answer });
+    setFailed(!!err || (!!answer && "error" in answer));
   };
 
   return (
@@ -114,7 +148,15 @@ export function TestSendButton({ m, className, size = "xs", variant = "ghost" }:
             <DialogDescription>
               {result?.error
                 ? "The message never left this computer."
-                : "Sent. The console doesn't reply to these messages, so only you can see whether it reacted."}
+                : m.type === "sound"
+                  ? "Sent to StageMics. Check its screen to see whether it changed."
+                : m.type === "stagelight"
+                  ? result?.answer && "error" in result.answer
+                    ? "StageLight received it and refused it."
+                    : result?.answer
+                      ? "StageLight received it and GOed."
+                      : "Sent to StageLight. It answers only when it refuses a message (or announces a GO), so check its screen to see whether it reacted."
+                  : "Sent. The console doesn't reply to these messages, so only you can see whether it reacted."}
             </DialogDescription>
           </DialogHeader>
           {result && (
@@ -127,9 +169,11 @@ export function TestSendButton({ m, className, size = "xs", variant = "ghost" }:
                   </div>
                 ))}
                 {result.error && <div className="mt-1 text-destructive">{result.error}</div>}
+                {result.answer && "error" in result.answer && <div className="mt-1 text-destructive">StageLight: {result.answer.error}</div>}
+                {result.answer && "live" in result.answer && <div className="mt-1 text-preview">StageLight GO: {result.answer.live}</div>}
               </div>
               {result.error ? (
-                <p className="text-muted-foreground">Check Settings: the lighting console's address and port, the MIDI output, and that this is the desktop app (a browser tab cannot send OSC or MIDI).</p>
+                <p className="text-muted-foreground">Check Settings: the lighting console's, StageLight's or StageMics' address and port (and switch), the MIDI output, and that this is the desktop app (a browser tab cannot send OSC or MIDI).</p>
               ) : (
                 failed && (
                   <>

@@ -35,7 +35,7 @@ import { useIo } from "@/engine/io";
 import { clearLiveState } from "@/engine/persist";
 import { OutputSettingsDialog } from "./OutputSettings";
 import { SettingsDialog } from "./io/IoDialog";
-import { ShowPackageDialog, startPackageExport, startPackageImport } from "./ShowPackage";
+import { ShowPackageDialog, startPackageExport, startPackageImport, startShowFileImport } from "./ShowPackage";
 import { CloudSyncDialog } from "./CloudSync";
 import { getErrors, onErrors } from "./ErrorBoundary";
 import { RoundToggle, Tip, ToolbarButton } from "./kit";
@@ -141,7 +141,7 @@ export function TopBar() {
             <DropdownMenuItem
               onClick={async () => {
                 const p = await importProject();
-                if (p) await useProject.getState().replaceProject(p);
+                if (p) await startShowFileImport(p);
               }}
             >
               <FileUp /> Import show file…

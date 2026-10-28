@@ -4,8 +4,50 @@
     {
       "name": "vite",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeArgs": [
+        "dev"
+      ],
       "port": 1430
+    },
+    {
+      "name": "fake-dlive",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "fake-dlive"
+      ],
+      "port": 51325
+    },
+    {
+      "name": "sound",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "sound:serve"
+      ],
+      "port": 1450
+    },
+    {
+      "name": "sound-test",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "sound/server/main.ts",
+        "--data",
+        "/private/tmp/claude-501/-Users-emmanuelcrown-Documents-Projects-livestage/90200581-a1b5-48f0-8ef8-0a4e724c4a36/scratchpad/sound-test-data",
+        "--http-port",
+        "1480",
+        "--osc-port",
+        "1481"
+      ],
+      "port": 1480
+    },
+    {
+      "name": "vite-audit",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "dev",
+        "--port",
+        "1432"
+      ],
+      "port": 1432
     }
   ]
 }

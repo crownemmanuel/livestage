@@ -1,13 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Activity, BookMarked, Cable, Lightbulb, Network, Play, Plus, Radio, RefreshCw, Speaker, Square, Trash2, Wand2, Zap } from "lucide-react";
+import { Activity, BookMarked, Cable, LampCeiling, Lightbulb, Network, Play, Plus, Radio, RefreshCw, SlidersVertical, Speaker, Square, Trash2, Wand2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { uid } from "@/core/ids";
 import { defaultIo, HOG_DEFAULT_HOST } from "@/core/factories";
+import { pingSoundApp, SOUND_ALIVE_MS, useSoundApp } from "@/engine/soundApp";
 import type { HogItem, HogKind, IoAction, IoMatch, IoSettings, IoTrigger } from "@/core/types";
 import { describeIncoming, describeMatch, HOG_KIND_LABEL, hogTarget, injectIncoming, matchFromIncoming, refreshMidiPorts, sendMessage, useIo } from "@/engine/io";
 import { describeIoAction } from "@/engine/operator";
+import { pingStageLight, requestStageLightCatalog, STAGELIGHT_ALIVE_MS, useStageLight } from "@/engine/stageLight";
+import { STAGELIGHT_DEFAULT_PORT } from "@/core/stageLight";
 import { useProject } from "@/store/project";
 import { NumberInput, Section, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
@@ -17,25 +20,36 @@ import { SidebarDialog, type SidebarSection } from "../SidebarDialog";
 
 const NONE = "__none__";
 
+/** Settings with the sections added later filled in (a show loaded before them may not have them yet). */
+function withDefaults(io: IoSettings | undefined): IoSettings {
+  const d = defaultIo();
+  if (!io) return d;
+  return io.sound ? io : { ...io, sound: d.sound };
+}
+
 function useIoSettings(): [IoSettings, (fn: (io: IoSettings) => void) => void] {
-  const io = useProject((s) => s.project.io) ?? defaultIo();
+  const io = withDefaults(useProject((s) => s.project.io));
   const set = (fn: (io: IoSettings) => void) =>
     useProject.getState().update((p) => {
       p.io ??= defaultIo();
+      p.io.sound ??= defaultIo().sound;
+      p.io.stagelight ??= defaultIo().stagelight;
       fn(p.io);
     });
   return [io, set];
 }
 
-export type SettingsSection = "console" | "library" | "receive" | "triggers" | "midi" | "osc" | "audio" | "monitor";
+export type SettingsSection = "console" | "library" | "stagelight" | "receive" | "triggers" | "midi" | "osc" | "soundApp" | "audio" | "monitor";
 
 const SECTIONS: SidebarSection<SettingsSection>[] = [
   { id: "console", group: "Lighting", label: "Lighting console", icon: <Lightbulb />, blurb: "Where cues and clip markers send GO / release / halt: the Hog 4 on HogNet." },
   { id: "library", group: "Lighting", label: "Lighting library", icon: <BookMarked />, blurb: "Name each Hog cuelist, scene or macro once; cues point at the name." },
+  { id: "stagelight", group: "Lighting", label: "StageLight", icon: <LampCeiling />, blurb: "The StageLight lighting desk: cues and clip markers GO its cue lists or fire its named triggers." },
   { id: "receive", group: "Show control", label: "Receive from console", icon: <Radio />, blurb: "Let the console or another OSC device drive the show." },
   { id: "triggers", group: "Show control", label: "Incoming triggers", icon: <Zap />, blurb: "Map incoming MIDI / OSC messages to show actions." },
   { id: "midi", group: "Show control", label: "MIDI", icon: <Cable />, blurb: "MIDI Show Control from the console, or MIDI notes from sound." },
-  { id: "osc", group: "Show control", label: "Other OSC devices", icon: <Network />, blurb: "More OSC targets (sound desk, logger) and announcing every TAKE and GO." },
+  { id: "osc", group: "Show control", label: "Other OSC devices", icon: <Network />, blurb: "More OSC targets (a logger, another app) and announcing every TAKE and GO." },
+  { id: "soundApp", group: "Sound", label: "StageMics (dLive)", icon: <SlidersVertical />, blurb: "Mics, voice effects and the dLive: cues and clip markers tell StageMics what to do." },
   { id: "audio", group: "Sound", label: "Audio output", icon: <Speaker />, blurb: "The speakers all of the app's sound plays on, on this computer." },
   { id: "monitor", group: "Diagnostics", label: "Monitor", icon: <Activity />, blurb: "Every message in and out, with a test sender." },
 ];
@@ -44,25 +58,37 @@ const SECTIONS: SidebarSection<SettingsSection>[] = [
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const [section, setSection] = useState<SettingsSection>("console");
   const st = useIo();
-  const io = useProject((s) => s.project.io) ?? defaultIo();
+  const io = withDefaults(useProject((s) => s.project.io));
   useEffect(() => {
     if (open) void refreshMidiPorts();
   }, [open]);
   const lastHog = [...st.log].reverse().find((e) => e.text.startsWith("Hog ") || e.text.includes("/hog/"));
+  const soundHello = useSoundApp((s) => s.hello?.at ?? 0);
+  const stageLightHello = useStageLight((s) => s.hello?.at ?? 0);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const t = setInterval(() => tick((n) => n + 1), 2000);
+    return () => clearInterval(t);
+  }, [open]);
   // A small status light per section, where there is something to report.
   const status: Partial<Record<SettingsSection, ReactNode>> = {
+    soundApp: io.sound.enabled && <StatusDot ok={Date.now() - soundHello < SOUND_ALIVE_MS} />,
     console: lastHog && <StatusDot ok={lastHog.dir === "out"} warn={lastHog.dir === "error"} />,
     receive: io.osc.enabled && <StatusDot ok={st.oscStatus === "listening"} warn={st.oscStatus === "error"} />,
     midi: io.midi.enabled && <StatusDot ok={st.midiStatus === "open"} warn={st.midiStatus === "error"} />,
+    stagelight: io.stagelight?.enabled && <StatusDot ok={Date.now() - stageLightHello < STAGELIGHT_ALIVE_MS} />,
   };
   return (
     <SidebarDialog open={open} onOpenChange={onOpenChange} title="Settings" sections={SECTIONS.map((x) => ({ ...x, status: status[x.id] }))} section={section} onSection={setSection}>
       {section === "console" && <ConsoleSection />}
       {section === "library" && <LibraryTab />}
+      {section === "stagelight" && <StageLightSection />}
       {section === "receive" && <ReceiveSection />}
       {section === "triggers" && <TriggersTab />}
       {section === "midi" && <MidiSection />}
       {section === "osc" && <OtherOscSection />}
+      {section === "soundApp" && <SoundAppSection />}
       {section === "audio" && (
         <div className="space-y-3">
           <AudioOutputPicker inCard />
@@ -145,6 +171,98 @@ function ConsoleSection() {
         <p>
           Name your cuelists under <span className="text-foreground/85">Lighting library</span>, then add a <span className="text-armed">Lighting</span> action to any cue.
         </p>
+      </div>
+    </div>
+  );
+}
+
+function StageLightSection() {
+  const [io, set] = useIoSettings();
+  const st = useIo();
+  const sl = useStageLight();
+  const link = io.stagelight ?? defaultIo().stagelight;
+  const alive = !!sl.hello && Date.now() - sl.hello.at < STAGELIGHT_ALIVE_MS;
+  const time = (at: number) => new Date(at).toLocaleTimeString([], { hour12: false });
+  return (
+    <div className="space-y-4">
+      {!link.enabled ? (
+        <Pill ok={false}>off</Pill>
+      ) : alive ? (
+        <Pill ok>
+          answering · v{sl.hello!.version}
+          {sl.hello!.armed !== null && ` · ${sl.hello!.armed ? "output armed" : "preview only"}`}
+        </Pill>
+      ) : (
+        <Pill ok={false} warn={!!sl.pingError}>{sl.pingError ? "cannot send" : io.osc.enabled ? "no answer yet" : "sent (no replies: listen for OSC is off)"}</Pill>
+      )}
+      {!st.available.osc && <p className="text-[12px] text-armed">Needs the desktop app.</p>}
+      <SwitchRow
+        label="Send to StageLight"
+        hint="Cues and clip markers with a StageLight message go here. Switching it on also switches on Listen for OSC, which StageLight's answers and lists need. This computer only."
+        checked={link.enabled}
+        onChange={(v) =>
+          set((x) => {
+            x.stagelight.enabled = v;
+            if (v) x.osc.enabled = true;
+          })
+        }
+      />
+      <div className="grid grid-cols-[1fr_120px_auto] items-end gap-3">
+        <Labeled label="StageLight IP address" hint="127.0.0.1 when it runs on this computer">
+          <input className={cn(INPUT, "w-full")} defaultValue={link.host} key={link.host} placeholder="127.0.0.1" onBlur={(e) => e.target.value.trim() && set((x) => (x.stagelight.host = e.target.value.trim()))} />
+        </Labeled>
+        <Labeled label="OSC port" hint={`StageLight's OSC listen port (${STAGELIGHT_DEFAULT_PORT}; dev desks use others)`}>
+          <NumberInput className="h-9 rounded-lg text-[13px]" value={link.port} min={1} max={65535} step={1} onChange={(v) => set((x) => (x.stagelight.port = Math.round(v)))} />
+        </Labeled>
+        <Button size="sm" variant="outline" className="h-9 rounded-lg" disabled={!link.enabled} onClick={() => void pingStageLight()}>
+          <RefreshCw /> Ping
+        </Button>
+      </div>
+      {sl.pingError && <p className="text-[12px] text-destructive">{sl.pingError}</p>}
+      {link.enabled && (alive || sl.live || sl.error) && (
+        <div className="space-y-1 rounded-lg border border-border/70 bg-card/40 px-4 py-3 text-[12px] text-muted-foreground">
+          {alive && <div>Running: {sl.hello!.page ? `${sl.hello!.page}${sl.hello!.cue ? ` · ${sl.hello!.cue}` : ""}` : "nothing"}</div>}
+          {sl.live && (
+            <div className="text-preview">
+              Last GO {time(sl.live.at)}: {sl.live.pageName} · cue {sl.live.cueNumber} {sl.live.cueName}
+            </div>
+          )}
+          {sl.error && (
+            <div className="text-destructive">
+              Refused {time(sl.error.at)}: {sl.error.address} · {sl.error.message}
+            </div>
+          )}
+        </div>
+      )}
+      {link.enabled && (
+        <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-card/40 px-4 py-2.5 text-[12px]">
+          <div className="min-w-0 flex-1 text-muted-foreground">
+            {sl.catalogState === "unsupported"
+              ? "This StageLight has no catalog (before 0.3): type page, cue and trigger names."
+              : sl.catalogState === "loading"
+                ? "Reading StageLight's pages, cues and triggers…"
+                : sl.catalogState === "failed"
+                  ? "StageLight's catalog kept arriving incomplete. Refresh to try again."
+                  : link.catalog
+                    ? `Pick from: ${link.catalog.pages.length} pages, ${link.catalog.pages.reduce((n, p) => n + p.cues.length, 0)} cues, ${link.catalog.triggers.length} triggers, ${link.catalog.library.length} library cues${alive && sl.catalogState === "ok" ? "" : " (as last read)"}`
+                    : "Cues pick StageLight's pages, cues and triggers from its catalog once it answers."}
+          </div>
+          <Button size="sm" variant="ghost" className="h-7 rounded-lg" disabled={!alive || sl.catalogState === "unsupported"} onClick={() => void requestStageLightCatalog()}>
+            <RefreshCw /> Refresh
+          </Button>
+        </div>
+      )}
+      <SwitchRow
+        label="Mirror TAKE and GO as named triggers"
+        hint={'Every live TAKE also sends trigger "scene.<code>" (scene.12, scene.1.2) and every GO "cue.<code>.<n>" (cue.12.3). Map the ones you need in StageLight; the rest are ignored.'}
+        checked={link.mirror}
+        onChange={(v) => set((x) => (x.stagelight.mirror = v))}
+      />
+      <div className="space-y-1.5 rounded-lg border border-border/70 bg-card/40 px-4 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p>
+          Add a <span className="text-armed">StageLight</span> action to a cue, or a time marker on a video: GO a page's next cue, GO a given cue (its auto-follow chain runs on in StageLight), or fire a <span className="text-foreground/85">named trigger</span> such as lion.leap. Named triggers are mapped in StageLight (☰ → Network & triggers), so cue numbers can change there without touching the show here.
+        </p>
+        <p>Replies (answering, refusals, and the GO announcements of a StageLight target pointed at this computer's listen port) need Receive from console → Listen for OSC on.</p>
       </div>
     </div>
   );
@@ -239,6 +357,59 @@ function OtherOscSection() {
           <SelectBox className="h-9 rounded-lg text-[13px]" value={io.osc.notifyTarget ?? io.osc.targets[0]?.id ?? NONE} onChange={(v) => set((x) => (x.osc.notifyTarget = v === NONE ? null : v))} options={io.osc.targets.length ? io.osc.targets.map((t) => ({ value: t.id, label: t.name })) : [{ value: NONE, label: "no targets" }]} />
         </Labeled>
       )}
+    </div>
+  );
+}
+
+function SoundAppSection() {
+  const [io, set] = useIoSettings();
+  const st = useIo();
+  const sa = useSoundApp();
+  const alive = !!sa.hello && Date.now() - sa.hello.at < SOUND_ALIVE_MS;
+  const mics = Object.entries(sa.mics);
+  return (
+    <div className="space-y-4">
+      {!io.sound.enabled ? (
+        <Pill ok={false}>off</Pill>
+      ) : alive ? (
+        <Pill ok>answering · v{sa.hello!.appVersion} · desk {sa.hello!.deskConnected ? "connected" : "not connected"}</Pill>
+      ) : (
+        <Pill ok={false} warn={!!sa.pingError}>{sa.pingError ? "cannot send" : io.osc.enabled ? "no answer yet" : "sent (no replies: listen for OSC is off)"}</Pill>
+      )}
+      {!st.available.osc && <p className="text-[12px] text-armed">Needs the desktop app.</p>}
+      <SwitchRow label="Send to StageMics" hint="Cues and clip markers with StageMics message go here. This computer only." checked={io.sound.enabled} onChange={(v) => set((x) => (x.sound.enabled = v))} />
+      <div className="grid grid-cols-[1fr_120px_auto] items-end gap-3">
+        <Labeled label="StageMics IP address" hint="127.0.0.1 when it runs on this computer">
+          <input className={cn(INPUT, "w-full")} defaultValue={io.sound.host} key={io.sound.host} placeholder="127.0.0.1" onBlur={(e) => e.target.value.trim() && set((x) => (x.sound.host = e.target.value.trim()))} />
+        </Labeled>
+        <Labeled label="OSC port">
+          <NumberInput className="h-9 rounded-lg text-[13px]" value={io.sound.port} min={1} max={65535} step={1} onChange={(v) => set((x) => (x.sound.port = Math.round(v)))} />
+        </Labeled>
+        <Button size="sm" variant="outline" className="h-9 rounded-lg" disabled={!io.sound.enabled} onClick={() => void pingSoundApp()}>
+          <RefreshCw /> Ping
+        </Button>
+      </div>
+      {sa.pingError && <p className="text-[12px] text-destructive">{sa.pingError}</p>}
+      {alive && (sa.cue || mics.length > 0) && (
+        <div className="rounded-lg border border-border/70 bg-card/40 px-4 py-3 text-[12px]">
+          {sa.cue && <div className="text-muted-foreground">Active: cue {sa.cue.cue} of {useProject.getState().project.scenes.find((x) => x.id === sa.cue!.sceneId)?.name ?? sa.cue.sceneId}</div>}
+          {mics.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {mics.map(([n, m]) => (
+                <span key={n} className={cn("rounded-md border px-1.5 py-0.5 text-[11px]", m.live ? "border-preview/50 text-preview" : "border-border text-muted-foreground")}>
+                  {n} {m.name} · {m.live ? "live" : "muted"}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="space-y-1.5 rounded-lg border border-border/70 bg-card/40 px-4 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p>
+          StageMics owns the mics and the desk. Add a <span className="text-foreground/85">StageMics</span> action to a cue (activate the scene, go to a cue, a mic live or muted, a voice effect), or a time marker on a track: mute Joseph exactly when his recorded vocal starts, unmute him when it ends.
+        </p>
+        <p>If a track that moved a mic stops, restarts or is scrubbed before its end, LiveStage sends Restore once and StageMics puts every mic back to its current cue. Replies (answering, mic states) need Receive from console → Listen for OSC on.</p>
+      </div>
     </div>
   );
 }
@@ -556,7 +727,7 @@ function LogTab() {
       <Section title="Send a test message">
         <MessageFields m={msg} onChange={setMsg} />
       </Section>
-      <p className="text-[10.5px] leading-snug text-muted-foreground">Cues send with a Lighting or MIDI / OSC action; clips send at a time with Time markers (Build → select the clip or video).</p>
+      <p className="text-[10.5px] leading-snug text-muted-foreground">Cues send with a Lighting, StageMics, Sound desk or MIDI / OSC action; clips send at a time with Time markers (Build → select the clip or video).</p>
     </div>
   );
 }

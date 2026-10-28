@@ -4,6 +4,8 @@
 // What the two webviews play (measured on this project, see docs/ARCHITECTURE.md, "Media formats"):
 // - macOS (WKWebView, AVFoundation): H.264 up to 4096 px wide/high in hardware; a wider H.264 frame
 //   decodes but reaches WebGL as a green frame with garbage along the top. HEVC decodes up to 8K.
+// - A library file reaches the player through the asset protocol, which serves at most 1000 KiB per
+//   request; a frame bigger than that is not put back together and the bottom of it plays green.
 // - Windows (WebView2): H.264 and VP9 everywhere; HEVC only with the paid Microsoft extension.
 // - Any seek lands on the previous keyframe and decodes forward from there, so a long GOP stalls
 //   every scrub and every drift correction.
@@ -20,6 +22,8 @@ export interface ProbeVideo {
   keyframe_gap_s: number | null;
   keyframes: number;
   alpha: boolean;
+  /** Largest compressed frame in bytes (absent in probes stored before it was measured). */
+  max_frame_bytes?: number;
 }
 
 export interface ProbeAudio {
@@ -43,7 +47,7 @@ export interface MediaProbe {
 export interface MediaProblem {
   /** error: will not play or will not look right; warn: plays, but costs or stalls. */
   severity: "error" | "warn";
-  code: "h264-too-wide" | "codec" | "oversize" | "long-gop" | "no-faststart" | "fragmented" | "high-fps" | "high-bitrate" | "unreadable";
+  code: "h264-too-wide" | "big-frame" | "codec" | "oversize" | "long-gop" | "no-faststart" | "fragmented" | "high-fps" | "high-bitrate" | "unreadable";
   message: string;
   /** Optimising (re-encoding into the wall format) fixes it. */
   fixable: boolean;
@@ -57,6 +61,13 @@ export interface WallFormat {
 
 /** The hardware H.264 decoder's ceiling on Apple silicon and most Intel/AMD parts (level 5.2). */
 export const H264_MAX_DIM = 4096;
+/**
+ * Largest frame a library video may hold. The asset protocol answers each range request with at most
+ * 1000 KiB (tauri::protocol::asset MAX_LEN = 1,024,000 bytes) and the Mac's player does not reassemble a
+ * bigger frame: measured on the 3072 x 768 street plate (October 2026), 1,273 KB keyframes played with a
+ * green bottom from the library and clean from the dev server; capped at 797 KB they played clean from both.
+ */
+export const MAX_FRAME_BYTES = 1_000_000;
 /** Longest keyframe gap that still scrubs and re-syncs without a visible stall. */
 export const MAX_KEYFRAME_GAP_S = 2;
 /** Frames larger than this many times the canvas only cost decode time. */
@@ -83,6 +94,14 @@ export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, o
       severity: "error",
       code: "h264-too-wide",
       message: `H.264 at ${px(v.width)}×${px(v.height)} is wider than the ${px(H264_MAX_DIM)} px the hardware decoder handles: on a Mac the picture comes out green with garbage. Re-encode at the wall size.`,
+      fixable: !alpha,
+    });
+  }
+  if ((v.max_frame_bytes ?? 0) > MAX_FRAME_BYTES) {
+    out.push({
+      severity: "error",
+      code: "big-frame",
+      message: `Its biggest frame is ${Math.round(v.max_frame_bytes! / 1024).toLocaleString()} KB; the app serves a library file at most 1000 KB at a time, so on a Mac the bottom of that picture plays green. Optimise it (the copy keeps every frame under ~875 KB).`,
       fixable: !alpha,
     });
   }

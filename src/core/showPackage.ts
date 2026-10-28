@@ -4,7 +4,7 @@
 
 import { uid } from "./ids";
 import { bundledOnDisk, isTauri } from "./platform";
-import { applyMerge, outgoingShow, planMerge, replaceWithIncoming, showUnits, stampOutgoing, type MergeChoice, type MergePlan, type MergeResult, type ReceiveInfo, type UnitInfo } from "./showMerge";
+import { applyMerge, outgoingShow, planMerge, replaceWithIncoming, showUnits, SOUND_LEVELS, stampOutgoing, type MergeChoice, type MergePlan, type MergeResult, type ReceiveInfo, type UnitInfo } from "./showMerge";
 import type { Asset, Project } from "./types";
 
 export const PACKAGE_FORMAT = "salvation-show-package";
@@ -182,7 +182,10 @@ export function previewImport(local: Project, pkg: IncomingPackage): ImportPrevi
 export interface ImportOptions {
   /** replace: take the whole incoming show (machine settings stay). merge: per unit, with `choices` for conflicts. */
   mode: "replace" | "merge";
-  /** Conflict key → choice. Conflicts without a choice keep this machine's version. */
+  /**
+   * Conflict key → choice. Conflicts without a choice keep this machine's version. The sound levels conflict
+   * ("mix") also applies in replace mode.
+   */
   choices?: Record<string, MergeChoice>;
 }
 
@@ -198,7 +201,12 @@ export interface ImportResult {
 }
 
 export function mergeIncoming(local: Project, incoming: Project, plan: MergePlan, opts: ImportOptions, info: ReceiveInfo): MergeResult {
-  if (opts.mode === "replace") return replaceWithIncoming(local, incoming, info);
+  if (opts.mode === "replace") {
+    // Levels set here are asked about in this mode too (the "mix" item); unanswered, this computer's stay.
+    const levels = plan.items.find((it) => it.key === SOUND_LEVELS);
+    const keep = levels?.state === "conflict" && (opts.choices?.[SOUND_LEVELS] ?? "local") === "local";
+    return replaceWithIncoming(local, incoming, info, keep);
+  }
   const items = plan.items.map((it) => {
     const c = opts.choices?.[it.key];
     return it.state === "conflict" && c && it.options.includes(c) ? { ...it, choice: c } : it;

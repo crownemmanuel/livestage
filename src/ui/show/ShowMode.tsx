@@ -38,6 +38,8 @@ import {
   Check,
   MonitorPlay,
   AlertTriangle,
+  VolumeX,
+  CircleHelp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -337,6 +339,7 @@ const ACTION_ICON: Record<CueAction["type"], typeof Play> = {
   blackout: Moon,
   clock: Snowflake,
   sound: Volume2,
+  "audio.fade": VolumeX,
   send: Send,
   timer: Timer,
   announce: Megaphone,
@@ -351,7 +354,8 @@ function ActionIcons({ actions }: { actions: CueAction[] }) {
   return (
     <span className="flex flex-wrap items-center gap-1">
       {actions.map((a, i) => {
-        const I = ACTION_ICON[a.type];
+        // An action type this build does not know (a newer show file, a hand edit) gets a ? instead of breaking the list.
+        const I = ACTION_ICON[a.type] ?? CircleHelp;
         return (
           <Tip key={i} label={describeAction(a)}>
             <span className="relative grid size-6 place-items-center rounded bg-accent/70 text-muted-foreground">
@@ -584,6 +588,8 @@ export function describeAction(a: import("@/core/types").CueAction): string {
       return `${a.op === "pause" ? "freeze" : a.op === "resume" ? "resume" : "freeze/resume"}${d}`;
     case "sound":
       return `sound${d}`;
+    case "audio.fade":
+      return `fade out ${a.which === "all" ? "all audio" : `${a.which.length} sound${a.which.length === 1 ? "" : "s"}`} (${a.fade}s)${d}`;
     case "send":
       return `send ${describeMessage(a.message)}${d}`;
     case "timer": {
@@ -604,6 +610,8 @@ export function describeAction(a: import("@/core/types").CueAction): string {
       return `${a.key} = ${String(a.value)}${d}`;
     case "framing":
       return `framing ${a.zoom.toFixed(2)}× over ${a.duration}s${d}`;
+    default:
+      return `unknown action "${(a as { type: string }).type}"${d}`;
   }
 }
 

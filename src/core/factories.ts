@@ -1,5 +1,6 @@
 import { EFFECT_DEFS } from "./effects";
 import { uid } from "./ids";
+import { STAGELIGHT_DEFAULT_PORT } from "./stageLight";
 import type {
   ActorComponent,
   BackgroundComponent,
@@ -221,7 +222,7 @@ export function defaultOutput(): OutputSettings {
     backgroundColor: "#000000",
     safeArea: { enabled: true, marginPct: 5, showOnOutput: false },
     testPattern: false,
-    standby: { text: "SALVATION 2026", subtext: "The House of David", assetId: null, color: "#000000" },
+    standby: { text: "LIVESTAGE", subtext: "", assetId: null, color: "#000000" },
     timerOverlay: defaultTimerOverlay(),
   };
 }
@@ -300,7 +301,7 @@ export function makeProcedural(
 }
 
 export function makeClip(name: string, partial: Partial<ClipDef> = {}): ClipDef {
-  return { id: uid("clip"), name, assetId: null, startPose: "hero", endPose: "hero", duration: 5, loop: false, ...partial };
+  return { id: uid("clip"), name, label: "", assetId: null, startPose: "hero", endPose: "hero", duration: 5, loop: false, ...partial };
 }
 
 export function makeClipActor(name = "Video Actor", partial: Partial<ClipActorComponent> = {}): ClipActorComponent {
@@ -441,6 +442,8 @@ export function defaultIo(): IoSettings {
     osc: { enabled: false, listenPort: 9000, targets: [{ id: "osc_hog", name: "Hog 4", host: HOG_DEFAULT_HOST, port: 7001 }], notifyTarget: "osc_hog", notify: false },
     triggers: [],
     hogItems: defaultHogItems(),
+    sound: { enabled: false, host: "127.0.0.1", port: 1451 },
+    stagelight: { enabled: false, host: "127.0.0.1", port: STAGELIGHT_DEFAULT_PORT, mirror: false },
   };
 }
 

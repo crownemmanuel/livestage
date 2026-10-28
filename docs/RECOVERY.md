@@ -12,9 +12,13 @@ The audience output keeps showing the last state it received while the operator 
 
 The output sends a heartbeat every second. If it stops without a goodbye, the top bar shows **OUTPUT LOST · reopening** and the app reopens the output window on its monitor within a few seconds, with the current program. (Closing it from the top bar is remembered and does not trigger a reopen.) The program is also re-sent every five seconds so a missed message never sticks.
 
+## If the output window hangs
+
+A window can be there and still show nothing: the output's page can freeze inside the browser's own video path (seen on a Mac, the page waiting forever for a video frame from the GPU process), and a frozen page never recovers by itself. The watchdog treats a window that exists but has sent no heartbeat for 8 seconds as hung: it closes it from the operator's side (which a frozen page cannot block), waits for it to go, and opens it again with the current program. The I/O log records "Output window is not responding … recreating it". A window that was just reopened gets 15 seconds to report in before the watchdog tries again. A slow output (a cold TAKE compiling shaders for a second or two) is left alone.
+
 ## If the GPU hiccups
 
-A lost WebGL context (driver reset, display re-plug) is caught: the canvas rebuilds itself from the same scene state and carries on; nothing else restarts. Every canvas also releases its GPU context the moment it unmounts, so hours of TAKEs do not exhaust the browser's context limit.
+A lost WebGL context (driver reset, display re-plug) is caught: the canvas rebuilds itself from the same scene state and carries on; nothing else restarts. If the browser never restores the context (WebKit may not), the canvas is rebuilt anyway after 3 seconds. Every canvas also releases its GPU context the moment it unmounts, so hours of TAKEs do not exhaust the browser's context limit.
 
 ## If a panel throws
 
@@ -26,7 +30,7 @@ Every edit is saved about a second later with an atomic write (temp file, then r
 
 ## Timing
 
-Delayed cue actions are scheduled by absolute wall-clock time, so a slow frame never shifts them. Program state is broadcast to the output at most 30 times a second (a live slider cannot flood the link), except TAKE, which goes immediately. The output never runs its own logic: everything on the wall is a pure function of a shared clock, so nothing can drift.
+Delayed cue actions are scheduled by absolute wall-clock time, so a slow frame never shifts them. Browsers slow a hidden or covered window's timers down (to once a second in Chromium), which would hold back marker cues, timed cues, follow cues and delayed actions while the operator looks at StageMics or StageLight for a moment; the 60 Hz service tick therefore runs from a Worker, which is not throttled, and fires anything overdue itself. The output's heartbeat runs the same way, so a covered output never looks lost. Program state is broadcast to the output at most 30 times a second (a live slider cannot flood the link), except TAKE, which goes immediately. The output never runs its own logic: everything on the wall is a pure function of a shared clock, so nothing can drift.
 
 ## Before the show
 

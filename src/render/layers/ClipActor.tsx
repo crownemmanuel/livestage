@@ -4,13 +4,14 @@ import * as THREE from "three";
 import { clipStateAt } from "@/core/clipActor";
 import { defaultActorLayout } from "@/core/factories";
 import { playableUrl } from "@/core/platform";
-import type { ClipActorComponent, ClipDef, SceneRuntime } from "@/core/types";
+import type { ClipActorComponent, ClipDef, EffectComponent, SceneRuntime } from "@/core/types";
 import { mixLevel } from "@/store/show";
 import { videoAudioFade } from "@/core/runtime";
 import { QUAD_VERT } from "../glsl";
+import { isCutOutShake, shakeOffset } from "../effects/Impact";
 import { useStage } from "../frame";
 import { applyMediaSettings, makeMediaMaterial, setMap } from "./mediaMaterial";
-import { plateParallax } from "./MediaLayers";
+import { plateKenBurns, plateParallax } from "./MediaLayers";
 import { setWarm, syncVideo, useVideo, videoDuration, type VideoHandle } from "./video";
 
 /**
@@ -68,13 +69,13 @@ void main() {
 `;
 
 function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; clip: ClipDef; order: number; handles: Map<string, VideoHandle> }) {
-  const { assets, getRt, frame, canvasW, canvasH, audio } = useStage();
+  const { assets, getRt, frame, canvasW, canvasH, audio, role } = useStage();
   // Cut-out mode prefers the transparent version of the clip when one exists.
   const srcId = actor.matted && clip.cutoutAssetId ? clip.cutoutAssetId : clip.assetId;
   const asset = srcId ? assets.find((a) => a.id === srcId) : undefined;
   // Cold until the frame loop decides the clip can come next (see setWarm): an actor with ten
   // clips must not hold ten decoders in every window for the one clip that is on screen.
-  const video = useVideo(playableUrl(asset), { lazy: true });
+  const video = useVideo(playableUrl(asset), { lazy: true, alpha: asset?.hasAlpha });
   useEffect(() => {
     if (!video) return;
     handles.set(clip.id, video);
@@ -160,7 +161,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
     if (active) {
       const time = clip.loop ? cur.localT % dur : Math.min(cur.localT, dur - 0.04);
       const vol = actor.volume * mixLevel(actor.id) * videoAudioFade(rt, actor.id, frame.t) * (isOut ? 1 - fadeIn : fadeIn);
-      syncVideo(video, { play: cur.playing && rt.clock.pausedAt === null, time, rate: 1, muted: actor.muted || !audio, volume: vol, loop: clip.loop ? dur : undefined }, frame.wall);
+      syncVideo(video, { play: cur.playing && rt.clock.pausedAt === null, time, rate: 1, muted: actor.muted || !audio, local: role === "preview", volume: vol, loop: clip.loop ? dur : undefined }, frame.wall);
     } else if (holding) {
       syncVideo(video, { play: false, time: clip.loop ? video.video.currentTime : Math.max(0, dur - 0.04), rate: 1, muted: true, volume: 0 }, frame.wall);
     } else if (near) {
@@ -202,13 +203,20 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
     const par = plateParallax(rt);
     const over = actor.matted ? 1 : 1 + 2 * par;
     const parK = actor.matted ? 1.6 : 1;
-    const px = (targetU - 0.5) * w + frame.swayX * par * parK * canvasW;
-    const py = cy + (0.5 - targetV) * h - frame.swayY * par * parK * canvasH * 0.5;
+    const fx = frame.swayX * par * parK * canvasW;
+    const fy = cy - frame.swayY * par * parK * canvasH * 0.5;
+    const px = (targetU - 0.5) * w + fx;
+    const py = (0.5 - targetV) * h + fy;
     const mirror = actor.matted && L.mirror;
     const offU = (mirror ? 0.5 - L.pivotX : L.pivotX - 0.5) * w * s;
     const offV = (0.5 - L.pivotY) * h * s;
-    mesh.scale.set(w * s * over, h * s * over, 1);
-    mesh.position.set(px - offU, py - offV, 0);
+    // The clips lie on the plate, so they follow its Ken Burns pan/zoom (about the frame's centre).
+    const kb = plateKenBurns(rt, frame.t);
+    mesh.scale.set(w * s * over * kb.scale, h * s * over * kb.scale, 1);
+    // "Cut-outs only" shakes: the plate video shakes by itself (footsteps baked in); a cut-out (keyed or
+    // transparent clip) follows it.
+    const sh = actor.matted || asset?.hasAlpha ? cutOutShake(rt, frame.t) : null;
+    mesh.position.set(fx + (px - offU - fx) * kb.scale + kb.x * canvasW + (sh ? sh.dx * canvasH : 0), fy + (py - offV - fy) * kb.scale - kb.y * canvasH - (sh ? sh.dy * canvasH : 0), 0);
     mat.uniforms.flipX.value = mirror ? 1 : 0;
 
     if (shadow.visible) {
@@ -230,4 +238,11 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
       <primitive object={mesh} />
     </>
   );
+}
+
+function cutOutShake(rt: SceneRuntime | null | undefined, t: number) {
+  const comps = (rt?.scene.components ?? []).filter((c): c is EffectComponent => c.kind === "effect" && c.effect === "shake" && isCutOutShake(c, rt));
+  if (!comps.length) return null;
+  const o = shakeOffset(comps, rt, t);
+  return o.peak > 0 ? o : null;
 }

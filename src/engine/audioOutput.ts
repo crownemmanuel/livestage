@@ -171,6 +171,8 @@ const webSink = () => {
 
 function sink(el: Sinkable) {
   if (!el.setSinkId) return;
+  // Preview media is heard on this computer's own speakers, never the show output (render/layers/video.ts `local`).
+  if ((el as { dataset?: DOMStringMap }).dataset?.localSound) return;
   const id = webSink();
   void el.setSinkId(id).catch(async (e) => {
     // A named device needs the microphone permission (this window may not have it yet): ask, try once more.

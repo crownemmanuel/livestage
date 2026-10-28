@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { AudioLines, Box, Check, ChevronDown, Film, FolderOpen, Image as ImageIcon, Maximize2, Search, Trash2, Upload, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AudioLines, Box, Check, ChevronDown, Film, FolderOpen, Image as ImageIcon, Maximize2, Pause, Play, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -58,6 +58,71 @@ export function AssetThumb({ asset, className, playOnHover = false }: { asset: A
       )}
       {asset.type === "video" && info?.duration ? <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9.5px] tabular text-white">{fmtDur(info.duration)}</span> : null}
     </div>
+  );
+}
+
+/**
+ * Listening to sounds in the browser: one at a time, on this computer's speakers (like auditioning a voice), stopped
+ * when the browser closes. Never part of the show: no cue, no sound event, nothing reaches the program run.
+ */
+function useSoundPreview(open: boolean) {
+  const ref = useRef<HTMLAudioElement | null>(null);
+  const [state, setState] = useState<{ id: string; t: number; dur: number } | null>(null);
+  const stop = () => {
+    const el = ref.current;
+    // Pausing fires a last timeupdate: unhook first, or it marks the sound as playing again.
+    if (el) el.ontimeupdate = el.onloadedmetadata = el.onended = el.onerror = null;
+    el?.pause();
+    ref.current = null;
+    setState(null);
+  };
+  const toggle = (a: Asset) => {
+    const was = state?.id;
+    stop();
+    const url = playableUrl(a);
+    if (was === a.id || !url) return;
+    const el = new Audio(url);
+    const tick = () => setState({ id: a.id, t: el.currentTime, dur: Number.isFinite(el.duration) ? el.duration : 0 });
+    el.ontimeupdate = tick;
+    el.onloadedmetadata = tick;
+    el.onended = stop;
+    el.onerror = stop;
+    ref.current = el;
+    setState({ id: a.id, t: 0, dur: 0 });
+    void el.play().catch(stop);
+  };
+  useEffect(() => {
+    if (!open) stop();
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => ref.current?.pause(), []);
+  return { playing: state, toggle };
+}
+
+/** The picture area of a sound card: play / stop, with how far it has got. */
+function SoundPreview({ asset, playing, onToggle }: { asset: Asset; playing: { t: number; dur: number } | null; onToggle: () => void }) {
+  const info = useAssetInfo(asset);
+  const dur = playing?.dur || info?.duration || 0;
+  return (
+    <button
+      type="button"
+      className="group/snd relative grid aspect-video w-full place-items-center bg-black/60 text-muted-foreground hover:text-foreground"
+      title={playing ? "Stop" : "Listen (on this computer's speakers)"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+    >
+      <span className={cn("grid size-11 place-items-center rounded-full border", playing ? "border-preview bg-preview/20 text-preview" : "border-white/20 bg-white/5")}>
+        {playing ? <Pause className="size-5" /> : <Play className="size-5 translate-x-px" />}
+      </span>
+      {(playing || dur > 0) && (
+        <span className="absolute bottom-1 right-1.5 rounded bg-black/75 px-1 text-[9.5px] tabular text-white">
+          {playing ? `${fmtDur(playing.t) || "0:00"} / ` : ""}
+          {fmtDur(dur)}
+        </span>
+      )}
+      {playing && dur > 0 && <span className="absolute bottom-0 left-0 h-0.5 bg-preview" style={{ width: `${Math.min(100, (playing.t / dur) * 100)}%` }} />}
+    </button>
   );
 }
 
@@ -162,6 +227,7 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
   const [q, setQ] = useState("");
   const [type, setType] = useState<AssetType | "all">("all");
   const [unusedOnly, setUnusedOnly] = useState(false);
+  const sound = useSoundPreview(open);
   const query = q.trim().toLowerCase();
   const allowed = (a: Asset) => !pick || pick.types.includes(a.type);
   const shown = assets.filter((a) => allowed(a) && (type === "all" || a.type === type) && (!query || a.name.toLowerCase().includes(query)) && (!unusedOnly || !used.has(a.id)));
@@ -176,7 +242,7 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
       <DialogContent className="flex h-[84vh] flex-col sm:max-w-[min(1200px,94vw)]">
         <DialogHeader>
           <DialogTitle>{pick ? (pick.title ?? "Choose media") : "Asset library"}</DialogTitle>
-          <DialogDescription>{pick ? "Click to choose. Hover a video to play it." : "Every picture, video, sound and model in the show. Hover a video to play it."}</DialogDescription>
+          <DialogDescription>{pick ? "Click to choose. Hover a video to play it; press ▶ on a sound to hear it." : "Every picture, video, sound and model in the show. Hover a video to play it; press ▶ on a sound to hear it."}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex h-8 w-[260px] items-center gap-2 rounded-md border border-border bg-well px-2 text-muted-foreground focus-within:border-ring">
@@ -219,7 +285,11 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
                   className={cn("group overflow-hidden rounded-lg border bg-card/50", pick ? "cursor-pointer hover:border-preview/70" : "", pick?.value === a.id ? "border-preview ring-2 ring-preview/60" : "border-border")}
                   onClick={pick ? () => choose(a.id) : undefined}
                 >
-                  <AssetThumb asset={a} className="aspect-video w-full rounded-none" playOnHover />
+                  {a.type === "audio" ? (
+                    <SoundPreview asset={a} playing={sound.playing?.id === a.id ? sound.playing : null} onToggle={() => sound.toggle(a)} />
+                  ) : (
+                    <AssetThumb asset={a} className="aspect-video w-full rounded-none" playOnHover />
+                  )}
                   <div className="flex items-start gap-1.5 p-2">
                     <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
                     <div className="min-w-0 flex-1">

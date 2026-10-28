@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Box, Clapperboard, Copy, Eye, EyeOff, Film, Focus, Timer, Image as ImageIcon, Layers, ListOrdered, Mountain, Plus, Repeat, Settings2, Sparkles, Trash2, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route, Video } from "lucide-react";
+import { Box, ChartGantt, Clapperboard, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Copy, Eye, EyeOff, Film, Focus, Timer, Image as ImageIcon, Layers, ListOrdered, Mountain, Plus, Repeat, Settings2, Sparkles, Trash2, ArrowUp, ArrowDown, CloudRain, Bird, Type, TreeDeciduous, Route, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,7 +16,11 @@ import { useCaptureThumb } from "../show/ShowMode";
 import { ControlPanel } from "../show/ControlPanel";
 import { Inspector } from "./Inspector";
 import { SceneSettings } from "./SceneSettings";
-import { CueEditor } from "./CueEditor";
+import { CueEditor, useCueFocus } from "./CueEditor";
+import { SceneTimeline } from "./SceneTimeline";
+import { startPreviewAudio } from "@/engine/previewAudio";
+import { hold } from "@/engine/transport";
+import { stopRun } from "@/engine/operator";
 import { CameraShots } from "./CameraShots";
 import { FramingBar, FramingOverlay, PreviewHeader, SelectOverlay, selectScrubSource, StepBar, Timeline, ToolToggle, usePreviewTool } from "../PreviewTools";
 import { InfoTip, Splitter, usePaneWidths } from "../kit";
@@ -28,6 +32,20 @@ export function BuilderMode() {
   const capture = useCaptureThumb();
   const output = useShow((s) => s.output);
   const [rightTab, setRightTab] = useState("inspect");
+  // The timeline and the run sheet take turns in the space under the preview.
+  const [mainTab, setMainTab] = useStored("build.view", "timeline");
+  // Fold the scene list and the components panel away to give the timeline the width.
+  const [leftOpen, setLeftOpen] = useStored("build.left", true);
+  const [rightOpen, setRightOpen] = useStored("build.right", true);
+  // Rehearsing here: hear the preview's sounds on this computer.
+  useEffect(() => startPreviewAudio(), []);
+  // A rehearsal run belongs to Build: leaving stops it.
+  useEffect(() => () => stopRun(), []);
+  // A cue opened from the timeline shows in the run sheet.
+  const focusNonce = useCueFocus((s) => s.nonce);
+  useEffect(() => {
+    if (focusNonce) setMainTab("cues");
+  }, [focusNonce]);
   const [w, setW, reset] = usePaneWidths("build", [290, 400]);
   const tool = usePreviewTool((s) => s.tool);
   // V = select and move, Z = zoom and frame (as in design tools).
@@ -37,25 +55,35 @@ export function BuilderMode() {
       if (e.metaKey || e.ctrlKey || e.altKey || (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable))) return;
       if (e.code === "KeyV") usePreviewTool.setState({ tool: "select" });
       else if (e.code === "KeyZ") usePreviewTool.setState({ tool: "frame" });
+      // Space plays and holds the preview in the timeline view (as in an editor), unless a pop-up is open
+      // or the lion keys are armed (Space stops the lion there).
+      else if (e.code === "Space" && mainTab === "timeline" && !e.repeat && !document.querySelector('[role="dialog"]') && !useShow.getState().lionControl.armed) {
+        e.preventDefault();
+        hold("preview", "toggle");
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [mainTab]);
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex min-h-0 shrink-0 flex-col border-r border-border" style={{ width: w[0] }}>
-        <div className="min-h-0 flex-[3]">
-          <SceneList />
-        </div>
-        <div className="min-h-0 flex-[2] border-t border-border">
-          <AssetLibrary />
-        </div>
-      </aside>
-      <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
+      {leftOpen && (
+        <>
+          <aside className="flex min-h-0 shrink-0 flex-col border-r border-border" style={{ width: w[0] }}>
+            <div className="min-h-0 flex-[3]">
+              <SceneList />
+            </div>
+            <div className="min-h-0 flex-[2] border-t border-border">
+              <AssetLibrary />
+            </div>
+          </aside>
+          <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
+        </>
+      )}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="border-b border-border p-3">
           <PreviewHeader />
-          <div className="relative mx-auto w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: `${output.canvasWidth} / ${output.canvasHeight}`, maxHeight: "44vh" }}>
+          <div className="relative mx-auto w-full overflow-hidden rounded-sm ring-2 ring-preview/70" style={{ aspectRatio: `${output.canvasWidth} / ${output.canvasHeight}`, maxHeight: mainTab === "timeline" ? "30vh" : "44vh" }}>
             <StageView source="preview" maxDpr={1.5} showSafeArea onCapture={capture} />
             {tool === "select" ? <SelectOverlay /> : <FramingOverlay />}
           </div>
@@ -71,19 +99,29 @@ export function BuilderMode() {
           <Timeline />
         </div>
         {scene ? (
-          <Tabs defaultValue="cues" className="flex min-h-0 flex-1 flex-col gap-0">
-            <TabsList className="mx-3 mt-2 h-8">
-              <TabsTrigger value="cues" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
-                <ListOrdered /> Run sheet ({scene.cues.length})
-              </TabsTrigger>
-              <TabsTrigger value="scene" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
-                <Settings2 /> Scene settings
-              </TabsTrigger>
-              <TabsTrigger value="camera" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
-                <Video /> Camera ({scene.cameraShots.length})
-              </TabsTrigger>
-            </TabsList>
-            <ScrollArea className="min-h-0 flex-1">
+          <Tabs value={mainTab} onValueChange={setMainTab} className="flex min-h-[170px] flex-1 flex-col gap-0">
+            <div className="mx-3 mt-2 flex items-center gap-2">
+              <PanelToggle side="left" open={leftOpen} onToggle={() => setLeftOpen(!leftOpen)} />
+              <TabsList className="h-8">
+                <TabsTrigger value="timeline" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                  <ChartGantt /> Timeline
+                </TabsTrigger>
+                <TabsTrigger value="cues" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                  <ListOrdered /> Run sheet ({scene.cues.length})
+                </TabsTrigger>
+                <TabsTrigger value="scene" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                  <Settings2 /> Scene settings
+                </TabsTrigger>
+                <TabsTrigger value="camera" className="gap-1.5 text-[12px] [&_svg]:size-3.5">
+                  <Video /> Camera ({scene.cameraShots.length})
+                </TabsTrigger>
+              </TabsList>
+              <PanelToggle side="right" open={rightOpen} onToggle={() => setRightOpen(!rightOpen)} />
+            </div>
+            <TabsContent value="timeline" className="mt-2 flex min-h-0 flex-1 flex-col border-t border-border">
+              <SceneTimeline />
+            </TabsContent>
+            <ScrollArea className={cn("min-h-0 flex-1", mainTab === "timeline" && "hidden")}>
               <TabsContent value="scene">
                 <SceneSettings scene={scene} />
               </TabsContent>
@@ -99,24 +137,60 @@ export function BuilderMode() {
           <div className="grid flex-1 place-items-center text-muted-foreground">Select or add a scene.</div>
         )}
       </main>
-      <Splitter value={w[1]} onChange={(v) => setW(1, v)} min={300} max={620} dir={-1} onReset={reset} />
-      <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: w[1] }}>
-        <Tabs value={rightTab} onValueChange={setRightTab} className="flex min-h-0 flex-1 flex-col gap-0">
-          <TabsList className="mx-3 mt-2 h-8">
-            <TabsTrigger value="inspect" className="text-[12px]">Components</TabsTrigger>
-            <TabsTrigger value="test" className="text-[12px]">Test controls</TabsTrigger>
-          </TabsList>
-          <TabsContent value="inspect" className="flex min-h-0 flex-1 flex-col">
-            {scene && <ComponentList />}
-            <ScrollArea className="min-h-0 flex-1 border-t border-border">{scene && <Inspector />}</ScrollArea>
-          </TabsContent>
-          <TabsContent value="test" className="min-h-0 flex-1">
-            <ControlPanel />
-          </TabsContent>
-        </Tabs>
-      </aside>
+      {rightOpen && (
+        <>
+          <Splitter value={w[1]} onChange={(v) => setW(1, v)} min={300} max={620} dir={-1} onReset={reset} />
+          <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: w[1] }}>
+            <Tabs value={rightTab} onValueChange={setRightTab} className="flex min-h-0 flex-1 flex-col gap-0">
+              <TabsList className="mx-3 mt-2 h-8">
+                <TabsTrigger value="inspect" className="text-[12px]">Components</TabsTrigger>
+                <TabsTrigger value="test" className="text-[12px]">Test controls</TabsTrigger>
+              </TabsList>
+              <TabsContent value="inspect" className="flex min-h-0 flex-1 flex-col">
+                {scene && <ComponentList />}
+                <ScrollArea className="min-h-0 flex-1 border-t border-border">{scene && <Inspector />}</ScrollArea>
+              </TabsContent>
+              <TabsContent value="test" className="min-h-0 flex-1">
+                <ControlPanel />
+              </TabsContent>
+            </Tabs>
+          </aside>
+        </>
+      )}
     </div>
   );
+}
+
+/** Show or hide a side panel (the scene list on the left, the components on the right). */
+function PanelToggle({ side, open, onToggle }: { side: "left" | "right"; open: boolean; onToggle: () => void }) {
+  const Icon = side === "left" ? (open ? PanelLeftClose : PanelLeftOpen) : open ? PanelRightClose : PanelRightOpen;
+  const label = `${open ? "Hide" : "Show"} the ${side === "left" ? "scenes and media" : "components"} panel`;
+  return (
+    <Button size="icon-xs" variant="ghost" className={cn(side === "right" && "ml-auto")} aria-label={label} title={label} onClick={onToggle}>
+      <Icon />
+    </Button>
+  );
+}
+
+/** A small setting kept in this browser (the view and panels as last left). */
+function useStored<T>(key: string, fallback: T): [T, (v: T) => void] {
+  const [v, setV] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(`sls.${key}`);
+      return raw == null ? fallback : (JSON.parse(raw) as T);
+    } catch {
+      return fallback;
+    }
+  });
+  const set = (next: T) => {
+    setV(next);
+    try {
+      localStorage.setItem(`sls.${key}`, JSON.stringify(next));
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  return [v, set];
 }
 
 const KIND_ICON: Record<SceneComponent["kind"], typeof Box> = {
@@ -152,6 +226,10 @@ function ComponentList() {
   const hidden = useShow((s) => s.hidden);
   // Media dropped between rows becomes new components (a row takes it into its own media).
   const { over, dropProps } = useMediaDrop(NEW_FROM_DROP, (list) => list.forEach((a) => { const c = componentFor(a); if (c) add(c); }));
+  // Selected elsewhere (the timeline, the preview): bring its row into view.
+  useEffect(() => {
+    if (selectedId) document.querySelector(`[data-comp-row="${selectedId}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
 
   return (
     <div className={cn("flex max-h-[42%] min-h-[180px] flex-col", over && "bg-preview/[0.06] ring-2 ring-inset ring-preview/50")} {...dropProps}>
@@ -245,7 +323,7 @@ function ComponentList() {
             const isolated = solo === c.id;
             const isHidden = hidden.includes(c.id);
             return (
-              <li key={c.id} className="group/row">
+              <li key={c.id} className="group/row" data-comp-row={c.id}>
                 <ComponentRowDrop sceneId={scene.id} c={c} className={cn("flex items-center gap-2 rounded px-2 py-1 text-[12px]", c.id === selectedId ? "bg-accent text-foreground" : "text-foreground/85 hover:bg-accent/50", isolated && "ring-1 ring-armed/70")}>
                   <button type="button" onClick={() => st.selectComponent(c.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
                     <Icon className="size-3.5 shrink-0 text-muted-foreground" />

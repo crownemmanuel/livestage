@@ -4,14 +4,19 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { uid } from "@/core/ids";
-import type { HogKind, HogOp, IoMessage } from "@/core/types";
+import type { HogKind, HogOp, IoMessage, SoundAppMessage, SoundAppOp, StageLightMessage, StageLightOp } from "@/core/types";
+import { defaultStageLightMessage, findCatalogPage, resolveWithCatalog, stageLightTarget, STAGELIGHT_OPS } from "@/core/stageLight";
 import { HOG_KIND_LABEL, HOG_OP_LABEL, oscWantsText, type HogMessage } from "@/engine/io";
+import { SOUND_OP_LABEL } from "@/core/soundControl";
+import { useSoundApp } from "@/engine/soundApp";
 import { useProject, NO_ITEMS } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 import { TestSendButton } from "./TestSendDialog";
 
 export const MESSAGE_TYPES: { value: IoMessage["type"]; label: string }[] = [
   { value: "hog", label: "Hog 4 lighting" },
+  { value: "stagelight", label: "StageLight" },
+  { value: "sound", label: "StageMics (dLive)" },
   { value: "osc", label: "Custom OSC" },
   { value: "msc", label: "MIDI Show Control" },
   { value: "midi.note", label: "MIDI note" },
@@ -36,7 +41,16 @@ export function defaultMessage(type: IoMessage["type"]): IoMessage {
       return { type, channel: 0, cc: 1, value: 127 };
     case "midi.pc":
       return { type, channel: 0, program: 0 };
+    case "sound":
+      return { type, op: "sceneActivate", sceneId: null };
+    case "stagelight":
+      return defaultStageLightMessage("go");
   }
+}
+
+/** What a new time marker sends: a StageLight GO when this computer drives StageLight, else a Hog GO. */
+export function defaultMarkerMessage(): IoMessage {
+  return useProject.getState().project.io?.stagelight?.enabled ? defaultMessage("stagelight") : defaultMessage("hog");
 }
 
 const looksNumeric = (x: string) => x !== "" && Number.isFinite(+x);
@@ -105,6 +119,8 @@ function Fields({ m, onChange, cls, hideType }: { m: IoMessage; onChange: (m: Io
         </Labeled>
       )}
       {m.type === "hog" && <HogFields m={m} onChange={onChange} cls={cls} />}
+      {m.type === "sound" && <SoundFields m={m} onChange={onChange} cls={cls} />}
+      {m.type === "stagelight" && <StageLightFields m={m} onChange={onChange} cls={cls} />}
       {m.type === "osc" && (
         <>
           <Labeled label="Device" roomyOnly>
@@ -315,3 +331,245 @@ function HogFields({ m, onChange, cls }: { m: HogMessage; onChange: (m: IoMessag
   );
 }
 
+
+// ---------------------------------------------------------------- StageMics
+
+const SOUND_OPS = (Object.keys(SOUND_OP_LABEL) as SoundAppOp[]).map((value) => ({ value, label: SOUND_OP_LABEL[value] }));
+const THIS_SCENE = "__this__";
+
+function soundWithOp(m: SoundAppMessage, op: SoundAppOp): SoundAppMessage {
+  const who = "who" in m ? m.who : "";
+  const sceneId = "sceneId" in m ? m.sceneId : null;
+  switch (op) {
+    case "sceneSelect":
+    case "sceneActivate":
+      return { type: "sound", op, sceneId };
+    case "cueGo":
+      return { type: "sound", op, sceneId, cue: 1 };
+    case "mic":
+      return { type: "sound", op, who, live: false };
+    case "fx":
+      return { type: "sound", op, who, preset: "none" };
+    default:
+      return { type: "sound", op };
+  }
+}
+
+function SoundFields({ m, onChange, cls }: { m: SoundAppMessage; onChange: (m: IoMessage) => void; cls: string }) {
+  const w = useWidth();
+  const roomy = useContext(Roomy);
+  const scenes = useProject((s) => s.project.scenes);
+  const on = useProject((s) => !!s.project.io?.sound?.enabled);
+  const mics = useSoundApp((s) => s.mics);
+  const micNames = [...new Set(Object.entries(mics).flatMap(([n, x]) => [x.name, n]).filter(Boolean))];
+  const who = (value: string, set: (v: string) => void) => (
+    <Labeled label="Mic">
+      <input className={`rounded-md border border-input bg-transparent px-2 ${cls} ${w("w-[110px]")}`} list="sound-app-mics" defaultValue={value} key={value} placeholder="Joseph or 3" title="Mic number, or the character's name as StageMics knows it" onBlur={(e) => e.target.value.trim() !== value && set(e.target.value.trim())} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+      <datalist id="sound-app-mics">
+        {micNames.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+    </Labeled>
+  );
+  const sceneBox = (sceneId: string | null, set: (id: string | null) => void) => (
+    <Labeled label="Scene" wide>
+      <SelectBox className={`${cls} ${w("w-[170px]")}`} value={sceneId ?? THIS_SCENE} onChange={(v) => set(v === THIS_SCENE ? null : v)} options={[{ value: THIS_SCENE, label: "This scene" }, ...scenes.map((x) => ({ value: x.id, label: `${x.number}. ${x.name}` }))]} />
+    </Labeled>
+  );
+  return (
+    <>
+      <Labeled label="Command" roomyOnly>
+        <SelectBox className={`${cls} ${w("w-[150px]")}`} value={m.op} onChange={(op) => onChange(soundWithOp(m, op))} options={SOUND_OPS} />
+      </Labeled>
+      {(m.op === "sceneSelect" || m.op === "sceneActivate" || m.op === "cueGo") && sceneBox(m.sceneId, (sceneId) => onChange({ ...m, sceneId }))}
+      {m.op === "cueGo" && (
+        <Labeled label="cue">
+          <NumberInput className={`${cls} ${w("w-14")}`} value={m.cue} min={1} step={1} onChange={(v) => onChange({ ...m, cue: Math.max(1, Math.round(v)) })} />
+        </Labeled>
+      )}
+      {m.op === "mic" && (
+        <>
+          {who(m.who, (v) => onChange({ ...m, who: v }))}
+          <Labeled label="State" roomyOnly>
+            <SelectBox className={`${cls} ${w("w-[90px]")}`} value={m.live ? "live" : "muted"} onChange={(v) => onChange({ ...m, live: v === "live" })} options={[{ value: "muted", label: "Muted" }, { value: "live", label: "Live" }]} />
+          </Labeled>
+        </>
+      )}
+      {m.op === "fx" && (
+        <>
+          {who(m.who, (v) => onChange({ ...m, who: v }))}
+          <Labeled label="preset">
+            <TextBox className={`${cls} ${w("w-[100px]")}`} value={m.preset} placeholder="none" title='StageMics preset name; "none" switches the effect off' onChange={(preset) => onChange({ ...m, preset: preset || "none" })} />
+          </Labeled>
+          {m.preset !== "none" && (
+            <Labeled label="amount">
+              <SelectBox className={`${cls} ${w("w-[90px]")}`} value={m.amount ?? "preset"} onChange={(v) => onChange(v === "preset" ? { type: "sound", op: "fx", who: m.who, preset: m.preset } : { ...m, amount: v as "light" | "medium" | "full" })} options={[{ value: "preset", label: "as set" }, { value: "light", label: "light" }, { value: "medium", label: "medium" }, { value: "full", label: "full" }]} />
+            </Labeled>
+          )}
+        </>
+      )}
+      {!on && <span className={cn("text-[10.5px] text-armed", roomy && "col-span-full")}>StageMics link is off (Settings → StageMics)</span>}
+      {roomy && (m.op === "mic" || m.op === "fx") && (
+        <p className="col-span-full text-[11px] leading-snug text-muted-foreground">
+          From a time marker: if the track stops, restarts or is scrubbed before it ends, LiveStage sends Restore once and StageMics puts every mic back to its current cue.
+        </p>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- StageLight
+
+/** Seconds as text: empty = StageLight's own default fade. */
+function FadeBox({ value, onChange, cls }: { value: number | null; onChange: (v: number | null) => void; cls: string }) {
+  const w = useWidth();
+  return (
+    <Labeled label="fade s">
+      <TextBox
+        className={`${cls} ${w("w-14")} tabular`}
+        value={value === null ? "" : String(value)}
+        placeholder="default"
+        title="Fade time in seconds; leave empty for StageLight's own default"
+        onChange={(v) => onChange(v === "" || !Number.isFinite(+v) ? null : Math.max(0, +v))}
+      />
+    </Labeled>
+  );
+}
+
+const TYPE = "__type__";
+const EMPTY = "__empty__";
+
+/**
+ * Pick from StageLight's catalog, or type a name (StageLight resolves names and numbers too).
+ * Without a catalog it is a text box. A value the catalog does not know shows with a warning.
+ */
+function CatalogPick({ value, options, empty, onPick, cls, width, placeholder, title }: { value: string; options: { value: string; label: string }[] | null; /** Label of the empty choice ("Next cue"), if empty is allowed. */ empty?: string; onPick: (v: string) => void; cls: string; width: string; placeholder?: string; title?: string }) {
+  const w = useWidth();
+  const [typing, setTyping] = useState(false);
+  if (!options || typing)
+    return (
+      <TextBox
+        className={`${cls} ${w(width)}`}
+        value={value}
+        placeholder={placeholder}
+        title={title}
+        onChange={(v) => {
+          setTyping(false);
+          onPick(v);
+        }}
+      />
+    );
+  const known = !value || options.some((o) => o.value === value);
+  const all = [...(empty !== undefined ? [{ value: EMPTY, label: empty }] : []), ...options, ...(known ? [] : [{ value, label: `⚠ ${value} (not in StageLight)` }]), { value: TYPE, label: "Type a name…" }];
+  return <SelectBox className={`${cls} ${w(width)}`} value={value || (empty !== undefined ? EMPTY : TYPE)} onChange={(v) => (v === TYPE ? setTyping(true) : onPick(v === EMPTY ? "" : v))} options={all} />;
+}
+
+/** A command to StageLight: GO a page or cue, a named trigger, stop, blackout, master… Pages, cues and triggers come from its catalog. */
+function StageLightFields({ m, onChange, cls }: { m: StageLightMessage; onChange: (m: IoMessage) => void; cls: string }) {
+  const w = useWidth();
+  const roomy = useContext(Roomy);
+  const catalog = useProject((s) => s.project.io?.stagelight?.catalog ?? null);
+  const target = stageLightTarget(m, catalog);
+  /** Typed or picked: point at catalog IDs where it matches one, and keep the names in label. */
+  const set = (x: StageLightMessage) => onChange(resolveWithCatalog({ ...x, label: undefined }, catalog));
+  /** Switching command keeps the page / cue / name already chosen where the new one has the same field. */
+  const setOp = (op: StageLightOp) => {
+    const next = defaultStageLightMessage(op) as Record<string, unknown>;
+    for (const k of ["page", "cue", "name", "fade"]) if (k in next && k in m) next[k] = (m as Record<string, unknown>)[k];
+    set(next as StageLightMessage);
+  };
+  const page = m.op === "go" || m.op === "goCue" ? findCatalogPage(catalog, m.page) : null;
+  // GO and GO cue are one command here: the cue box decides (empty = the page's next cue).
+  const ops = STAGELIGHT_OPS.filter((o) => o.op !== "goCue").map((o) => ({ value: o.op, label: o.op === "go" ? "GO" : o.label }));
+  return (
+    <>
+      <Labeled label="Command" roomyOnly>
+        <SelectBox className={`${cls} ${w("w-[150px]")}`} value={m.op === "goCue" ? "go" : m.op} onChange={(v) => v !== (m.op === "goCue" ? "go" : m.op) && setOp(v as StageLightOp)} options={ops} />
+      </Labeled>
+      {(m.op === "go" || m.op === "goCue") && (
+        <>
+          <Labeled label="page">
+            <CatalogPick
+              cls={cls}
+              width="w-[150px]"
+              value={m.page}
+              options={catalog?.pages.map((p) => ({ value: p.id, label: `${p.number}. ${p.name}` })) ?? null}
+              empty={roomy ? "The running page" : "running page"}
+              placeholder={roomy ? "the running page" : "running"}
+              title="StageLight page: its name, ID or number (1 = the first page)"
+              onPick={(v) => set({ type: "stagelight", op: "go", page: v })}
+            />
+          </Labeled>
+          {m.page.trim() !== "" && (
+            <Labeled label="cue">
+              <CatalogPick
+                cls={cls}
+                width={catalog ? "w-[170px]" : "w-16"}
+                value={m.op === "goCue" ? m.cue : ""}
+                options={catalog ? (page?.cues.map((e) => ({ value: e.entryId, label: `${e.number}. ${e.name}${e.follow === "auto" ? " (auto)" : ""}` })) ?? []) : null}
+                empty="Next cue"
+                placeholder="next"
+                title="Cue of that page's cue list: its number (1 = first), name or entry ID; empty = the page's next cue"
+                onPick={(v) => set(v.trim() ? { type: "stagelight", op: "goCue", page: m.page, cue: v } : { type: "stagelight", op: "go", page: m.page })}
+              />
+            </Labeled>
+          )}
+        </>
+      )}
+      {m.op === "trigger" && (
+        <Labeled label="trigger" wide>
+          <CatalogPick
+            cls={cls}
+            width="w-[170px]"
+            value={m.name}
+            options={catalog?.triggers.map((t) => ({ value: t.id, label: t.does ? `${t.name} — ${t.does}` : t.name })) ?? null}
+            placeholder="lion.leap"
+            title="A named trigger, mapped to a GO (or other action) in StageLight under ☰ → Network & triggers. The mapping can change there without touching this cue."
+            onPick={(name) => set({ ...m, name })}
+          />
+        </Labeled>
+      )}
+      {(m.op === "stop" || m.op === "clear") && <FadeBox value={m.fade} cls={cls} onChange={(fade) => onChange({ ...m, fade })} />}
+      {m.op === "blackout" && (
+        <Labeled label="Blackout" roomyOnly>
+          <SelectBox className={`${cls} ${w("w-[90px]")}`} value={m.on ? "on" : "off"} onChange={(v) => onChange({ ...m, on: v === "on" })} options={[{ value: "on", label: "On" }, { value: "off", label: "Off" }]} />
+        </Labeled>
+      )}
+      {m.op === "master" && (
+        <Labeled label="level %">
+          <NumberInput className={`${cls} ${w("w-16")}`} value={Math.round(m.level * 100)} min={0} max={100} step={5} onChange={(v) => onChange({ ...m, level: Math.max(0, Math.min(100, v)) / 100 })} />
+        </Labeled>
+      )}
+      {m.op === "play" && (
+        <>
+          <Labeled label="library cue">
+            <CatalogPick
+              cls={cls}
+              width="w-[150px]"
+              value={m.cue}
+              options={catalog?.library.map((l) => ({ value: l.id, label: l.name })) ?? null}
+              placeholder="Warm wash"
+              title="A cue from StageLight's library, by name or ID, played outside any page"
+              onPick={(cue) => set({ ...m, cue })}
+            />
+          </Labeled>
+          <FadeBox value={m.fade} cls={cls} onChange={(fade) => onChange({ ...m, fade })} />
+        </>
+      )}
+      {m.op === "ledwall" && (
+        <Labeled label="media">
+          <TextBox className={`${cls} ${w("w-[140px]")}`} value={m.media} placeholder="off" title="Media for StageLight's LED wall preview; off = blank" onChange={(media) => onChange({ ...m, media: media || "off" })} />
+        </Labeled>
+      )}
+      {target.missing ? (
+        <span className={cn("text-[11px] text-destructive", roomy && "col-span-full")} title="Pick it again from the list, or check StageLight">
+          ⚠ {target.missing}{m.label ? ` (was ${m.label})` : ""}
+        </span>
+      ) : (
+        !catalog &&
+        m.label && <span className={cn("text-[11px] text-muted-foreground/70", roomy && "col-span-full")} title="As picked; StageLight's catalog is not loaded">{m.label}</span>
+      )}
+    </>
+  );
+}

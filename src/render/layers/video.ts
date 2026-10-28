@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { clamp } from "@/core/clock";
+import { isWebKit } from "@/core/platform";
 import type { MediaSettings } from "@/core/types";
 
 export interface VideoHandle {
@@ -15,6 +16,8 @@ export interface VideoHandle {
   shownTime: number;
   /** Drift correction in progress while playing: -1 slowing down, +1 catching up, 0 none. */
   correcting: -1 | 0 | 1;
+  /** Parked (told to stay paused) since it last played: its next start lands on the clock first. */
+  parked: boolean;
 }
 
 // ---------------------------------------------------------------- sync diagnostics
@@ -130,16 +133,53 @@ export function setWarm(h: VideoHandle, warm: boolean) {
 }
 
 /**
+ * WebKit hands an HEVC-with-alpha <video> to WebGL without its alpha: every pixel arrives opaque, so the
+ * clear parts of a full-wall cut-out (a goat walking into a street) draw black over the plate. A WebCodecs
+ * VideoFrame taken from the same element keeps the alpha (measured in the app: 3-4 ms for a 3072 x 768
+ * frame). So on WebKit an alpha video's texture uploads a VideoFrame of the element's current picture,
+ * taken whenever the texture is marked for upload. Returns the cleanup.
+ */
+function uploadAsVideoFrame(v: HTMLVideoElement, texture: THREE.VideoTexture): () => void {
+  let frame: VideoFrame | null = null;
+  const proto = Object.getPrototypeOf(THREE.VideoTexture.prototype) as object;
+  const base = Object.getOwnPropertyDescriptor(proto, "needsUpdate")!;
+  Object.defineProperty(texture, "needsUpdate", {
+    configurable: true,
+    set(value: boolean) {
+      if (value && v.readyState >= 2) {
+        try {
+          const next = new VideoFrame(v);
+          frame?.close();
+          frame = next;
+          texture.source.data = next as unknown as HTMLVideoElement; // three uploads a VideoFrame like an element
+        } catch {
+          // No picture to take yet (a seek in flight): keep the last frame.
+        }
+      }
+      base.set!.call(texture, value);
+    },
+  });
+  return () => {
+    // VideoTexture.dispose cancels its frame callback on the element, so hand it back first.
+    texture.source.data = v;
+    frame?.close();
+    frame = null;
+  };
+}
+
+/**
  * One <video> per use; playback is slaved to the shared scene clock.
  * `lazy`: create the element cold; the owner decides each frame whether it should be warm (`setWarm`).
+ * `alpha`: the file has an alpha channel (see uploadAsVideoFrame).
  */
-export function useVideo(url: string | null, opts: { lazy?: boolean } = {}): VideoHandle | null {
+export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean } = {}): VideoHandle | null {
   // Created in an effect, never in render: React (StrictMode, concurrent rendering) may run a
   // render twice and keep one result, and a <video> made in the discarded render would stay in
   // the page, buffering and holding a decoder, with nothing left to remove it (seen: two decoders
   // per layer, 26 elements alive for a two-scene show).
   const [h, setH] = useState<VideoHandle | null>(null);
   const lazy = !!opts.lazy;
+  const alpha = !!opts.alpha && isWebKit && typeof VideoFrame !== "undefined";
   useEffect(() => {
     if (!url) {
       setH(null);
@@ -157,6 +197,7 @@ export function useVideo(url: string | null, opts: { lazy?: boolean } = {}): Vid
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
+    const releaseFrame = alpha ? uploadAsVideoFrame(v, texture) : null;
     // VideoTexture refreshes on requestVideoFrameCallback, which WebKit does not fire for a
     // seek on a paused video: scrubbing or parking a paused clip would never reach the screen.
     const refresh = () => {
@@ -165,18 +206,19 @@ export function useVideo(url: string | null, opts: { lazy?: boolean } = {}): Vid
     v.addEventListener("seeked", refresh);
     v.addEventListener("loadeddata", refresh);
     hostVideo(v);
-    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0 };
+    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true };
     setH(handle);
     return () => {
       v.pause();
       v.removeAttribute("src");
       v.load();
       v.remove();
+      releaseFrame?.();
       texture.dispose();
       counters.delete(handle);
       setH((cur) => (cur === handle ? null : cur));
     };
-  }, [url, lazy]);
+  }, [url, lazy, alpha]);
   return h;
 }
 
@@ -206,6 +248,8 @@ export interface SyncWant {
   rate: number;
   muted: boolean;
   volume: number;
+  /** Sound for this computer only (the preview): stays on its default output, never the show's (engine/audioOutput.ts). */
+  local?: boolean;
   /** Scrub backwards by seeking (browsers cannot play at negative rates). */
   reverse?: boolean;
   /**
@@ -215,6 +259,12 @@ export interface SyncWant {
    * on every loop, each followed by seconds at catch-up speed.
    */
   loop?: number;
+  /**
+   * The media plays once and holds its last frame. The element must not loop natively: it would
+   * wrap to the first frame at the end and show it until the next hard seek (seen: the opening's
+   * first frame ghosting through its fade-out).
+   */
+  once?: boolean;
 }
 
 /**
@@ -240,11 +290,19 @@ const SEEK_GRACE = 1000;
 
 export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
   const v = h.video;
+  if (want.local && !v.dataset.localSound) {
+    v.dataset.localSound = "1";
+    void (v as { setSinkId?: (id: string) => Promise<void> }).setSinkId?.("").catch(() => {});
+  }
   v.muted = want.muted;
   v.volume = clamp(want.volume, 0, 1);
+  if (want.once !== undefined) v.loop = !want.once;
   if (v.readyState < 1) return;
   let drift = v.currentTime - want.time;
-  if (!want.play || want.reverse) {
+  // Played to the end once: park on the last frame (play() on an ended element restarts it).
+  const atEnd = !!want.once && v.duration > 0 && want.time >= v.duration - 0.05;
+  if (!want.play || want.reverse || atEnd) {
+    h.parked = true;
     if (!v.paused) v.pause();
     // Paused: park on the wanted frame (follows a scrub closely). Reverse: at most ~12 seeks a second.
     const gap = want.reverse ? 80 : 40;
@@ -269,7 +327,16 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
     c.n++;
   }
   const sinceSeek = wallMs - h.lastSeek;
-  if (v.seeking || sinceSeek < SEEK_GRACE) {
+  const starting = h.parked;
+  h.parked = false;
+  if (starting && (Math.abs(drift) > DEAD_BAND.sound || wrapped)) {
+    // Starting from a parked frame away from the clock (a hidden layer shown and restarted): land first, whatever
+    // the grace, or the old position plays (and is heard) until the next hard seek, ~1.5 s later. Once per start:
+    // a 4K seek outlasts several frames, and seeking again each frame would keep it at the first frame.
+    seekTo(h, want.time, wallMs);
+    h.correcting = 0;
+    setRate(h, rate);
+  } else if (v.seeking || sinceSeek < SEEK_GRACE) {
     // Let the player land and settle before judging drift again.
   } else if ((Math.abs(drift) > SEEK_DRIFT || wrapped) && sinceSeek > SEEK_GAP) {
     seekTo(h, want.time, wallMs);

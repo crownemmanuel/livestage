@@ -1,0 +1,93 @@
+@import "tailwindcss" source("../");
+@import "@fontsource/nunito/600.css";
+@import "@fontsource/nunito/700.css";
+@import "@fontsource/nunito/800.css";
+@import "@fontsource/nunito/900.css";
+
+/* The approved look: dark, Nunito, big rounded cards. Lime = live, coral = muted, violet = effects. */
+@theme {
+  --font-sans: "Nunito", system-ui, sans-serif;
+  --color-ink: #0b0d12;
+  --color-panel: #12151c;
+  --color-card: #151922;
+  --color-raise: #181c25;
+  --color-sel: #1c2130;
+  --color-line: #1e232d;
+  --color-line2: #2a303d;
+  --color-chip: #222837;
+  --color-well: #0f1218;
+  --color-text: #f4f6fa;
+  --color-soft: #dde3ec;
+  --color-dim: #c9d0dc;
+  --color-muted: #9aa3b2;
+  --color-faint: #7c8597;
+  --color-ghost: #5a6273;
+  --color-lime: #b8f25c;
+  --color-lime-card: #182016;
+  --color-lime-edge: #4c6a22;
+  --color-coral: #ff6b5e;
+  --color-coral-text: #ff8e84;
+  --color-coral-bg: #22141a;
+  --color-violet: #a78bfa;
+  --color-violet-bg: #2a2347;
+  --color-violet-text: #e4daff;
+  --color-amber-bg: #3a2a0e;
+  --color-amber-text: #ffd58f;
+  --color-amber: #ffb547;
+  --color-cyan-bg: #10303a;
+  --color-cyan-text: #8fe3f5;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+button:disabled {
+  cursor: default;
+}
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+:focus-visible {
+  outline: 3px solid var(--color-lime);
+  outline-offset: 2px;
+}
+@layer components {
+.field {
+  height: 44px;
+  border-radius: 14px;
+  border: 2px solid var(--color-line2);
+  background: var(--color-well);
+  color: var(--color-text);
+  padding: 0 14px;
+  font-size: 16px;
+  font-weight: 800;
+  min-width: 0;
+}
+.field:focus {
+  border-color: var(--color-lime);
+  outline: none;
+}
+select.field {
+  padding-right: 8px;
+}
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #2a303d;
+  border-radius: 10px;
+}

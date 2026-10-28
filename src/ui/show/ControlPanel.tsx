@@ -11,8 +11,8 @@ import { initialNames } from "@/core/runtime";
 import { LION_ACTION_INFO } from "@/core/lion";
 import { effectLevel, evalCamera } from "@/core/runtime";
 import { sceneNow } from "@/core/clock";
-import type { ActorComponent, ClipActorComponent, EffectComponent, LionAction, NamesComponent, RouteComponent, SceneComponent, SceneRuntime } from "@/core/types";
-import { clipFits, clipStateAt } from "@/core/clipActor";
+import type { ActorComponent, ClipActorComponent, ClipDef, EffectComponent, LionAction, NamesComponent, RouteComponent, SceneComponent, SceneRuntime } from "@/core/types";
+import { clipFits, clipLabel, clipStateAt } from "@/core/clipActor";
 import { useShow, type Target } from "@/store/show";
 import { useModelInfo } from "@/store/modelInfo";
 import { useProject } from "@/store/project";
@@ -207,7 +207,7 @@ export function ControlPanel() {
       icon: <Clapperboard />,
       tint: "cyan",
       live: playing.length > 0,
-      summary: playing.length ? playing.map((s) => s.st.clip!.name).join(", ") : "none on stage",
+      summary: playing.length ? playing.map((s) => `${s.a.name.split(" (")[0]}: ${clipLabel(s.st.clip!)}`).join(" · ") : "none on stage",
       info: "AI video characters made of clips. A clip waits for the current one to end so the cut lands on a matching frame; amber clips start on a different pose (a visible jump).",
       body: (
         <>
@@ -587,6 +587,19 @@ function LionControls({ comp, target, rt }: { comp: ActorComponent; target: Targ
 
 // ---------------------------------------------------------------- video actor
 
+/**
+ * A clip's role, from its poses, colours its button: comes on (from the rest pose), loops, a beat that
+ * returns to its pose, goes off (back to rest), or a whole visit (rest to rest: a neighbour at her door).
+ */
+function clipRole(comp: ClipActorComponent, c: ClipDef): { tile: string; active: string } {
+  const rest = comp.restPose;
+  if (c.loop) return { tile: "border-teal-500/40 bg-teal-500/10 text-teal-100 hover:bg-teal-500/20", active: "bg-teal-500/35 border-teal-400" };
+  if (c.startPose === rest && c.endPose === rest) return { tile: "border-sky-500/40 bg-sky-500/10 text-sky-100 hover:bg-sky-500/20", active: "bg-sky-500/35 border-sky-400" };
+  if (c.startPose === rest) return { tile: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20", active: "bg-emerald-500/35 border-emerald-400" };
+  if (c.endPose === rest) return { tile: "border-rose-500/40 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20", active: "bg-rose-500/35 border-rose-400" };
+  return { tile: "border-violet-500/40 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20", active: "bg-violet-500/35 border-violet-400" };
+}
+
 function VideoActorControls({ comp, rt, target }: { comp: ClipActorComponent; rt: SceneRuntime; target: Target }) {
   const t = sceneNow(rt);
   const state = rt.clipActors?.[comp.id];
@@ -594,41 +607,38 @@ function VideoActorControls({ comp, rt, target }: { comp: ClipActorComponent; rt
   const dispatch = (clipId: string | null) => useShow.getState().dispatch(target, { type: "clip", actorId: comp.id, clipId, delay: 0 });
   const progress = st.clip ? Math.min(1, st.localT / Math.max(0.05, st.clip.duration)) : 0;
   return (
-    <div className="rounded-md border border-border bg-card/60">
-      <div className="flex items-center gap-2 px-2 py-1.5">
-        <span className={cn("size-1.5 shrink-0 rounded-full", st.clip ? "bg-preview" : "bg-muted-foreground/40")} />
+    <div className="rounded-md border border-border bg-card/60 p-2">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className={cn("size-1.5 shrink-0 rounded-full", st.playing ? "bg-preview" : "bg-muted-foreground/40")} />
         <span className="min-w-0 flex-1 truncate text-[12px] font-semibold" title={comp.name}>{comp.name}</span>
-        <span className="shrink-0 whitespace-nowrap text-[10.5px] text-muted-foreground">
-          pose <span className="font-semibold text-foreground">{st.pose}</span>
-        </span>
-        <Button size="xs" variant="outline" className="shrink-0" disabled={!st.clip} onClick={() => dispatch(null)} title="Remove the actor (cut back to the plate)">
+        <Button size="xs" variant="ghost" className="h-6 shrink-0 px-2 text-[11px]" disabled={!st.clip} onClick={() => dispatch(null)} title="Remove the actor (cut back to the plate)">
           Clear
         </Button>
       </div>
-      <div className="mx-2 mb-1.5 h-1 overflow-hidden rounded-full bg-muted">
-        <div className={cn("h-full", st.playing ? "bg-preview" : "bg-muted-foreground/50")} style={{ width: `${progress * 100}%` }} />
-      </div>
-      <div className="truncate px-2 pb-1 text-[10.5px] text-muted-foreground">
-        {st.clip ? `${st.playing ? "Playing" : "Holding last frame of"} “${st.clip.name}”` : "Not on stage"}
-        {st.queued && <span className="text-armed"> · next: {st.queued.clip.name} in {Math.max(0, (st.queued.at - t) / 1000).toFixed(1)}s</span>}
-      </div>
-      <div className="grid grid-cols-2 gap-1 px-2 pb-2">
+      <div className="grid grid-cols-4 gap-1.5">
         {comp.clips.map((c) => {
           const fits = clipFits(comp, state, c, t);
+          const on = st.clip?.id === c.id;
+          const next = st.queued?.clip.id === c.id;
+          const role = clipRole(comp, c);
           return (
-            <Button
+            <button
               key={c.id}
-              size="xs"
-              variant={st.clip?.id === c.id ? "secondary" : "outline"}
-              className={cn("min-w-0 justify-between", !fits && "border-armed/50")}
+              type="button"
               onClick={() => dispatch(c.id)}
-              title={fits ? `Continues seamlessly from “${st.pose}”` : `Starts on “${c.startPose}” but the actor is in “${st.pose}”: this will be a visible jump`}
+              title={`${c.name}\n${c.startPose} → ${c.endPose}${fits ? "" : `\nStarts on “${c.startPose}” but the actor is in “${st.pose}”: a visible jump`}`}
+              className={cn(
+                "relative flex aspect-[4/3] min-w-0 items-center justify-center overflow-hidden rounded-md border px-1.5 text-center text-[11.5px] font-semibold leading-tight transition-colors",
+                role.tile,
+                on && role.active,
+                !fits && !on && "border-dashed opacity-60",
+                next && "ring-2 ring-armed",
+              )}
             >
-              <span className="truncate">{c.name}</span>
-              <span className={cn("shrink-0 text-[9px]", fits ? "text-preview" : "text-armed")}>
-                {c.startPose}→{c.endPose}
-              </span>
-            </Button>
+              <span className="line-clamp-3 break-words">{clipLabel(c)}</span>
+              {on && st.playing && <span className="absolute inset-x-0 bottom-0 h-1 bg-white/70" style={{ width: `${progress * 100}%` }} />}
+              {next && <span className="absolute right-1 top-0.5 text-[9px] text-armed">{Math.max(0, (st.queued!.at - t) / 1000).toFixed(1)}s</span>}
+            </button>
           );
         })}
       </div>

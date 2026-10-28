@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/core/platform";
-import type { MergeChoice, MergeItem } from "@/core/showMerge";
+import { levelDifferences, SOUND_LEVELS, type MergeChoice, type MergeItem } from "@/core/showMerge";
+import type { Project } from "@/core/types";
 import { defaultPackageName, onPackageProgress, PACKAGE_EXT, previewImport, type ImportPreview, type IncomingPackage } from "@/core/showPackage";
 import { exportShowPackage, isLive, openShowPackage, takeInShowPackage } from "@/engine/showTransfer";
 import { useProject } from "@/store/project";
@@ -16,9 +17,17 @@ type State =
   | { kind: "exported"; result: Awaited<ReturnType<typeof exportShowPackage>> }
   | { kind: "review"; pkg: IncomingPackage; preview: ImportPreview }
   | { kind: "imported"; result: Awaited<ReturnType<typeof takeInShowPackage>> }
+  | { kind: "levels"; project: Project; differ: number }
   | { kind: "error"; message: string };
 
 const useDialog = create<{ state: State; set(s: State): void }>((set) => ({ state: { kind: "idle" }, set: (state) => set({ state }) }));
+
+/** More menu → Import show file…: replaces the show; asks first when its sound levels differ from this computer's. */
+export async function startShowFileImport(p: Project) {
+  const differ = levelDifferences(useProject.getState().project.mix, p.mix);
+  if (differ) useDialog.getState().set({ kind: "levels", project: p, differ });
+  else await useProject.getState().replaceProject(p);
+}
 
 /** More menu → Export show package…: pick where, then write it. */
 export async function startPackageExport() {
@@ -99,7 +108,10 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
   const live = isLive();
   const m = pkg.manifest;
   const items = preview.plan.items;
-  const conflicts = items.filter((x) => x.state === "conflict");
+  // This computer's sound levels are asked about on their own, in both modes.
+  const levels = items.find((x) => x.key === SOUND_LEVELS && x.state === "conflict");
+  const levelsDiffer = levelDifferences(useProject.getState().project.mix, pkg.show.mix);
+  const conflicts = items.filter((x) => x.state === "conflict" && x !== levels);
   const incoming = items.filter((x) => x.state === "incoming");
   const local = items.filter((x) => x.state === "local");
   const same = items.filter((x) => x.state === "same").length;
@@ -148,6 +160,25 @@ function Review({ pkg, preview }: { pkg: IncomingPackage; preview: ImportPreview
           Replace the whole show
         </Button>
       </div>
+
+      {levels && (
+        <div className="rounded-md border border-armed/40 p-2 text-[12px]">
+          <div className="font-semibold">Sound levels</div>
+          <p className="mt-0.5 text-muted-foreground">
+            {levelsDiffer} live mixer level{levelsDiffer === 1 ? "" : "s"} set on this computer differ{levelsDiffer === 1 ? "s" : ""} from the incoming version's{levels.upstream === "unchanged" ? " (it did not change its levels)" : ""}. Which should the show use?
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {(["local", "incoming"] as const).map((o) => {
+              const on = (choices[SOUND_LEVELS] ?? "local") === o;
+              return (
+                <Button key={o} size="xs" variant={on ? "secondary" : "outline"} className={cn(on && "ring-1 ring-preview")} onClick={() => setChoices({ ...choices, [SOUND_LEVELS]: o })}>
+                  {o === "local" ? "Keep this computer's levels" : `Use the ${pkg.via === "cloud" ? "cloud's" : "package's"} levels`}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {mode === "replace" ? (
         <p className="text-[12px] text-muted-foreground">
@@ -284,6 +315,7 @@ export function ShowPackageDialog() {
             </DialogFooter>
           </>
         )}
+        {state.kind === "levels" && <LevelsChoice project={state.project} differ={state.differ} />}
         {state.kind === "error" && (
           <>
             <DialogHeader>
@@ -299,5 +331,33 @@ export function ShowPackageDialog() {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Importing a show file whose sound levels differ from this computer's: which levels to keep. */
+function LevelsChoice({ project, differ }: { project: Project; differ: number }) {
+  const set = useDialog((s) => s.set);
+  const take = async (keepMine: boolean) => {
+    set({ kind: "idle" });
+    await useProject.getState().replaceProject(keepMine ? { ...project, mix: useProject.getState().project.mix } : project);
+  };
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Import “{project.name}”: sound levels</DialogTitle>
+        <DialogDescription>
+          The show file replaces the whole show. {differ} of the live mixer levels on this computer differ from the levels saved in the file. Which levels should the show use?
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button variant="ghost" onClick={() => set({ kind: "idle" })}>
+          Cancel
+        </Button>
+        <Button variant="outline" onClick={() => void take(false)}>
+          Use the file's levels
+        </Button>
+        <Button onClick={() => void take(true)}>Keep this computer's levels</Button>
+      </DialogFooter>
+    </>
   );
 }

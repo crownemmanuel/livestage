@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { applyPrologueFeel, defaultProject, LION_PROOF_ASSETS, PROLOGUE_ASSETS, PROLOGUE_DEMO, PROLOGUE_FEEL, prologueScenes, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene, SHEPHERD_PHOTOREAL_DEMO, shepherdPhotorealScene } from "@/core/defaultProject";
-import { SHOW_SCAFFOLD_DEMO, showScaffoldScenes } from "@/core/showScaffold";
+import { defaultProject, LION_PROOF_ASSETS, LION_PROOF_CUTOUTS, LION_PROOF_DEMO, lionProofIdleClip, lionProofLayout, lionProofScene } from "@/core/defaultProject";
 import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, defaultTimers, HOG_DEFAULT_HOST, makeGroup, makeScene } from "@/core/factories";
 import { autoGroup, normalizeGroups } from "@/core/groups";
 import { FOH_ASSETS, FOH_CALLS, FOH_PIN, fohAnnouncements } from "@/core/fohCalls";
@@ -52,6 +51,10 @@ interface ProjectStore {
   removeAsset(id: string): void;
   setOutput(partial: Partial<OutputSettings>): void;
   setThumbnail(sceneId: string, dataUrl: string): void;
+  /** The show's sound levels (Project.mix): the live mixer writes them here, so they are saved with the show. */
+  setMix(mix: Record<string, number>): void;
+  /** Learned cue timing for the music chase (Project.cueTimings): seconds after the scene's TAKE. */
+  setCueTiming(sceneId: string, key: string, seconds: number): void;
 }
 
 /** Keep groups together and the running-order numbers in step. */
@@ -60,6 +63,26 @@ function renumber(p: Project) {
 }
 
 const SCENE_GROUPS = "scene-groups-1";
+
+/** Remove {type: "dlive"} sends (cue actions, markers, triggers): the direct desk link is gone. */
+function dropDirectDeskMessages(p: Project) {
+  let dropped = 0;
+  const isDesk = (x: unknown) => !!x && typeof x === "object" && (x as { message?: { type?: string } }).message?.type === "dlive";
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) {
+      const kept = v.filter((x) => !isDesk(x));
+      dropped += v.length - kept.length;
+      return kept.map(walk);
+    }
+    if (v && typeof v === "object") {
+      for (const k of Object.keys(v)) (v as Record<string, unknown>)[k] = walk((v as Record<string, unknown>)[k]);
+    }
+    return v;
+  };
+  p.scenes = walk(p.scenes) as Project["scenes"];
+  if (p.io) p.io.triggers = walk(p.io.triggers) as typeof p.io.triggers;
+  if (dropped) console.info(`show file: removed ${dropped} direct dLive message(s); StageMics drives the desk now`);
+}
 
 /** Fill fields added in later versions so old show files keep loading. */
 export function migrateProject(p: Project): Project {
@@ -72,9 +95,15 @@ export function migrateProject(p: Project): Project {
   io.osc = { ...defaultIo().osc, ...(p.io?.osc ?? {}) };
   io.triggers = p.io?.triggers ?? [];
   io.hogItems = p.io?.hogItems ?? defaultHogItems();
+  io.sound = { ...defaultIo().sound, ...(p.io?.sound ?? {}) };
+  // LiveStage no longer drives the dLive itself (StageMics owns the desk): drop the old settings and
+  // any direct desk messages in cues, markers and triggers.
+  delete (io as { dlive?: unknown }).dlive;
+  io.stagelight = { ...defaultIo().stagelight, ...(p.io?.stagelight ?? {}) };
   // The first build shipped a placeholder console address; point it at the real HogNet default.
   io.osc.targets = io.osc.targets.map((t) => (t.id === "osc_hog" && t.host === "192.168.1.10" ? { ...t, host: HOG_DEFAULT_HOST } : t));
   const merged: Project = { ...p, output: out, io, effectPresets: p.effectPresets ?? [], assets: p.assets ?? [], demoAdditions: p.demoAdditions ?? [] };
+  dropDirectDeskMessages(merged);
   // Merge new built-in demo content once; if the user later deletes it, it stays deleted.
   if (!merged.demoAdditions!.includes(LION_PROOF_DEMO)) {
     const have = new Set(merged.assets.map((a) => a.id));
@@ -121,50 +150,6 @@ export function migrateProject(p: Project): Project {
     }
     merged.demoAdditions = [...merged.demoAdditions!, "lion-proof-cutout"];
   }
-  // The photoreal Shepherd's Valley experiment, placed right after the procedural one.
-  if (!merged.demoAdditions!.includes(SHEPHERD_PHOTOREAL_DEMO)) {
-    const at = merged.scenes.findIndex((s) => s.environment === "shepherd-valley");
-    merged.scenes = [...merged.scenes];
-    merged.scenes.splice(at >= 0 ? at + 1 : merged.scenes.length, 0, shepherdPhotorealScene(0));
-    renumber(merged);
-    merged.demoAdditions = [...merged.demoAdditions!, SHEPHERD_PHOTOREAL_DEMO];
-  }
-  // The prologue (P1–P4) opens the show, so it goes first.
-  if (!merged.demoAdditions!.includes(PROLOGUE_DEMO)) {
-    const have = new Set(merged.assets.map((a) => a.id));
-    merged.assets = [...PROLOGUE_ASSETS.filter((a) => !have.has(a.id)), ...merged.assets];
-    merged.scenes = [...prologueScenes(), ...merged.scenes];
-    renumber(merged);
-    merged.demoAdditions = [...merged.demoAdditions!, PROLOGUE_DEMO];
-  }
-  // Prologue tweaks after the first run-through: a stone the audience can see, P3 framed lower.
-  if (!merged.demoAdditions!.includes("prologue-tweaks-1")) {
-    for (const sc of merged.scenes) {
-      for (const c of sc.components) {
-        if (c.kind === "effect" && c.effect === "projectile" && c.name === "Sling stone" && c.params.size === 0.018) {
-          c.params = { ...c.params, size: 0.03, glow: 1.2 };
-        }
-        const isP3 =
-          (c.kind === "background" && c.media.assetId === "asset_pr_david_lion") ||
-          (c.kind === "clipActor" && c.clips.some((k) => k.assetId === "asset_pr_david_loop"));
-        if (isP3 && (c.kind === "background" || c.kind === "clipActor") && c.anchorY === 0.35) c.anchorY = 0.42;
-      }
-    }
-    merged.demoAdditions = [...merged.demoAdditions!, "prologue-tweaks-1"];
-  }
-  // The rest of the show, scaffolded from the script's LED cues, follows the prologue.
-  if (!merged.demoAdditions!.includes(SHOW_SCAFFOLD_DEMO)) {
-    const after = merged.scenes.findIndex((s) => s.components.some((c) => c.kind === "clipActor" && c.clips.some((k) => k.assetId === "asset_pr_goliath_fall")));
-    merged.scenes = [...merged.scenes];
-    merged.scenes.splice(after >= 0 ? after + 1 : merged.scenes.length, 0, ...showScaffoldScenes());
-    renumber(merged);
-    merged.demoAdditions = [...merged.demoAdditions!, SHOW_SCAFFOLD_DEMO];
-  }
-  // Hand-held drift and parallax on P1 and P3.
-  if (!merged.demoAdditions!.includes(PROLOGUE_FEEL)) {
-    applyPrologueFeel(merged.scenes);
-    merged.demoAdditions = [...merged.demoAdditions!, PROLOGUE_FEEL];
-  }
   if (!merged.demoAdditions!.includes(SCENE_GROUPS)) {
     // Older shows were one flat list: group the Prologue's places (and "Scene 1" + "Scene 1b" runs).
     autoGroup(merged, (name, color) => makeGroup(name, color));
@@ -186,7 +171,7 @@ export function migrateProject(p: Project): Project {
   // The sound effects library: every show gets the ones it does not have yet.
   merged.assets = [...merged.assets, ...SFX_ASSETS.filter((a) => !merged.assets.some((x) => x.id === a.id))];
   // Built-in assets ship with the app: keep their definitions in step with the code.
-  const builtIn = new Map([...PROLOGUE_ASSETS, ...LION_PROOF_ASSETS, ...FOH_ASSETS, ...SFX_ASSETS].map((a) => [a.id, a]));
+  const builtIn = new Map([...LION_PROOF_ASSETS, ...FOH_ASSETS, ...SFX_ASSETS].map((a) => [a.id, a]));
   // Keep the keys of local copies (from a show package or sync); resolveAssetUrls points at them when present.
   merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)!, file: a.file, macFile: a.macFile } : a));
   return merged;
@@ -419,6 +404,18 @@ export const useProject = create<ProjectStore>((set, get) => ({
     const p = get().project;
     const scenes = p.scenes.map((s) => (s.id === sceneId ? { ...s, thumbnail: dataUrl } : s));
     set({ project: { ...p, scenes }, dirty: true });
+  },
+
+  setMix(mix) {
+    // A fader drag calls this many times a second: no deep copy of the show.
+    set({ project: { ...get().project, mix: { ...mix } }, dirty: true });
+  },
+  setCueTiming(sceneId, key, seconds) {
+    // Learned during the show, on a GO: no deep copy of the show.
+    const p = get().project;
+    const v = Math.round(seconds * 100) / 100;
+    if (p.cueTimings?.[sceneId]?.[key] === v) return;
+    set({ project: { ...p, cueTimings: { ...p.cueTimings, [sceneId]: { ...p.cueTimings?.[sceneId], [key]: v } } }, dirty: true });
   },
 }));
 

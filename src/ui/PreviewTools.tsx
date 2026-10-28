@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { ChevronRight, Clock, Crosshair, Eye, Film, Flag, Focus, MousePointer2, Pause, Play, Plus, Scan, Send, X, Zap, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
@@ -19,7 +20,7 @@ import { hold, knownDuration, mainSource, mediaAssetIds, probeDurations, seekSou
 import { useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
 import { SelectBox } from "./fields";
-import { defaultMessage } from "./io/MessageFields";
+import { defaultMarkerMessage } from "./io/MessageFields";
 import { MarkersEditor } from "./io/MarkersEditor";
 import { useSceneCodes } from "./SceneList";
 import { assetAspect } from "./assetThumbs";
@@ -179,6 +180,15 @@ export function FramingBar() {
 /** Which video the scrub bar moves through (picked in the Media tab). */
 export const useScrubSelection = create<{ key: string | null }>(() => ({ key: null }));
 
+/** The markers pop-up of the video being scrubbed in the preview. */
+const useMarkersDialog = create<{ open: boolean }>(() => ({ open: false }));
+
+/** Open a video's markers (double-click a marker on the Build timeline): scrub that video and show its pop-up. */
+export function openMarkers(key: string) {
+  selectScrubSource(key);
+  useMarkersDialog.setState({ open: true });
+}
+
 /** Pick a video to scrub; a clip that is not playing is put on its first frame. */
 export function selectScrubSource(key: string) {
   useScrubSelection.setState({ key });
@@ -331,7 +341,9 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
   const [drag, setDrag] = useState<{ v: number; src: Source } | null>(null);
   // The ref is current within one event burst (state lags a render), so a fast scrub never loses its start.
   const dragRef = useRef<{ v: number; src: Source } | null>(null);
-  const [open, setOpen] = useState(false);
+  const dialogOpen = useMarkersDialog((s) => s.open);
+  const open = !live && dialogOpen;
+  const setOpen = (o: boolean) => useMarkersDialog.setState({ open: o });
   // A marker tick being dragged: where it would land (seconds), and whether it has moved yet.
   const [mDrag, setMDrag] = useState<{ id: string; at: number; x0: number; moved: boolean } | null>(null);
   const track = useRef<HTMLDivElement>(null);
@@ -408,7 +420,7 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
   const addMarker = () => {
     pause();
     const at = Math.round(pos * 10) / 10;
-    setMarkers([...markers, { id: uid("mk"), name: `Marker ${markers.length + 1}`, at, message: defaultMessage("hog"), cueId: null }]);
+    setMarkers([...markers, { id: uid("mk"), name: `Marker ${markers.length + 1}`, at, message: defaultMarkerMessage(), cueId: null }]);
     setOpen(true);
   };
   const describe = (m: MediaMarker) => {
@@ -506,8 +518,9 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
                 if (mDrag.moved) setMarkers(markers.map((x) => (x.id === m.id ? { ...x, at: mDrag.at } : x)));
                 else dispatch("preview", src.seek(m.at));
                 setMDrag(null);
-                setOpen(true);
               }}
+              // Double-click: its settings.
+              onDoubleClick={() => editable && setOpen(true)}
               onPointerCancel={() => setMDrag(null)}
               onClick={() => {
                 // Show Mode (not editable): a click jumps to the marker.
@@ -557,10 +570,16 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
         </span>
       </button>
       )}
-      {editable && open && (
-        <div className="mt-1.5">
-          <MarkersEditor markers={markers} onChange={setMarkers} />
-        </div>
+      {editable && (
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent className="max-h-[85vh] gap-3 overflow-y-auto p-4 sm:max-w-[760px]" onOpenAutoFocus={(e) => e.preventDefault()}>
+            <DialogHeader className="gap-1">
+              <DialogTitle className="text-[14px]">Markers on {host?.label ?? "this video"}</DialogTitle>
+              <DialogDescription className="text-[11.5px]">Each marker fires as the video plays past it: lighting, StageLight, StageMics, MIDI / OSC, or a cue. Changes save as you make them. Double-click a marker (here or on the timeline) to come back.</DialogDescription>
+            </DialogHeader>
+            <MarkersEditor markers={markers} onChange={setMarkers} />
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

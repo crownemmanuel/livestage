@@ -20,6 +20,8 @@ pub struct IoState {
     midi_out: Mutex<Option<MidiOutputConnection>>,
     osc_stop: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     osc_port: Mutex<Option<u16>>,
+    /// The listening socket, so a message can be sent from the listen port and its reply comes back to it.
+    osc_socket: Mutex<Option<UdpSocket>>,
 }
 
 #[derive(Serialize)]
@@ -161,12 +163,14 @@ pub fn osc_listen(app: AppHandle, state: State<IoState>, port: Option<u16>) -> R
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     *state.osc_port.lock().unwrap() = None;
+    *state.osc_socket.lock().unwrap() = None;
     let Some(port) = port else { return Ok(()) };
     let socket = UdpSocket::bind(("0.0.0.0", port)).map_err(|e| format!("OSC port {port}: {e}"))?;
     socket.set_read_timeout(Some(Duration::from_millis(250))).map_err(|e| e.to_string())?;
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     *state.osc_stop.lock().unwrap() = Some(stop.clone());
     *state.osc_port.lock().unwrap() = Some(port);
+    *state.osc_socket.lock().unwrap() = socket.try_clone().ok();
     std::thread::spawn(move || {
         let mut buf = [0u8; 65536];
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -184,11 +188,19 @@ pub fn osc_listen(app: AppHandle, state: State<IoState>, port: Option<u16>) -> R
     Ok(())
 }
 
+/// Send one OSC message. With `from_listener` (and OSC listening on), it leaves from the listen
+/// port, so a device that answers the sender (the Sound app's /sound/ping) answers to the app.
 #[tauri::command]
-pub fn osc_send(host: String, port: u16, address: String, args: Vec<OscArg>) -> Result<(), String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+pub fn osc_send(state: State<IoState>, host: String, port: u16, address: String, args: Vec<OscArg>, from_listener: Option<bool>) -> Result<(), String> {
     let msg = OscPacket::Message(OscMessage { addr: address, args: args.iter().map(to_osc_type).collect() });
     let bytes = rosc::encoder::encode(&msg).map_err(|e| e.to_string())?;
+    if from_listener.unwrap_or(false) {
+        if let Some(socket) = state.osc_socket.lock().unwrap().as_ref() {
+            socket.send_to(&bytes, (host.as_str(), port)).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
     socket.send_to(&bytes, (host.as_str(), port)).map_err(|e| e.to_string())?;
     Ok(())
 }

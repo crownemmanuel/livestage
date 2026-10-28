@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { now } from "@/core/clock";
+import { carriedSounds } from "@/core/music";
 import { applyCommand, createPoses, createRuntime, reconcileRuntime, type Command } from "@/core/runtime";
 import type { OutputStatus } from "@/core/bus";
 import { defaultOutput } from "@/core/factories";
@@ -10,6 +11,7 @@ import type {
   ProgramState,
   Scene,
   SceneRuntime,
+  SoundEvent,
   TimerOp,
   TimerRun,
   TransitionSpec,
@@ -52,7 +54,11 @@ interface ShowStore {
   setSolo(id: string | null): void;
   toggleHidden(id: string): void;
   restartPreview(): void;
-  take(scene: Scene, spec: TransitionSpec): void;
+  /**
+   * Put a scene on the wall. `continues`: see ProgramState.continues (music marked keep playing is carried into
+   * the new run's sound list). `chase`: sound events the new run starts with (the music chase, scene-time `at`).
+   */
+  take(scene: Scene, spec: TransitionSpec, continues?: boolean, chase?: SoundEvent[]): void;
   finishTransition(takeCount: number): void;
   setStandby(on: boolean): void;
   setBlackout(on: boolean, fade?: number): void;
@@ -126,10 +132,13 @@ export const useShow = create<ShowStore>((set, get) => ({
     if (cur) set({ preview: createRuntime(cur.scene), previewPoses: createPoses(cur.scene), previewPosesAt: now() });
   },
 
-  take(scene, spec) {
+  take(scene, spec, continues = false, chase = []) {
     const { program, programPoses } = get();
-    const startedAt = now() + TAKE_PREROLL_MS;
+    const wall = now();
+    const startedAt = wall + TAKE_PREROLL_MS;
     const runtime = createRuntime(scene, startedAt);
+    const carried = continues && !program.standby && !scene.stopCarriedSounds && program.runtime ? carriedSounds(program.runtime, startedAt, wall) : [];
+    runtime.sounds = [...carried, ...chase];
     const instant = spec.kind === "cut" || spec.duration <= 0;
     set({
       program: {
@@ -140,6 +149,7 @@ export const useShow = create<ShowStore>((set, get) => ({
           ? null
           : { spec, startedAt, from: program.runtime, fromPoses: programPoses, fromStandby: program.standby },
         takeCount: program.takeCount + 1,
+        continues,
         // a TAKE in the dark stays dark until the operator brings the lights up
         blackout: program.blackout,
         // show timers and the announcement playing are show-wide: a TAKE must not reset them

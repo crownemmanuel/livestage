@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, CornerDownRight, Megaphone, Timer as TimerIcon, Crop, Eye, Footprints, Gauge, Image, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, X } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { create } from "zustand";
+import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, CornerDownRight, Megaphone, Timer as TimerIcon, Crop, Eye, Footprints, Gauge, Image, LampCeiling, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, SlidersVertical, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, VolumeX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -7,7 +8,7 @@ import { makeCue, defaultTransition } from "@/core/factories";
 import { uid } from "@/core/ids";
 import { LION_ACTION_INFO } from "@/core/lion";
 import { LION_ACTIONS } from "@/core/types";
-import type { Cue, CueAction, CueActionType, Scene, SceneComponent } from "@/core/types";
+import type { Cue, CueAction, CueActionType, IoMessage, Scene, SceneComponent } from "@/core/types";
 import { EFFECT_DEFS } from "@/core/effects";
 import { runCue } from "@/engine/operator";
 import { sceneNow } from "@/core/clock";
@@ -28,18 +29,28 @@ import { TRANSITIONS } from "../show/ShowMode";
 import { MessageFields, defaultMessage } from "../io/MessageFields";
 import { useSceneCodes } from "../SceneList";
 import { AssetPickerButton } from "./AssetLibrary";
+import { audioRoleOf } from "@/engine/mixer";
 import { FireField } from "./FireField";
 import { flowNext } from "@/core/groups";
 import { formatClock } from "@/core/timers";
 
-/** "hog" is a Send action preset to a Hog 4 message; it gets its own menu entry because it is the common case. */
-type MenuType = CueActionType | "hog";
+/**
+ * "hog", "stagelight" and "soundApp" are Send actions preset to a Hog 4, StageLight or StageMics
+ * message; they get their own menu entries because they are the common cases.
+ */
+export type MenuType = CueActionType | "hog" | "stagelight" | "soundApp";
+
+/** Menu entries that are a Send action with a preset message, and the message type they start with. */
+export const SEND_PRESETS: Partial<Record<MenuType, IoMessage["type"]>> = { hog: "hog", stagelight: "stagelight", soundApp: "sound" };
 
 export const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> = {
   hog: { label: "Lighting (Hog 4)", icon: <Lightbulb className="text-armed" /> },
+  stagelight: { label: "StageLight", icon: <LampCeiling className="text-armed" /> },
+  soundApp: { label: "StageMics (dLive)", icon: <SlidersVertical className="text-preview" /> },
   send: { label: "MIDI / OSC", icon: <Radio /> },
   blackout: { label: "Blackout / lights up", icon: <Power /> },
   sound: { label: "Play sound", icon: <Volume2 /> },
+  "audio.fade": { label: "Fade out audio", icon: <VolumeX /> },
   announce: { label: "Announcement", icon: <Megaphone /> },
   timer: { label: "Show timer", icon: <TimerIcon /> },
   clip: { label: "Video clip", icon: <Clapperboard /> },
@@ -61,15 +72,16 @@ export const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> =
   "actor.visible": { label: "Lion show / hide", icon: <Eye /> },
 };
 
-const MENU: { group: string; types: MenuType[] }[] = [
-  { group: "Lighting & sound", types: ["hog", "blackout", "sound", "announce", "send"] },
+export const MENU: { group: string; types: MenuType[] }[] = [
+  { group: "Lighting & sound", types: ["hog", "stagelight", "soundApp", "blackout", "sound", "audio.fade", "announce", "send"] },
   { group: "Picture", types: ["clip", "layer", "background", "effect", "effect.param", "media.speed", "timeOfDay", "names", "route"] },
   { group: "Camera", types: ["camera", "framing"] },
   { group: "Show", types: ["takeScene", "timer", "clock"] },
   { group: "Lion", types: ["lion", "lion.moveTo", "lion.place", "actor.visible"] },
 ];
 
-const infoFor = (a: CueAction) => ACTION_INFO[a.type === "send" && a.message.type === "hog" ? "hog" : a.type];
+const infoFor = (a: CueAction) => ACTION_INFO[a.type === "send" ? sendMenuType(a.message) : a.type];
+const sendMenuType = (m: IoMessage): MenuType => (m.type === "hog" || m.type === "stagelight" ? m.type : m.type === "sound" ? "soundApp" : "send");
 
 const LAYER_KINDS = ["video", "image", "model", "procedural", "text", "names", "route"];
 
@@ -134,6 +146,8 @@ export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]
       return { type, op: "toggle", delay: 0 };
     case "sound":
       return { type, assetId: null, volume: 1, delay: 0, keepPlaying: false, loop: false, fadeOthers: null };
+    case "audio.fade":
+      return { type, which: [], fade: 2, delay: 0 };
     case "send":
       return { type, message: defaultMessage("osc"), delay: 0 };
     case "timer":
@@ -158,8 +172,9 @@ export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]
   }
 }
 
-function newAction(t: MenuType, scene: Scene, scenes: Scene[]): CueAction {
-  return t === "hog" ? { type: "send", message: defaultMessage("hog"), delay: 0 } : defaultAction(t, scene, scenes);
+export function newAction(t: MenuType, scene: Scene, scenes: Scene[]): CueAction {
+  const preset = SEND_PRESETS[t];
+  return preset ? { type: "send", message: defaultMessage(preset), delay: 0 } : defaultAction(t as CueActionType, scene, scenes);
 }
 
 function AddActionMenu({ onAdd }: { onAdd: (t: MenuType) => void }) {
@@ -187,8 +202,26 @@ function AddActionMenu({ onAdd }: { onAdd: (t: MenuType) => void }) {
   );
 }
 
+/** A cue (and one of its actions) to bring into view in the run sheet, e.g. clicked on the timeline. */
+export const useCueFocus = create<{ cueId: string | null; action: number | null; nonce: number }>(() => ({ cueId: null, action: null, nonce: 0 }));
+
+export function focusCue(cueId: string, action: number | null = null) {
+  useCueFocus.setState((s) => ({ cueId, action, nonce: s.nonce + 1 }));
+}
+
 export function CueEditor({ scene }: { scene: Scene }) {
   const scenes = useProject((s) => s.project.scenes);
+  const focus = useCueFocus();
+  const root = useRef<HTMLDivElement>(null);
+  // Scroll the focused cue (its action, when one is named) into view; the highlight fades by itself.
+  useEffect(() => {
+    if (!focus.cueId || !root.current) return;
+    const card = root.current.querySelector<HTMLElement>(`[data-cue-id="${focus.cueId}"]`);
+    const el = (focus.action != null && card?.querySelector<HTMLElement>(`[data-action="${focus.action}"]`)) || card;
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const h = setTimeout(() => useCueFocus.setState({ cueId: null, action: null }), 1800);
+    return () => clearTimeout(h);
+  }, [focus.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
   const up = (fn: (s: Scene) => void) => useProject.getState().updateScene(scene.id, fn);
   const upCue = (id: string, fn: (c: Cue) => void) =>
     up((s) => {
@@ -198,7 +231,7 @@ export function CueEditor({ scene }: { scene: Scene }) {
   const addCue = () => up((s) => s.cues.push(makeCue(`Cue ${s.cues.length + 1}`)));
 
   return (
-    <div className="space-y-2.5 p-3">
+    <div ref={root} className="space-y-2.5 p-3">
       <div className="flex items-center gap-1.5">
         <ListOrdered className="size-3.5 text-muted-foreground" />
         <h3 className="text-[12.5px] font-semibold">Run sheet</h3>
@@ -214,7 +247,7 @@ export function CueEditor({ scene }: { scene: Scene }) {
         </button>
       )}
       {scene.cues.map((cue, i) => (
-        <div key={cue.id} className="group/cue overflow-hidden rounded-lg border border-border bg-card/50 shadow-sm">
+        <div key={cue.id} data-cue-id={cue.id} className={cn("group/cue overflow-hidden rounded-lg border border-border bg-card/50 shadow-sm transition-shadow", focus.cueId === cue.id && focus.action == null && "ring-2 ring-preview/70")}>
           <div className="flex items-center gap-2 px-2.5 pt-2">
             <span className="grid size-6 shrink-0 place-items-center rounded-full bg-accent text-[11.5px] font-semibold tabular">{i + 1}</span>
             <input
@@ -256,14 +289,15 @@ export function CueEditor({ scene }: { scene: Scene }) {
           </label>
           <div className="mt-1.5 space-y-px border-t border-border/70 bg-black/10 px-1.5 py-1.5">
             {cue.actions.map((a, j) => (
-              <ActionRow
-                key={j}
-                a={a}
-                scene={scene}
-                scenes={scenes}
-                onChange={(na) => upCue(cue.id, (c) => (c.actions[j] = na))}
-                onRemove={() => upCue(cue.id, (c) => c.actions.splice(j, 1))}
-              />
+              <div key={j} data-action={j} className={cn("rounded transition-shadow", focus.cueId === cue.id && focus.action === j && "ring-2 ring-preview/70")}>
+                <ActionRow
+                  a={a}
+                  scene={scene}
+                  scenes={scenes}
+                  onChange={(na) => upCue(cue.id, (c) => (c.actions[j] = na))}
+                  onRemove={() => upCue(cue.id, (c) => c.actions.splice(j, 1))}
+                />
+              </div>
             ))}
             <AddActionMenu onAdd={(t) => upCue(cue.id, (c) => c.actions.push(newAction(t, scene, scenes)))} />
           </div>
@@ -293,7 +327,7 @@ function AfterLastStep({ scene }: { scene: Scene }) {
   );
 }
 
-function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; scene: Scene; scenes: Scene[]; onChange: (a: CueAction) => void; onRemove: () => void }) {
+export function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; scene: Scene; scenes: Scene[]; onChange: (a: CueAction) => void; onRemove: () => void }) {
   const timers = useProject((s) => s.project.timers ?? NO_ITEMS);
   const announcements = useProject((s) => s.project.announcements ?? NO_ITEMS);
   const opt = (kinds: string[]) => scene.components.filter((c) => kinds.includes(c.kind)).map((c) => ({ value: c.id, label: c.name }));
@@ -439,7 +473,14 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
     case "sound":
       body = (
         <>
-          <AssetPickerButton types={["audio"]} value={a.assetId} onChange={(v) => onChange({ ...a, assetId: v })} placeholder="Choose a sound…" title="Choose a sound" className="h-6 w-[220px] text-[11px]" />
+          <AssetPickerButton
+            types={["audio"]}
+            value={a.assetId}
+            onChange={(v) => {
+              inheritSoundRole(a.assetId, v);
+              onChange({ ...a, assetId: v });
+            }}
+            placeholder="Choose a sound…" title="Choose a sound" className="h-6 w-[220px] text-[11px]" />
           {lbl("vol")}
           <NumberInput className="h-6 w-14" value={a.volume} min={0} max={1} step={0.05} onChange={(v) => onChange({ ...a, volume: v })} />
           <label className="flex items-center gap-1 text-[10.5px] text-muted-foreground" title="Off: the sound fades out when another scene is taken. On: it carries on into the next scene.">
@@ -450,6 +491,8 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
             <Switch size="sm" checked={!!a.loop} onCheckedChange={(v) => onChange({ ...a, loop: v })} />
             loop
           </label>
+          {lbl("fade in s")}
+          <NumberInput className="h-6 w-12" value={a.fadeIn ?? 0} min={0} step={0.5} onChange={(v) => onChange({ ...a, fadeIn: Math.max(0, v) })} />
           {lbl("as it starts")}
           {sel(
             !a.fadeOthers ? "keep" : a.fadeOthers.which === "all" ? "all" : "chosen",
@@ -465,6 +508,8 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
             <>
               {lbl("over s")}
               <NumberInput className="h-6 w-12" value={a.fadeOthers.fade} min={0} step={0.5} onChange={(v) => onChange({ ...a, fadeOthers: { ...a.fadeOthers!, fade: Math.max(0, v) } })} />
+              {lbl("after s")}
+              <NumberInput className="h-6 w-12" value={a.fadeOthers.delay ?? 0} min={0} step={0.5} onChange={(v) => onChange({ ...a, fadeOthers: { ...a.fadeOthers!, delay: Math.max(0, v) } })} />
             </>
           )}
           {a.fadeOthers && a.fadeOthers.which !== "all" && (
@@ -489,8 +534,37 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
         </>
       );
       break;
+    case "audio.fade": {
+      const which = a.which;
+      body = (
+        <>
+          {sel(which === "all" ? "all" : "chosen", [{ value: "chosen", label: "chosen audio…" }, { value: "all", label: "all audio" }], (v) => onChange({ ...a, which: v === "all" ? "all" : [] }), "w-[130px]")}
+          {lbl("over s")}
+          <NumberInput className="h-6 w-12" value={a.fade} min={0} step={0.5} onChange={(v) => onChange({ ...a, fade: Math.max(0, v) })} />
+          {which !== "all" && (
+            <div className="flex w-full flex-wrap items-center gap-1">
+              {lbl("fade:")}
+              {otherAudio(scene, null).map((o) => {
+                const on = which.includes(o.key);
+                return (
+                  <button
+                    key={o.key}
+                    type="button"
+                    className={cn("rounded border px-1.5 py-0.5 text-[10.5px]", on ? "border-live/60 bg-live/15 text-foreground" : "border-border text-muted-foreground hover:text-foreground")}
+                    onClick={() => onChange({ ...a, which: on ? which.filter((k) => k !== o.key) : [...which, o.key] })}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
+      );
+      break;
+    }
     case "send":
-      body = <MessageFields roomy hideType={a.message.type === "hog"} m={a.message} onChange={(message) => onChange({ ...a, message })} />;
+      body = <MessageFields roomy hideType={sendMenuType(a.message) !== "send"} m={a.message} onChange={(message) => onChange({ ...a, message })} />;
       break;
     case "timer":
       body = (
@@ -604,4 +678,20 @@ function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueAction; sce
       </Button>
     </div>
   );
+}
+
+/**
+ * A sound swapped into a cue takes the role of the one it replaces (music, voice, ambience, effect: its track on the
+ * timeline and its group in the mixer), unless the new file already has a role of its own.
+ */
+function inheritSoundRole(from: string | null, to: string | null) {
+  if (!from || !to || from === to) return;
+  const st = useProject.getState();
+  const role = audioRoleOf(st.project.assets.find((x) => x.id === from));
+  const next = st.project.assets.find((x) => x.id === to);
+  if (!role || !next || next.audioRole) return;
+  st.update((p) => {
+    const n = p.assets.find((x) => x.id === to);
+    if (n) n.audioRole = role;
+  });
 }

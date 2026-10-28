@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 16;
+export const AGENT_SPEC_VERSION = 24;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -64,7 +64,7 @@ export const AGENT_COMMANDS = {
   status: {
     readOnly: true,
     description:
-      "Overview of the running app: mode, selected scene, what is on the LIVE wall (scene, next cue, standby, blackout, freeze, transition), the preview, output window health, show timers, MIDI/OSC status, save state. Start here.",
+      "Overview of the running app: mode, selected scene, what is on the LIVE wall (scene, next cue, standby, blackout, freeze, transition), the preview, output window health, show timers, MIDI/OSC status, StageMics reach, StageLight link, save state. Start here.",
     params: args({}),
   },
   list_scenes: {
@@ -76,6 +76,12 @@ export const AGENT_COMMANDS = {
     readOnly: true,
     description: "One scene as stored (components, cues, camera shots, stage markers, transition, look). Thumbnails are left out.",
     params: args({ scene: sceneRef }, ["scene"]),
+  },
+  timeline: {
+    readOnly: true,
+    description:
+      "A scene as the Build timeline lays it out, in scene seconds: when each cue fires (`start`; a GO cue sits at its planned `hold` after the cue before, guessed from how long that cue runs when `holdSet` is false; set it with cue_update {patch: {hold}}), and per track what plays when: clips (with the idle loops that fill the waits and when a clip waited for its cut point), backgrounds, layers, effects, camera moves, sounds (their length, fades, carried in from or into other scenes) and lights / MIDI / OSC. Each item names the cue and action that put it there.",
+    params: args({ scene: sceneRef }),
   },
   get_runtime: {
     readOnly: true,
@@ -110,6 +116,17 @@ export const AGENT_COMMANDS = {
     description: "Recent MIDI/OSC/show-control log lines (in, out, info, errors), newest last.",
     params: args({ limit: int("How many lines (default 40).") }),
   },
+  stagelight_status: {
+    readOnly: true,
+    description:
+      "The StageLight lighting-desk link: on/off, address and port, mirror on/off, reach (answering / sent / error / off), StageLight's last hello (version, output armed or preview only, running page and cue), its last GO announcement and its last refusal, and the catalog's state and size. Sends nothing.",
+    params: args({}),
+  },
+  stagelight_catalog: {
+    description:
+      "What StageLight has, to pick from: pages with their cue lists (number, entryId, name, auto-follow), named triggers (id, name, what each does) and library cues, as last read from StageLight (StageLight 0.3+; kept in the show file, so it also works while StageLight is off). StageLight messages given to cue_add, cue_update, markers, run_action, io_send and stagelight_send may name pages, cues, triggers and library cues by name or number: they are stored as these IDs, with the names in `label`. refresh = ask StageLight again first (it only asks; nothing changes on the desk).",
+    params: args({ refresh: bool("Re-read the catalog from StageLight before answering.") }),
+  },
   list_store_actions: {
     readOnly: true,
     description: "Names of the raw store actions `call_action` can invoke (project store and show store), for features without a dedicated tool.",
@@ -128,12 +145,22 @@ export const AGENT_COMMANDS = {
   },
   cue: {
     description:
-      "Cue list control. go = fire the next cue (past the last cue a flowing group takes its next scene), including one that would fire by itself (nextCueAuto: true), which then fires early; fire = fire cue `index` and rewind the list to it (the cues after it are un-fired, GO points at the next one; time cues already behind the clock wait for GO); back/skip = move the GO pointer; set = put the pointer on `index`; repeat = re-run the last fired cue.",
+      "Cue list control. go = fire the next cue (past the last cue a flowing group takes its next scene), including one that would fire by itself (nextCueAuto: true), which then fires early; fire = fire cue `index` and rewind the list to it (the cues after it are un-fired, GO points at the next one, the cues before it count as passed; time cues already behind the clock wait for GO; on program, a fire out of order chases the music, see music_at); back/skip = move the GO pointer; set = put the pointer on `index`; repeat = re-run the last fired cue. On program, go/fire during a video transition end the transition at once so the cue is seen.",
     params: args({ target, op: oneOf(["go", "fire", "back", "skip", "set", "repeat"], "What to do."), index: int("0-based cue index for fire/set.") }, ["target", "op"]),
   },
   preview_step: {
     description: "Show the preview as the scene looks after its first `step` cues (0 = as taken). Nothing is sent out.",
     params: args({ step: int("Number of cues applied.") }, ["step"]),
+  },
+  preview_time: {
+    description:
+      "Show the PREVIEW as the selected scene looks `seconds` into its Build timeline (see timeline): every cue fired at its timeline time (GO cues at their planned hold), every action up to that moment applied at its own time, then held on that frame. Resume (freeze or transport) plays on from there, with the rest of those cues still to come. Nothing is sent out.",
+    params: args({ seconds: num("Scene seconds on the timeline.") }, ["seconds"]),
+  },
+  preview_run: {
+    description:
+      "Run the show in the PREVIEW, as Build's Run show button does: the scene (default: the one in the preview) starts from its TAKE, GO cues fire by themselves at their planned holds on the timeline, take-scene actions go on to the next scene (carrying music that keeps playing), and a scene that ends without one goes on to the next in running order. Nothing is sent out. on: false stops the run and leaves the preview where it is.",
+    params: args({ on: bool("true = start a run, false = stop it."), scene: sceneRef }, ["on"]),
   },
   run_action: {
     description:
@@ -199,12 +226,18 @@ export const AGENT_COMMANDS = {
   mixer: {
     live: true,
     description:
-      "Live mixer: list every audio source sounding on the LIVE wall (cue sounds, video with its sound on) with its volume trim, or set one. The trim multiplies the designed volume (1 = as designed, 0 = silent) and stays through takes; reset = true puts every source back. Without source/volume it only reads.",
+      "Live mixer: list every audio source sounding on the LIVE wall (cue sounds, video with its sound on) with its volume trim, or set one. The trim multiplies the designed volume (1 = as designed, 0 = silent), stays through takes and is saved in the show file as its sound levels (project/mix: the same keys), so it travels with packages and cloud sync and comes back the next time that source plays; reset = true puts every source back (and clears the saved levels). Without source/volume it only reads. `trims` is every saved level, playing or not.",
     params: args({
       source: str('Mixer key from the list ("sound:<assetId>" or a component id), a sound or component name, or an asset id.'),
       volume: num("Trim 0..1 for that source (1 = as designed)."),
       reset: bool("Put every source back to its designed volume."),
     }),
+  },
+  music_at: {
+    readOnly: true,
+    description:
+      "The cue sounds that would be playing just before a cue fires (no cue: as the scene is taken), had the show run in sequence from the top, and how far into each file (`offset`, s) — what the music chase starts when the operator fires a cue out of order or takes a scene out of running order (project/chaseMusic, default on). Worked out from the cues: time cues at their time, follow cues after the cue before, video cues at their marker, GO cues when they last fired in a run in sequence (`learned`, project/cueTimings: scene id → cue id → seconds after TAKE; never learned = right after the cue before). `live` = what the live wall plays now.",
+    params: args({ scene: sceneRef, cue: cueRef }, ["scene"]),
   },
   audio_output: {
     live: true,
@@ -227,8 +260,37 @@ export const AGENT_COMMANDS = {
   io_send: {
     live: true,
     description:
-      "Send a MIDI / OSC / MIDI Show Control / Hog 4 message to the outside world now (lighting console, sound desk). See schema topic io for shapes. Hog playback numbers go as strings.",
-    params: args({ message: obj("An IoMessage, e.g. {type: \"hog\", op: \"go\", item: \"House Light\", kind: \"cuelist\", number: \"205\", cue: \"\", master: \"\"}. master (GO only) = a master number whose fader goes to full first, for a list parked on a lowered fader.") }, ["message"]),
+      "Send a message to the outside world now: Hog 4 lighting, StageLight (the lighting desk; stagelight_send also reports StageLight's answer), StageMics (mics, voice effects, its scenes and cues; StageMics owns the dLive sound desk), Custom OSC, MIDI Show Control or MIDI. See schema topic io for shapes. Hog playback numbers go as strings. A StageMics sceneId null means the LIVE scene. Returns the exact OSC sent for StageMics and StageLight messages.",
+    params: args({ message: obj("An IoMessage, e.g. {type: \"hog\", op: \"go\", item: \"House Light\", kind: \"cuelist\", number: \"205\", cue: \"\", master: \"\"}, {type: \"stagelight\", op: \"trigger\", name: \"lion.leap\"}, {type: \"sound\", op: \"mic\", who: \"Joseph\", live: false}. master (GO only) = a master number whose fader goes to full first, for a list parked on a lowered fader.") }, ["message"]),
+  },
+  stagemics_status: {
+    readOnly: true,
+    description:
+      "StageMics (the mic app that owns the dLive sound desk): whether LiveStage's link to it is on, its address, whether it answered recently, its version and desk connection, its active cue and mic states. Nothing is sent.",
+    params: args({}),
+  },
+  stagelight_link: {
+    description:
+      "Set up the link to StageLight, the lighting desk (OSC; Settings → StageLight). Only the fields given change. enabled is this computer's own switch (never taken from another machine's show file). StageLight's show port is 1461; dev desks use others (1471). mirror = also send every live TAKE as trigger \"scene.<code>\" and every GO as \"cue.<code>.<n>\". Switching it on also switches on OSC listening (project/io/osc/enabled), which StageLight's replies need. Pings StageLight and returns stagelight_status.",
+    params: args({
+      enabled: bool("Send to StageLight from this computer."),
+      host: str("StageLight's IP address (127.0.0.1 on this computer)."),
+      port: int("StageLight's OSC listen port."),
+      mirror: bool("Mirror live TAKE / GO as named triggers."),
+    }),
+  },
+  stagelight_send: {
+    live: true,
+    description:
+      "Send one command to StageLight now (it may change the real lights when StageLight's output is armed) and report what went out and what StageLight answered: a refusal (/stagelight/error, e.g. unknown page or trigger) or its GO announcement, within a fraction of a second. No answer is normal for accepted commands unless StageLight announces to this computer. Needs the link on (stagelight_link).",
+    params: args(
+      {
+        message: obj(
+          'A StageLight message (type "stagelight" optional): {op: "go", page: ""} next cue ("" = running page) | {op: "goCue", page: "Act 1", cue: "4"} | {op: "trigger", name: "lion.leap"} | {op: "back"} | {op: "stop"|"clear", fade: null} | {op: "blackout", on: true} | {op: "master", level: 0.8} | {op: "play", cue: "Warm wash", fade: null} | {op: "ledwall", media: "off"}. Pages and cues by StageLight name, ID or 1-based number.',
+        ),
+      },
+      ["message"],
+    ),
   },
   io_inject: {
     description: "Pretend a MIDI or OSC message arrived (tests triggers without hardware). The matching trigger acts on the show as if it were real.",
@@ -332,7 +394,7 @@ export const AGENT_COMMANDS = {
   },
   cue_add: {
     description:
-      'Add a cue to a scene. A cue is {name, notes, actions: CueAction[], fire?}; fire = {mode: "go"} (default) | {mode: "time", at} | {mode: "follow", after} | {mode: "video"} (fired by a media marker with cueId). Action types: schema topic cueActions.',
+      'Add a cue to a scene. A cue is {name, notes, actions: CueAction[], fire?}; fire = {mode: "go"} (default) | {mode: "time", at} | {mode: "follow", after} | {mode: "video"} (fired by a media marker with cueId). Action types: schema topic cueActions. Lighting is type "send" with a message: {type: "send", message: {type: "stagelight", op: "goCue", page: "Act 1", cue: "4"}, delay: 0} or a Hog message.',
     params: args(
       {
         scene: sceneRef,
@@ -343,8 +405,8 @@ export const AGENT_COMMANDS = {
     ),
   },
   cue_update: {
-    description: "Change a cue by deep merge (actions are replaced as a whole when given).",
-    params: args({ scene: sceneRef, cue: cueRef, patch: obj("Fields to merge: name, notes, actions, fire.") }, ["scene", "cue", "patch"]),
+    description: "Change a cue by deep merge (actions are replaced as a whole when given: to edit or remove one action, get_scene, change the list, send it back).",
+    params: args({ scene: sceneRef, cue: cueRef, patch: obj("Fields to merge: name, notes, actions, fire, hold (GO cues: planned seconds after the cue before, for the timeline).") }, ["scene", "cue", "patch"]),
   },
   cue_remove: {
     destructive: true,
@@ -354,6 +416,21 @@ export const AGENT_COMMANDS = {
   cue_move: {
     description: "Move a cue to a new 0-based position in its scene.",
     params: args({ scene: sceneRef, cue: cueRef, to: int("New index.") }, ["scene", "cue", "to"]),
+  },
+  markers: {
+    description:
+      "Time markers on a scene's videos (a video layer, a video background, or a clip of a video actor): when the LIVE video reaches `at` seconds, the marker sends its message (Hog, StageLight, MIDI, OSC) or runs one of the scene's cues. Markers fire from PROGRAM only, once per pass, never while scrubbing. list = every video with its markers; upsert = add, or change by id (message replaced as a whole); remove = by id or name.",
+    params: args(
+      {
+        scene: sceneRef,
+        op: oneOf(["list", "upsert", "remove"], "What to do (default list)."),
+        media: str("upsert/remove: the video: component id or name (a video layer, a media background or a video actor)."),
+        clip: str("For a video actor: the clip's id or name."),
+        marker: obj('upsert: {id?, name?, at: seconds, message?: IoMessage, cue?: cue ref (id, name or "#2") to run instead of sending}. E.g. {name: "Leap", at: 1.8, message: {type: "stagelight", op: "trigger", name: "lion.leap"}}. A new marker without message or cue sends a StageLight GO when the StageLight link is on, else a Hog GO.'),
+        id: str("remove: the marker's id or name."),
+      },
+      ["scene"],
+    ),
   },
   upsert: {
     description:
@@ -395,7 +472,7 @@ export const AGENT_COMMANDS = {
       "Add media to the library: a local file (copied into the show's library; files under the project's public/ folder are linked instead) or a URL the app can load. Videos are probed (codec, size, keyframes) and checked against what the wall plays; one the wall would not play well (H.264 wider than 4096 px, far bigger than the wall, long keyframe gaps, no fast start) is re-encoded into the wall format on the way in (desktop app, needs ffmpeg). Returns the asset id, the probe and any remaining problems.",
     params: args({
       file: str("Absolute path of a local file (read by the MCP server)."),
-      url: str("Or a URL / app path (e.g. /media/prologue/p2-rock.jpg)."),
+      url: str("Or a URL / app path (e.g. /media/lion-proof/clean-plate.jpg)."),
       name: str("Display name (default: the file name)."),
       type: oneOf(["image", "video", "model", "audio"], "Default: from the extension."),
       hasAlpha: bool("Video/image has transparency (never re-encoded)."),
@@ -429,10 +506,15 @@ export const AGENT_COMMANDS = {
   },
   project: {
     description:
-      "Whole-show operations: save now; export the show file to `file`; import a show file from `file` (replaces the whole show); reset to the built-in demo show (replaces everything); rename.",
+      "Whole-show operations: save now; export the show file to `file`; import a show file from `file` (replaces the whole show); reset to the built-in demo show (replaces everything); rename. When the file's sound levels differ from this computer's, import changes nothing until `levels` says which to keep (ask the operator).",
     destructive: true,
     params: args(
-      { op: oneOf(["save", "export", "import", "reset_demo", "rename"], "What to do."), file: str("Absolute path for export/import (handled by the MCP server)."), name: str("For rename.") },
+      {
+        op: oneOf(["save", "export", "import", "reset_demo", "rename"], "What to do."),
+        file: str("Absolute path for export/import (handled by the MCP server)."),
+        name: str("For rename."),
+        levels: oneOf(["local", "incoming"], "For import when the sound levels differ: keep this computer's (local) or take the file's (incoming)."),
+      },
       ["op"],
     ),
   },
@@ -449,7 +531,7 @@ export const AGENT_COMMANDS = {
       {
         dir: str("Absolute path of the .slshow package folder."),
         mode: oneOf(["merge", "replace"], "merge (default when this show has taken in this show before) or replace the whole show (default otherwise). Machine settings (output display, MIDI ports) are always kept."),
-        choices: obj('Conflict key → "incoming" | "local" | "media" (keep this scene, add the incoming media) | "both" (keep this scene, add the incoming one as a copy). Keys come from the plan, e.g. "scene:scene_ab12", "order", "output".'),
+        choices: obj('Conflict key → "incoming" | "local" | "media" (keep this scene, add the incoming media) | "both" (keep this scene, add the incoming one as a copy). Keys come from the plan, e.g. "scene:scene_ab12", "order", "output". "mix" is the sound levels: levels changed on this computer that differ from the package\'s are always a conflict, also in replace mode ("local" keeps this computer\'s levels, "incoming" takes the package\'s).'),
         resolve: oneOf(["local", "incoming"], "Choice for conflicts not listed in choices."),
         dryRun: bool("Only return the plan (versions, conflicts, what would change)."),
         allowLive: bool("Take it in even though a scene is live on the wall (the operator confirmed)."),

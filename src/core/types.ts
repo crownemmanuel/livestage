@@ -2,6 +2,11 @@
 // Everything here must survive JSON round-trips: it is saved to disk and
 // broadcast between the operator and output windows.
 
+import type { SoundFxAmount } from "../../shared/soundProtocol";
+export type { SoundFxAmount } from "../../shared/soundProtocol";
+import type { StageLightMessage, StageLightSettings } from "./stageLight";
+export type { StageLightMessage, StageLightOp, StageLightSettings } from "./stageLight";
+
 export type Vec2 = [number, number];
 export type Vec3 = [number, number, number];
 
@@ -337,6 +342,8 @@ export interface ProceduralComponent extends ComponentBase {
 export interface ClipDef {
   id: string;
   name: string;
+  /** Short button text in show mode ("Open door", "Walk in"); empty = the name's first phrase. */
+  label?: string;
   assetId: string | null;
   /** Same clip with the background removed (transparent WebM); used when the actor is in cut-out mode. */
   cutoutAssetId?: string | null;
@@ -346,7 +353,10 @@ export interface ClipDef {
   /** Seconds. Needed so every window agrees when a queued clip begins. */
   duration: number;
   loop: boolean;
-  /** Looping clip that plays automatically whenever another clip finishes on its pose. */
+  /**
+   * Looping clip that plays automatically whenever another clip finishes on its pose. Several
+   * auto-idle loops on one pose take turns in list order (each plays once, then the next).
+   */
   autoIdle?: boolean;
   /**
    * Start at once instead of waiting for the current clip or loop to reach its
@@ -570,13 +580,23 @@ export type CueAction =
       assetId: string | null;
       volume: number;
       delay: number;
-      /** Keep playing when another scene is taken. Default: the sound fades out when the scene changes. */
+      /**
+       * Keep playing when the story carries on into another scene (the next scene in the running order, or one
+       * this scene's cues take). A retake or a jump fades it out. Default: the sound fades out when the scene changes.
+       */
       keepPlaying?: boolean;
       /** Start again from the top when it ends, until it is faded out (a music bed under a scene of any length). */
       loop?: boolean;
+      /** Seconds to fade this sound in from silence (absent/0 = starts at full level). */
+      fadeIn?: number;
       /** When this sound starts, fade other audio out (null/absent = leave it). See AudioFadeOut. */
       fadeOthers?: AudioFadeOut | null;
     }
+  /**
+   * Fade audio out at this moment: cue sounds and video sound named by mixer key (`sound:<assetId>`,
+   * a component id), or "all". Where a music bed stops (the Build timeline drags it).
+   */
+  | { type: "audio.fade"; which: "all" | string[]; fade: number; delay: number }
   /** Send MIDI / OSC to a console or another machine. */
   | { type: "send"; message: IoMessage; delay: number }
   /** Show timers are global (the Timers tab); a cue can start, pause or reset one. */
@@ -610,6 +630,11 @@ export interface Cue {
   actions: CueAction[];
   /** Absent = on GO. */
   fire?: CueFire;
+  /**
+   * GO cues: planned seconds from the cue before to this GO, for the Build timeline (it draws the
+   * wait this long and scrubs with it). Informational: GO still fires when pressed. Absent = guessed.
+   */
+  hold?: number;
 }
 
 /** A coloured, collapsible run of scenes in the scene list (e.g. the Prologue's places). */
@@ -699,6 +724,24 @@ export interface Project {
   timers?: ShowTimer[];
   /** Front-of-house announcements ("the show will begin in 5 minutes"). */
   announcements?: Announcement[];
+  /**
+   * Sound levels: the live mixer's trims, saved with the show so the balance set in rehearsal comes back on
+   * show day and travels with packages and cloud sync (same keys and values as ProgramState.mix, which
+   * follows it). Untouched sources are left out.
+   */
+  mix?: Record<string, number>;
+  /**
+   * Chase music on jumps (absent = on): when the operator fires a cue out of order or takes a scene out of
+   * running order, the music that would be playing there had the show run in sequence starts at the second
+   * it would have reached, with a short fade-in (core/music.ts).
+   */
+  chaseMusic?: boolean;
+  /**
+   * Learned cue timings for the music chase: scene id → cue id → seconds after the scene's TAKE that the cue
+   * fired the last time the scene ran in sequence on the wall (GO and video-marker cues, which have no time
+   * of their own). "@end" = when the next scene was taken, for a scene that ends without a takeScene cue.
+   */
+  cueTimings?: Record<string, Record<string, number>>;
   /** Where this copy of the show came from, so a show package or sync can tell local edits from incoming ones. */
   lineage?: ShowLineage;
 }
@@ -754,6 +797,7 @@ export interface TimerRun {
 
 // ---------------------------------------------------------------- show control I/O
 
+
 export type IoMessage =
   | { type: "midi.note"; channel: number; note: number; velocity: number; /** ms until note-off; 0 = note-on only */ hold: number }
   | { type: "midi.cc"; channel: number; cc: number; value: number }
@@ -766,7 +810,24 @@ export type IoMessage =
    * number come from the lighting library at send time (so renumbering a list updates every cue);
    * kind/number here are the fallback and what a custom command uses.
    */
-  | { type: "hog"; op: HogOp; item: string | null; kind: HogKind; number: string; /** GO only, cuelists only; "" = next cue */ cue: string; /** GO only: push this master's fader to full first, so a list parked on a lowered fader still shows ("" or missing = leave faders alone) */ master?: string };
+  | { type: "hog"; op: HogOp; item: string | null; kind: HogKind; number: string; /** GO only, cuelists only; "" = next cue */ cue: string; /** GO only: push this master's fader to full first, so a list parked on a lowered fader still shows ("" or missing = leave faders alone) */ master?: string }
+  | SoundAppMessage
+  /** A command to StageLight, the lighting desk (OSC, settings under io.stagelight; see core/stageLight.ts). */
+  | StageLightMessage;
+
+/**
+ * A command to StageMics (OSC, settings under io.sound; see shared/soundProtocol.ts).
+ * sceneId null = the LiveStage scene the cue or marker belongs to. `who` = mic number or character name.
+ */
+export type SoundAppMessage =
+  | { type: "sound"; op: "sceneSelect" | "sceneActivate"; sceneId: string | null }
+  /** Apply exactly cue `cue` (1-based) of the scene in StageMics. */
+  | { type: "sound"; op: "cueGo"; sceneId: string | null; cue: number }
+  | { type: "sound"; op: "sceneEnd" | "cueNext" | "restore" | "panic" }
+  | { type: "sound"; op: "mic"; who: string; live: boolean }
+  /** Voice effect preset on a mic ("none" clears it). */
+  | { type: "sound"; op: "fx"; who: string; preset: string; amount?: SoundFxAmount };
+export type SoundAppOp = SoundAppMessage["op"];
 
 export type HogKind = "cuelist" | "scene" | "macro";
 export type HogOp = "go" | "release" | "halt" | "resume";
@@ -839,6 +900,16 @@ export interface IoSettings {
   triggers: IoTrigger[];
   /** Named Hog cuelists / scenes / macros that cues pick from. */
   hogItems: HogItem[];
+  /** StageMics (mics, voice effects, desk owner), driven over OSC. */
+  sound: {
+    /** Send to StageMics (this computer only: never taken from another machine's show file). */
+    enabled: boolean;
+    host: string;
+    /** Its OSC port (1451). */
+    port: number;
+  };
+  /** StageLight, the lighting desk, driven over OSC. */
+  stagelight: StageLightSettings;
 }
 
 // ---------------------------------------------------------------- runtime
@@ -885,6 +956,7 @@ export interface RouteRuntime {
 
 export interface SoundEvent {
   id: string;
+  /** Empty for a fade alone (the audio.fade action): nothing starts, `fadeOthers` fades what it names. */
   assetId: string;
   at: number;
   volume: number;
@@ -892,18 +964,28 @@ export interface SoundEvent {
   keepPlaying?: boolean;
   /** Loops until faded out (see the sound action). */
   loop?: boolean;
+  /** Seconds it fades in over (see the sound action). */
+  fadeIn?: number;
   /** Other audio this sound fades out as it starts (see the sound action). */
   fadeOthers?: AudioFadeOut;
+  /**
+   * Started part-way through by the music chase or carried in from an earlier scene: it starts where the clock
+   * says it is (however late) with a short fade-in, instead of from the top. `at` is when its file began, so it
+   * may be long before now (or before the run). An event with no assetId only fades others (a chase's stop).
+   */
+  chase?: boolean;
 }
 
 /**
  * A sound cue that clears the air as it starts: `which` = "all" fades every other cue sound and the
  * sound of every video on the wall; a list names mixer keys (`sound:<assetId>` for a cue sound, a
- * component id for a video's sound). `fade` is in seconds.
+ * component id for a video's sound). `fade` is in seconds; `delay` holds them that many seconds
+ * before the fade starts (a crossfade: the new sound fades in while the old one holds, then goes).
  */
 export interface AudioFadeOut {
   which: "all" | string[];
   fade: number;
+  delay?: number;
 }
 
 export interface EffectRuntime {
@@ -1018,6 +1100,12 @@ export interface ProgramState {
   transition: ProgramTransition | null;
   /** Bumped on each TAKE so views can remount cleanly. */
   takeCount: number;
+  /**
+   * This TAKE carries the story on from the scene before it (the next scene in the running order, or one
+   * the live scene's own cue took): music marked "keep playing" plays on. Any other TAKE (a retake, a jump
+   * back or ahead while rehearsing) fades that music out, so the scene's own cue starts it from the top.
+   */
+  continues?: boolean;
   /** Lights-out: the whole wall fades to black (wall-clock ms of the change). */
   blackout?: { on: boolean; at: number; fade: number };
   /** Show timers by id (kept here so the wall shows them and they survive a reload). */
@@ -1029,7 +1117,8 @@ export interface ProgramState {
   /**
    * Live mixer: the operator's volume trim per audio source, multiplied into the designed volume
    * (1 = as designed, 0 = silent). Keys: `sound:<assetId>` for cue sounds, a component id for the sound
-   * of a video layer, video background or video actor. Show-wide, so it survives takes and reloads.
+   * of a video layer, video background or video actor. Show-wide, so it survives takes and reloads. A copy of
+   * the show file's `Project.mix`, kept in step with it by the operator window (`engine/operator.ts`).
    */
   mix?: Record<string, number>;
 }

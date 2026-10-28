@@ -35,6 +35,10 @@ pub struct VideoInfo {
     pub keyframes: u64,
     /// Sample entry declares an alpha channel (HEVC with alpha).
     pub alpha: bool,
+    /// Largest compressed frame, in bytes. The asset protocol serves at most 1000 KiB per range request
+    /// (tauri::protocol::asset MAX_LEN), and the Mac's player does not put a bigger frame back together:
+    /// the bottom of that picture plays green.
+    pub max_frame_bytes: u64,
 }
 
 #[derive(Serialize, Default, Clone, Debug)]
@@ -166,6 +170,8 @@ struct TrackTables {
     /// Sum of sample deltas (media timescale units).
     sample_time: u64,
     sync: Option<Vec<u32>>,
+    /// Largest sample (stsz), in bytes.
+    max_sample: u32,
 }
 
 fn parse_trak(trak: &[u8]) -> Option<TrackTables> {
@@ -175,7 +181,7 @@ fn parse_trak(trak: &[u8]) -> Option<TrackTables> {
     let (_, hdlr) = full(find(mdia, "hdlr")?);
     let handler = fourcc(hdlr, 4);
     let stbl = find(find(mdia, "minf")?, "stbl")?;
-    let mut t = TrackTables { handler, timescale, duration, entry: None, samples: 0, sample_time: 0, sync: None };
+    let mut t = TrackTables { handler, timescale, duration, entry: None, samples: 0, sample_time: 0, sync: None, max_sample: 0 };
     if let Some(stsd) = find(stbl, "stsd") {
         let (_, body) = full(stsd);
         if let Some((typ, b)) = children(&body[4.min(body.len())..]).into_iter().next() {
@@ -196,6 +202,11 @@ fn parse_trak(trak: &[u8]) -> Option<TrackTables> {
         let (_, b) = full(stss);
         let n = be32(b, 0) as usize;
         t.sync = Some((0..n).map(|i| be32(b, 4 + i * 4)).collect());
+    }
+    if let Some(stsz) = find(stbl, "stsz") {
+        let (_, b) = full(stsz);
+        let (fixed, n) = (be32(b, 0), be32(b, 4) as usize);
+        t.max_sample = if fixed != 0 { fixed } else { (0..n).map(|i| be32(b, 8 + i * 4)).max().unwrap_or(0) };
     }
     Some(t)
 }
@@ -332,6 +343,7 @@ fn probe_isobmff(path: &Path, size: u64) -> MediaProbe {
             "vide" if p.video.is_none() => {
                 let mut v = video_info(typ, entry);
                 v.frames = tt.samples;
+                v.max_frame_bytes = tt.max_sample as u64;
                 let sample_secs = if tt.timescale > 0 { tt.sample_time as f64 / tt.timescale as f64 } else { secs };
                 if sample_secs > 0.0 && tt.samples > 0 {
                     v.fps = (tt.samples as f64 / sample_secs * 1000.0).round() / 1000.0;
@@ -465,7 +477,12 @@ pub struct MediaTools {
 fn encoder_for(ffmpeg: &Path) -> String {
     let out = Command::new(ffmpeg).args(["-hide_banner", "-encoders"]).output().ok();
     let list = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
-    if cfg!(target_os = "macos") && list.contains("h264_videotoolbox") {
+    // Not VideoToolbox first on a Mac: it cannot cap a frame's size, and a wall-size keyframe at 30-60 fps
+    // passes the 1000 KiB the asset protocol serves at once (the bottom of that picture then plays green).
+    // libx264's VBV buffer keeps every frame under ~875 KB and runs ~5x real time at 3072 x 768.
+    if cfg!(target_os = "macos") && list.contains("libx264") {
+        "libx264".into()
+    } else if cfg!(target_os = "macos") && list.contains("h264_videotoolbox") {
         "h264_videotoolbox".into()
     } else if list.contains("h264_nvenc") {
         "h264_nvenc".into()
@@ -541,7 +558,7 @@ pub async fn media_optimise(app: tauri::AppHandle, job: String, src: String, des
     args.extend(["-vf".into(), format!("scale={}:{}:flags=lanczos,format=yuv420p", scale.0, scale.1)]);
     args.extend(["-c:v".into(), encoder.clone(), "-profile:v".into(), "high".into(), "-g".into(), keyint.to_string()]);
     match encoder.as_str() {
-        "libx264" => args.extend(["-preset".into(), "fast".into(), "-crf".into(), "18".into(), "-maxrate".into(), format!("{kbps}k"), "-bufsize".into(), format!("{}k", kbps * 2), "-x264-params".into(), format!("keyint={keyint}:min-keyint={keyint}:scenecut=0")]),
+        "libx264" => args.extend(["-preset".into(), "fast".into(), "-crf".into(), "18".into(), "-maxrate".into(), format!("{kbps}k"), "-bufsize".into(), format!("{}k", (kbps * 2).min(7000)), "-x264-params".into(), format!("keyint={keyint}:min-keyint={keyint}:scenecut=0")]),
         "h264_videotoolbox" => args.extend(["-b:v".into(), format!("{kbps}k"), "-allow_sw".into(), "1".into(), "-realtime".into(), "0".into()]),
         _ => args.extend(["-b:v".into(), format!("{kbps}k")]),
     }

@@ -3,6 +3,7 @@
 
 import { now, sceneNow } from "@/core/clock";
 import { num, str } from "@/core/effects";
+import { lifeAudible, soundKey, soundLives, type SoundLife } from "@/core/music";
 import type { LightningStrike, SceneRuntime, SoundEvent } from "@/core/types";
 import { mixLevel, useShow } from "@/store/show";
 import { registerAudioContext } from "./audioOutput";
@@ -111,7 +112,7 @@ interface CueSound {
 const cueSounds = new Map<string, CueSound>();
 
 /** Mixer key of a cue sound (see ProgramState.mix). */
-export const soundMixKey = (assetId: string) => `sound:${assetId}`;
+export const soundMixKey = soundKey;
 
 /** The live mixer moved: glide each playing cue sound to its new level. */
 function applyMix() {
@@ -172,14 +173,16 @@ function fadeOutCueSound(key: string, seconds: number) {
 }
 
 /** A sound cue with `fadeOthers` started: fade the other cue sounds it names (or all of them) from `when`. */
-function fadeOthersFor(ev: SoundEvent, when: number) {
+function fadeOthersFor(ev: SoundEvent, when: number, runKey: string) {
   const f = ev.fadeOthers;
   if (!f) return;
   const ac = audio();
-  const delay = Math.max(0, when - ac.currentTime);
+  const delay = Math.max(0, when - ac.currentTime) + Math.max(0, f.delay ?? 0);
   const secs = Math.max(0.05, f.fade);
   for (const [key, s] of [...cueSounds]) {
     if (key === ev.assetId || (f.which !== "all" && !f.which.includes(soundMixKey(key)))) continue;
+    // Only sound already playing when the fade begins (one queued to start after it plays on).
+    if (s.runKey === runKey && s.at > ev.at + Math.max(0, f.delay ?? 0) * 1000) continue;
     cueSounds.delete(key);
     stopNode(s, secs, delay);
   }
@@ -187,7 +190,9 @@ function fadeOthersFor(ev: SoundEvent, when: number) {
 
 /**
  * A new scene run took the wall: the previous runs' sounds fade out, unless marked to keep playing.
- * A scene set to stop carried sounds (`stopCarriedSounds`) fades those out too, over `carriedFade` seconds.
+ * A scene set to stop carried sounds (`stopCarriedSounds`) fades those out too, over `carriedFade` seconds;
+ * a TAKE that does not carry the story on (a retake or a jump, see ProgramState.continues) fades them
+ * out as quickly as the rest.
  */
 function stopSoundsOfOtherRuns(runKey: string | null, stopCarried = false, seconds = 0.8, carriedFade = 3) {
   for (const [key, s] of [...cueSounds]) {
@@ -241,7 +246,15 @@ function followClock(rt: SceneRuntime | null) {
   }
 }
 
-async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: string, wallAt: number) {
+/** Fade-in (s) of a sound that starts part-way through: the music chase, or music brought back after a restart. */
+const RESUME_FADE = 0.5;
+
+/**
+ * Start a cue sound. `resume` (a chased or carried sound, or one this host missed: it restarted, or took over):
+ * start where the scene clock says it is, however late, with a short fade-in, and carry out a fade-out that is
+ * already due (`resume.fadeFrom`, scene ms).
+ */
+async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: string, wallAt: number, resume?: SoundLife) {
   const buf = await loadBuffer(url);
   const rt = useShow.getState().program.runtime;
   const own = rt?.key === runKey;
@@ -250,7 +263,7 @@ async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: st
   let pos = own ? (sceneNow(rt!) - ev.at) / 1000 : (now() - wallAt) / 1000;
   let at = ev.at;
   // A little late (still decoding): start from the top rather than cut its first words.
-  if (pos > 0 && pos < 1.5) {
+  if (!resume && pos > 0 && pos < 1.5) {
     at += pos * 1000;
     pos = 0;
   }
@@ -260,12 +273,27 @@ async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: st
   if (pos >= buf.duration && !ev.loop) return;
   const s: CueSound = { buf, volume: ev.volume, runKey, keepPlaying: !!ev.keepPlaying, loop: !!ev.loop, at, pos, ctx0: 0, src: null, gain: null };
   cueSounds.set(key, s);
-  if (rt?.clock.pausedAt == null) startNode(key, s, pos);
+  // A fade-in already under way when the file is ready picks up where it should be.
+  let fadeIn = ev.fadeIn ? Math.max(0, ev.fadeIn - Math.max(0, pos)) : 0;
+  if (resume && pos > 0) fadeIn = Math.max(fadeIn, RESUME_FADE);
+  if (rt?.clock.pausedAt == null) startNode(key, s, pos, fadeIn);
+  if (resume?.fadeFrom != null && own) {
+    const t = sceneNow(rt!);
+    const left = resume.fadeFrom + resume.fadeSecs * 1000 - Math.max(t, resume.fadeFrom);
+    cueSounds.delete(key);
+    stopNode(s, Math.max(0.05, left / 1000), Math.max(0, (resume.fadeFrom - t) / 1000));
+  }
 }
 
 /** Asset ids of the cue sounds playing now (diagnostics for the output heartbeat). */
 export function playingCueSounds(): string[] {
   return [...cueSounds.keys()];
+}
+
+/** Seconds into each playing cue sound's file, as the speakers have it (diagnostics). */
+export function cueSoundPositions(): Record<string, number> {
+  const ac = audio();
+  return Object.fromEntries([...cueSounds].map(([k, s]) => [k, Math.round(soundPos(s, ac) * 100) / 100]));
 }
 
 /** Of those, the ones silent while the live scene is held. */
@@ -305,10 +333,9 @@ async function startAnnouncement(key: string, url: string, volume: number) {
 
 export function startProgramAudio(isHost: () => boolean): () => void {
   const heard = new Set<string>();
-  // Events that existed before this window started are history, not new sounds.
+  // Thunder that struck before this window started is history.
   const rt0 = useShow.getState().program.runtime;
   for (const s of rt0?.strikes ?? []) heard.add(s.id);
-  for (const s of rt0?.sounds ?? []) heard.add(s.id);
 
   const handleStrikes = (strikes: LightningStrike[]) => {
     const s = useShow.getState();
@@ -332,24 +359,56 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     }
   };
 
+  /**
+   * Cue sounds this host has not played yet. One fired a moment ago starts as designed. One from before (this
+   * window restarted, the live state was restored, or this window just became the audio host), or one the music
+   * chase or a TAKE handed over part-way, comes back where it would be now if it is still sounding: music resumes
+   * at the right second rather than being lost or starting over.
+   */
   const handleSounds = (sounds: SoundEvent[]) => {
     const s = useShow.getState();
     const rt = s.program.runtime;
-    if (!rt) return;
+    if (!rt || !isHost()) return;
+    const t = sceneNow(rt);
+    let lives: Map<SoundEvent, SoundLife> | null = null;
     for (const ev of sounds) {
       if (heard.has(ev.id)) continue;
       heard.add(ev.id);
-      if (!isHost()) continue;
       // Judged on the scene clock: a sound fired while the scene is held waits for the resume.
-      if (sceneNow(rt) - ev.at > 1500) continue;
-      const asset = s.assets.find((a) => a.id === ev.assetId);
-      if (!asset) continue;
+      const late = t - ev.at > 1500;
       const wallAt = rt.clock.base + ev.at;
-      const ac = audio();
-      fadeOthersFor(ev, ac.currentTime + Math.max(0, (wallAt - now()) / 1000));
-      void playCueSound(asset.id, asset.url, ev, rt.key, wallAt).catch((e) => console.warn("sound failed", e));
+      // Fades others as it starts (a chase's stop has no file and only does this); one from before has done so.
+      if (!late && !ev.chase) fadeOthersFor(ev, audio().currentTime + Math.max(0, (wallAt - now()) / 1000), rt.key);
+      const asset = ev.assetId ? s.assets.find((a) => a.id === ev.assetId) : undefined;
+      if (!asset) continue;
+      if (!late && !ev.chase) {
+        void playCueSound(asset.id, asset.url, ev, rt.key, wallAt).catch((e) => console.warn("sound failed", e));
+        continue;
+      }
+      lives ??= new Map(soundLives(rt.sounds ?? []).map((l) => [l.ev, l]));
+      const life = lives.get(ev);
+      if (!life || !lifeAudible(life, t)) continue;
+      void playCueSound(asset.id, asset.url, ev, rt.key, wallAt, life).catch((e) => console.warn("sound failed", e));
     }
   };
+
+  /** Hand over: a window that stops being the audio host lets its sounds go, so they are never doubled. */
+  let wasHost = isHost();
+  const checkHost = () => {
+    const host = isHost();
+    if (host === wasHost) return;
+    wasHost = host;
+    const rt = useShow.getState().program.runtime;
+    if (host) {
+      if (rt?.sounds) handleSounds(rt.sounds);
+      return;
+    }
+    for (const key of [...cueSounds.keys()]) fadeOutCueSound(key, 0.5);
+    for (const ev of rt?.sounds ?? []) heard.delete(ev.id);
+  };
+  const hostTick = setInterval(checkHost, 500);
+  // Whatever is already playing when this window starts comes back now.
+  if (rt0?.sounds) handleSounds(rt0.sounds);
 
   // An announcement already under way when this window started is not replayed.
   const ann0 = useShow.getState().program.announce;
@@ -367,11 +426,15 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     if (asset) void startAnnouncement(a.key, asset.url, a.volume).catch((e) => console.warn("announcement failed", e));
   };
 
-  return useShow.subscribe((s, prev) => {
+  const unsub = useShow.subscribe((s, prev) => {
+    checkHost();
     const ann = s.program.announce;
     if (ann && ann !== prev.program.announce) handleAnnounce(ann);
     const runKey = s.program.runtime?.key ?? null;
-    if (runKey !== (prev.program.runtime?.key ?? null)) stopSoundsOfOtherRuns(runKey, !!s.program.runtime?.scene.stopCarriedSounds);
+    if (runKey !== (prev.program.runtime?.key ?? null)) {
+      if (!s.program.continues) stopSoundsOfOtherRuns(runKey, true, 0.8, 0.8);
+      else stopSoundsOfOtherRuns(runKey, !!s.program.runtime?.scene.stopCarriedSounds);
+    }
     if (s.program.runtime !== prev.program.runtime) followClock(s.program.runtime);
     if (s.program.mix !== prev.program.mix) applyMix();
     const a = s.program.runtime?.strikes;
@@ -379,6 +442,10 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     const b = s.program.runtime?.sounds;
     if (b && b !== prev.program.runtime?.sounds) handleSounds(b);
   });
+  return () => {
+    unsub();
+    clearInterval(hostTick);
+  };
 }
 
 /** Browsers need a user gesture before audio can start. */

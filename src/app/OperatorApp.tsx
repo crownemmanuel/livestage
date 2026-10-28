@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { startProgramAudio, unlockAudio } from "@/engine/audio";
+import { learnSoundLengths } from "@/engine/musicChase";
 import { startAudioRouting } from "@/engine/audioOutput";
 import { cancelPending, cueControl, restoreLiveState, startOperatorServices, takeScene } from "@/engine/operator";
 import { toggleHoldFor } from "@/engine/transport";
@@ -50,13 +51,18 @@ export function OperatorApp() {
         // Open on the live scene after a reload, otherwise on the first scene.
         if (resumed && st.program.runtime) useProject.getState().selectScene(st.program.runtime.scene.id);
         syncPreview();
+        // The music chase needs the lengths of the show's sounds; learn them in the background.
+        void learnSoundLengths(15000);
         if (import.meta.env.DEV && import.meta.env.VITE_SLS_SELFTEST) (await import("@/dev/selftest")).runSelfTest();
       });
     const stopRouting = startAudioRouting();
+    // Just started, the output window may be up and playing without having been heard from yet: wait for its
+    // heartbeat before playing (and bringing back) the show's sound here.
+    const audioFrom = Date.now() + 4000;
     const stopAudio = startProgramAudio(() => {
       const s = useShow.getState();
       const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
-      return !outputUp;
+      return !outputUp && Date.now() > audioFrom;
     });
 
     // Selecting a scene only changes the PREVIEW; edits refresh it without restarting.

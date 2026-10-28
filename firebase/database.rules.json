@@ -1,0 +1,41 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "sound": {
+      "$showId": {
+        "$joinKey": {
+          ".read": "auth != null && $joinKey.length >= 20",
+          "owner": {
+            ".write": "auth != null && $joinKey.length >= 20 && (!data.exists() || data.val() === auth.uid)",
+            ".validate": "newData.isString() && newData.val() === auth.uid"
+          },
+          "show": {
+            ".write": "auth != null && data.parent().child('owner').val() === auth.uid"
+          },
+          "backstage": {
+            ".write": "auth != null && $joinKey.length >= 20 && data.parent().child('owner').exists()",
+            "assign": {
+              "$sceneId": {
+                "$charId": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 32" }
+              }
+            },
+            "stamp": {
+              "$sceneId": { ".validate": "newData.isNumber()" }
+            },
+            "checked": {
+              "$sceneId": {
+                ".validate": "newData.hasChildren(['by', 'at'])",
+                "by": { ".validate": "newData.isString() && newData.val().length <= 40" },
+                "at": { ".validate": "newData.isNumber()" },
+                "sig": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+                "$other": { ".validate": false }
+              }
+            },
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    }
+  }
+}

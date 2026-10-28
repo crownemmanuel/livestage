@@ -7,7 +7,7 @@ import type { MediaMarker } from "@/core/types";
 import { selectedScene, useProject, NO_ITEMS } from "@/store/project";
 import { NumberInput, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
-import { MessageFields, defaultMessage } from "./MessageFields";
+import { MessageFields, defaultMarkerMessage } from "./MessageFields";
 
 
 /** Time markers on a clip: when live playback passes a time, run a cue of the scene or send to the console. */
@@ -15,7 +15,7 @@ export function MarkersEditor({ markers, onChange }: { markers: MediaMarker[] | 
   const cues = useProject((s) => selectedScene(s)?.cues ?? NO_ITEMS);
   const list = markers ?? [];
   const upd = (id: string, fn: (m: MediaMarker) => MediaMarker) => onChange(list.map((m) => (m.id === id ? fn(m) : m)));
-  const add = () => onChange([...list, { id: uid("mk"), name: `Marker ${list.length + 1}`, at: 2.5, message: defaultMessage("hog"), cueId: null }]);
+  const add = () => onChange([...list, { id: uid("mk"), name: `Marker ${list.length + 1}`, at: 2.5, message: defaultMarkerMessage(), cueId: null }]);
 
   return (
     <div className="space-y-3 rounded-xl border border-border bg-card/40 p-3">
@@ -23,14 +23,14 @@ export function MarkersEditor({ markers, onChange }: { markers: MediaMarker[] | 
         <Timer className="size-4 text-armed" />
         <span className="text-[13px] font-semibold">Time markers</span>
         {list.length > 0 && <span className="rounded-full bg-accent px-2 py-0.5 text-[11px] tabular text-muted-foreground">{list.length}</span>}
-        <InfoTip>When the live video reaches a time, run one of this scene's cues or send a lighting / MIDI / OSC message. Markers fire from the live (Program) show only, once per pass; on a loop they fire every pass.</InfoTip>
+        <InfoTip>When the live video reaches a time, run one of this scene's cues or send a message: a Hog or StageLight lighting cue, a mic through StageMics, MIDI or OSC. Markers fire from the live (Program) show only, once per pass; on a loop they fire every pass. Scrubbing never fires the markers jumped over.</InfoTip>
         <Button size="sm" variant="outline" className="ml-auto rounded-lg" onClick={add}>
           <Plus /> Add marker
         </Button>
       </div>
       {list.length === 0 && (
         <button type="button" onClick={add} className="w-full rounded-xl border border-dashed border-border px-3 py-5 text-[12.5px] text-muted-foreground hover:border-foreground/30 hover:text-foreground">
-          Fire a cue or a lighting cue when this video reaches a time.
+          Fire a cue, a lighting cue (Hog or StageLight) or a mic change when this video reaches a time.
         </button>
       )}
       {list.map((m) => {
@@ -58,7 +58,7 @@ export function MarkersEditor({ markers, onChange }: { markers: MediaMarker[] | 
               <div className="text-[11.5px] font-medium text-muted-foreground">Then</div>
               <div className="grid grid-cols-2 gap-1 rounded-lg border border-border/60 bg-black/25 p-1">
                 <Choice active={!runsCue} onClick={() => upd(m.id, (x) => ({ ...x, cueId: null }))} icon={<Radio />}>
-                  Lighting / MIDI / OSC
+                  Send (lighting, sound, MIDI, OSC)
                 </Choice>
                 <Choice active={runsCue} disabled={cues.length === 0} onClick={() => !runsCue && upd(m.id, (x) => ({ ...x, cueId: cues[0].id }))} icon={<ListOrdered />}>
                   Run a cue

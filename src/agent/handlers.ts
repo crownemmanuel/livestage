@@ -10,27 +10,35 @@ import { defaultTransition, makeClip, makeCue, makeScene, makeShot } from "@/cor
 import { normalizeGroups, sceneCodes, sceneRows } from "@/core/groups";
 import { uid } from "@/core/ids";
 import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, revealAsset, saveGeneratedAsset } from "@/core/platform";
-import type { MergeChoice } from "@/core/showMerge";
+import { levelDifferences, SOUND_LEVELS, type MergeChoice } from "@/core/showMerge";
 import { CloudAheadError, listCloudShows, loadCloudSettings } from "@/core/cloud";
 import type { ImportPreview, IncomingPackage } from "@/core/showPackage";
 import { cloudOpen, cloudPush, exportShowPackage, isLive, openShowPackage, takeInShowPackage } from "@/engine/showTransfer";
 import { applyUpdate, checkForUpdate, downloadUpdate, installBlocker, useUpdater } from "@/engine/updater";
 import * as runtime from "@/core/runtime";
-import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
-import { describeMessage, injectIncoming, sendMessage, useIo, type IncomingMessage } from "@/engine/io";
+import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, MediaMarker, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
+import { markerHosts, setHostMarkers, type MarkerHost } from "@/core/markers";
+import { normalizeStageLight, resolveWithCatalog, STAGELIGHT_OPS } from "@/core/stageLight";
+import { pingStageLight, requestStageLightCatalog, stageLightAnswer, stageLightCatalog, stageLightReach, stageLightWire, useStageLight } from "@/engine/stageLight";
+import { contextScene, describeMessage, injectIncoming, sendMessage, soundWire, useIo, type IncomingMessage } from "@/engine/io";
+import { soundAppReach, useSoundApp } from "@/engine/soundApp";
+import { normalizeSound } from "@/core/soundControl";
 import * as ops from "@/engine/operator";
 import * as transport from "@/engine/transport";
 import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
 import { describeProbe } from "@/core/mediaCheck";
 import { audioRoleOf, liveAudioSources } from "@/engine/mixer";
+import { filePos, lifePlaying, soundLives } from "@/core/music";
+import { chaseMusicOn, musicAt, soundDuration } from "@/engine/musicChase";
 import { DANTE_WDM_STEPS, danteAsioOnly, getAudioRoute, nativeOutputs, setAudioRoute, webDefaultName, webOutputs, webOutputsHidden, type AudioRoute } from "@/engine/audioOutput";
-import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
+import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, previewAtTime, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
+import { layoutScene } from "@/engine/timeline";
 import { requestSnap } from "@/render/snap";
 import { useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
-import { ACTION_INFO, defaultAction } from "@/ui/builder/CueEditor";
+import { ACTION_INFO, SEND_PRESETS, defaultAction, type MenuType } from "@/ui/builder/CueEditor";
 import { getErrors } from "@/ui/ErrorBoundary";
-import { defaultMessage } from "@/ui/io/MessageFields";
+import { defaultMarkerMessage, defaultMessage } from "@/ui/io/MessageFields";
 import { TRANSITIONS } from "@/ui/show/ShowMode";
 import { applyOps, deepMerge, findScene, getPath, isObj, resolve, splitPath, summarize, type PatchOp } from "./paths";
 import { AGENT_SPEC_VERSION, type AgentCommand } from "./spec";
@@ -112,13 +120,79 @@ function transitionOf(t: unknown): TransitionSpec | undefined {
 
 function normalizeAction(a: unknown): CueAction {
   if (!isObj(a) || typeof a.type !== "string") throw new Error("An action needs a type (see schema topic cueActions)");
-  if (!(a.type in ACTION_INFO) || a.type === "hog") throw new Error(`Unknown action type "${a.type}". Types: ${Object.keys(ACTION_INFO).filter((t) => t !== "hog").join(", ")}`);
+  const real = (Object.keys(ACTION_INFO) as MenuType[]).filter((t) => !SEND_PRESETS[t]);
+  if (!real.includes(a.type as MenuType)) throw new Error(`Unknown action type "${a.type}". Types: ${real.join(", ")} (Hog and StageLight lighting and StageMics are type "send" with a hog / stagelight / sound message)`);
+  if (a.type === "send") return { delay: 0, ...a, message: normalizeMessage(a.message) } as CueAction;
   return { delay: 0, ...a } as CueAction;
+}
+
+/**
+ * A message in its stored shape: StageLight messages are checked and tidied (see normalizeStageLight),
+ * and names or numbers StageLight's catalog knows become its IDs; a StageMics sceneId may be any scene
+ * reference. Others pass through.
+ */
+function normalizeMessage(m: unknown): IoMessage {
+  if (!isObj(m) || typeof m.type !== "string") throw new Error("A message needs a type (see schema topic io)");
+  if (m.type === "stagelight") return resolveWithCatalog(normalizeStageLight(m), stageLightCatalog());
+  if (m.type === "sound") {
+    const out = normalizeSound(m);
+    if ("sceneId" in out && out.sceneId) out.sceneId = sceneOf(out.sceneId).id;
+    return out;
+  }
+  return m as unknown as IoMessage;
+}
+
+function stageLightStatus() {
+  const link = P().project.io?.stagelight;
+  const s = useStageLight.getState();
+  const ago = (at: number) => Math.round((Date.now() - at) / 1000);
+  return {
+    enabled: !!link?.enabled,
+    host: link?.host,
+    port: link?.port,
+    mirror: !!link?.mirror,
+    reach: stageLightReach(),
+    note: link?.enabled && !P().project.io?.osc.enabled ? 'OSC listen is off, so StageLight\'s replies are not seen (reach stays "sent"). Switch it on with patch project/io/osc/enabled = true.' : undefined,
+    pingError: s.pingError ?? undefined,
+    hello: s.hello ? { version: s.hello.version, outputArmed: s.hello.armed, runningPage: s.hello.page, runningCue: s.hello.cue, from: s.hello.from, secondsAgo: ago(s.hello.at) } : null,
+    lastGo: s.live ? { page: s.live.pageName, pageId: s.live.pageId, cueNumber: s.live.cueNumber, cueName: s.live.cueName, secondsAgo: ago(s.live.at) } : null,
+    lastRefusal: s.error ? { address: s.error.address, message: s.error.message, secondsAgo: ago(s.error.at) } : null,
+    catalog: {
+      state: s.catalogState,
+      ...(link?.catalog
+        ? { revision: link.catalog.revision, from: link.catalog.from, pages: link.catalog.pages.length, cues: link.catalog.pages.reduce((n, p) => n + p.cues.length, 0), triggers: link.catalog.triggers.length, library: link.catalog.library.length }
+        : {}),
+    },
+  };
+}
+
+/** A video in a scene that carries markers: by component id / name, plus the clip for a video actor. */
+function markerHostOf(scene: Scene, media: unknown, clip: unknown): MarkerHost {
+  const hosts = markerHosts(scene);
+  const r = String(media ?? "");
+  const exact = hosts.find((h) => h.key === r || h.label === r);
+  if (exact) return exact;
+  if (!r) throw new Error(`Name the video (media). Videos: ${hosts.map((h) => h.label).join("; ") || "none in this scene"}`);
+  const comp = componentOf(scene, r);
+  const mine = hosts.filter((h) => h.compId === comp.id);
+  if (!mine.length) throw new Error(`${comp.name} carries no markers (only video layers, media backgrounds and video actors' clips do)`);
+  if (mine.length === 1 && mine[0].clipId === null) return mine[0];
+  if (comp.kind !== "clipActor") return mine[0];
+  const c = String(clip ?? "");
+  const k = comp.clips.find((x) => x.id === c) ?? comp.clips.find((x) => x.name === c) ?? comp.clips.find((x) => x.name.toLowerCase() === c.toLowerCase());
+  if (!k) throw new Error(`Name the clip of ${comp.name}: ${comp.clips.map((x) => `${x.name} (${x.id})`).join("; ")}`);
+  return mine.find((h) => h.clipId === k.id)!;
+}
+
+function markerBrief(scene: Scene, m: MediaMarker) {
+  const i = m.cueId ? scene.cues.findIndex((c) => c.id === m.cueId) : -1;
+  return { ...m, does: m.cueId ? (i >= 0 ? `runs cue #${i + 1} ${scene.cues[i].name}` : "runs a cue that no longer exists") : describeMessage(m.message) };
 }
 
 function normalizeCue(c: Args, base?: Cue): Cue {
   const cue: any = base ? deepMerge(structuredClone(base) as any, c) : { ...makeCue("Cue"), notes: "", ...structuredClone(c) };
-  cue.actions = ((cue.actions ?? []) as unknown[]).map(normalizeAction);
+  // Check the actions given; a cue's other actions stay as they are (a half-filled one must not block renaming it).
+  if (!base || c.actions !== undefined) cue.actions = ((cue.actions ?? []) as unknown[]).map(normalizeAction);
   cue.id ||= uid("cue");
   return cue as Cue;
 }
@@ -157,7 +231,28 @@ function runtimeSummary(target: Target, rt: SceneRuntime) {
   };
 }
 
+function soundAppStatus() {
+  const io = P().project.io;
+  if (!io?.sound?.enabled) return "off";
+  const s = useSoundApp.getState();
+  return {
+    host: io.sound.host,
+    port: io.sound.port,
+    reach: soundAppReach(),
+    note: io.osc.enabled ? undefined : "OSC listen is off, so StageMics' replies are not seen (status stays \"sent\").",
+    hello: s.hello ? { appVersion: s.hello.appVersion, protocol: s.hello.protocol, deskConnected: s.hello.deskConnected, secondsAgo: Math.round((Date.now() - s.hello.at) / 1000) } : null,
+    activeCue: s.cue,
+    mics: Object.entries(s.mics).map(([n, x]) => ({ mic: Number(n), name: x.name, live: x.live })),
+  };
+}
+
 // ---------------------------------------------------------------- schema reference
+
+/** The editor's default message (a StageMics one that does something visible). */
+function exampleMessage(t: IoMessage["type"]): IoMessage {
+  if (t === "sound") return { type: "sound", op: "mic", who: "Joseph", live: false };
+  return defaultMessage(t);
+}
 
 function schemaDoc(topic: string) {
   const strip = <T extends object>(o: T) => {
@@ -170,7 +265,7 @@ function schemaDoc(topic: string) {
   const out: Record<string, unknown> = {};
   if (topic === "components" || topic === "all") {
     out.components = {
-      note: "component_add builds these defaults; pass `props` to override. Every component also has id, name, initiallyVisible (shown when the scene is taken).",
+      note: "component_add builds these defaults; pass `props` to override. Every component also has id, name, initiallyVisible (shown when the scene is taken). Backgrounds stack like layers: the scene opens on the first one in component order with initiallyVisible (none marked: the first background).",
       background: strip(factories.makeBackground("Background")),
       video: strip(factories.makeVideoLayer("Video")),
       image: strip(factories.makeImageLayer("Image")),
@@ -183,19 +278,21 @@ function schemaDoc(topic: string) {
       names: strip(factories.makeNames()),
       route: strip(factories.makeRoute()),
       cameraShot: strip(makeShot("Shot")),
-      mediaMarker: { id: "auto", name: "Marker", at: 2.5, message: defaultMessage("osc"), cueId: null, note: "In media.markers (video/background) or clips[].markers. cueId fires that cue instead of sending message." },
+      mediaMarker: { id: "auto", name: "Marker", at: 2.5, message: { type: "stagelight", op: "trigger", name: "lion.leap" }, cueId: null, note: "In media.markers (video/background) or clips[].markers; the markers tool edits them by video name. cueId fires that cue instead of sending message." },
     };
   }
   if (topic === "cueActions" || topic === "all") {
     out.cueActions = {
       note: "Examples are built for the selected scene, so ids are real where it has such components. Every action has delay (seconds after the cue fires).",
-      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take); a scene with stopCarriedSounds: true fades such carried sounds out when it is taken. loop = start again from the top until faded out (a music bed). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); null leaves other audio alone.',
-      fire: 'Cue.fire: {mode: "go"} (default) | {mode: "time", at: seconds after TAKE} | {mode: "follow", after: seconds after the previous cue} | {mode: "video"} (fired by a media marker whose cueId is this cue).',
-      types: (Object.keys(ACTION_INFO) as (CueActionType | "hog")[]).map((t) =>
-        t === "hog"
-          ? { type: "send", label: ACTION_INFO.hog.label, example: { type: "send", message: defaultMessage("hog"), delay: 0 } }
-          : { type: t, label: ACTION_INFO[t].label, example: defaultAction(t, scene, p.scenes) },
-      ),
+      musicChase: "Show-wide project/chaseMusic (default true): firing a cue out of order (by hand, ahead of cues not run yet, or back) or taking a scene out of running order starts the music that would be playing there at the second it would have reached (0.5 s fade-in) and fades out what would not be. project/cueTimings (scene id → cue id or \"@end\" → seconds after TAKE) is learned from runs in sequence; music_at shows the result.",
+      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take); a scene with stopCarriedSounds: true fades such carried sounds out when it is taken. loop = start again from the top until faded out (a music bed). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); add delay: seconds to hold them before their fade starts; null leaves other audio alone. audio.fade = fade audio out at that moment without starting anything: {type: "audio.fade", which: ["sound:<assetId>"] | "all", fade: seconds} (where a music bed stops). fadeIn = seconds this sound fades in from silence. A crossfade: {fadeIn: 2, fadeOthers: {which: [...], fade: 2, delay: 1}}.',
+      fire: 'Cue.fire: {mode: "go"} (default) | {mode: "time", at: seconds after TAKE} | {mode: "follow", after: seconds after the previous cue} | {mode: "video"} (fired by a media marker whose cueId is this cue). A GO cue may carry hold: planned seconds after the cue before, for the Build timeline only.',
+      types: (Object.keys(ACTION_INFO) as MenuType[]).map((t) => {
+        const preset = SEND_PRESETS[t];
+        return preset
+          ? { type: "send", label: ACTION_INFO[t].label, example: { type: "send", message: preset === "stagelight" ? { type: "stagelight", op: "goCue", page: "Act 1", cue: "4" } : exampleMessage(preset), delay: 0 } }
+          : { type: t, label: ACTION_INFO[t].label, example: defaultAction(t as CueActionType, scene, p.scenes) };
+      }),
     };
   }
   if (topic === "effects" || topic === "all") {
@@ -206,8 +303,51 @@ function schemaDoc(topic: string) {
   }
   if (topic === "io" || topic === "all") {
     out.io = {
-      outgoing: (["hog", "osc", "msc", "midi.note", "midi.cc", "midi.pc"] as IoMessage["type"][]).map((t) => defaultMessage(t)),
+      outgoing: (["hog", "stagelight", "sound", "osc", "msc", "midi.note", "midi.cc", "midi.pc"] as IoMessage["type"][]).map((t) => exampleMessage(t)),
       hogNote: "hog.item is a lighting-library item id (io_send also accepts its name); number/kind are the fallback. Playback numbers are strings.",
+      sound: {
+        note: "StageMics (OSC to io.sound host:port, 1451; switched on with io.sound.enabled). sceneId null = the LiveStage scene the cue or marker belongs to. who = mic number or character name. A time marker that sends mic/fx makes LiveStage send restore once if that media then stops, restarts or is scrubbed before its end.",
+        shapes: [
+          { type: "sound", op: "sceneSelect", sceneId: null },
+          { type: "sound", op: "sceneActivate", sceneId: null },
+          { type: "sound", op: "cueGo", sceneId: null, cue: 1 },
+          { type: "sound", op: "cueNext" },
+          { type: "sound", op: "sceneEnd" },
+          { type: "sound", op: "mic", who: "Joseph", live: false },
+          { type: "sound", op: "fx", who: "Joseph", preset: "none", amount: "medium" },
+          { type: "sound", op: "restore" },
+          { type: "sound", op: "panic" },
+        ],
+      },
+      stagelight: {
+        note: "StageLight, the lighting desk (OSC to io.stagelight host:port; on with io.stagelight.enabled, set up with stagelight_link). Pages and cues are StageLight's: name (case-insensitive), ID or 1-based number. A cue that is a plain number goes as an OSC int, else as text. Named triggers are mapped inside StageLight, so prefer them for anything StageLight may renumber. fade null = StageLight's default. cue_add, cue_update, run_action, io_send, upsert and markers check these and accept op aliases (\"go/cue\" = goCue) and numbers for page / cue.",
+        ops: STAGELIGHT_OPS.map((o) => o.op),
+        shapes: [
+          { type: "stagelight", op: "go", page: "" },
+          { type: "stagelight", op: "goCue", page: "Act 1", cue: "4" },
+          { type: "stagelight", op: "trigger", name: "lion.leap" },
+          { type: "stagelight", op: "back" },
+          { type: "stagelight", op: "stop", fade: null },
+          { type: "stagelight", op: "clear", fade: 2 },
+          { type: "stagelight", op: "blackout", on: true },
+          { type: "stagelight", op: "master", level: 0.8 },
+          { type: "stagelight", op: "play", cue: "Warm wash", fade: null },
+          { type: "stagelight", op: "ledwall", media: "off" },
+        ],
+        osc: {
+          go: '/stagelight/go [s:page]',
+          goCue: '/stagelight/go/cue s:page i|s:cue',
+          trigger: '/stagelight/trigger s:name',
+          back: "/stagelight/back",
+          stop: "/stagelight/stop [f:fade]",
+          clear: "/stagelight/clear [f:fade]",
+          blackout: "/stagelight/blackout i:0|1",
+          master: "/stagelight/master f:0..1",
+          play: "/stagelight/play s:cue [f:fade]",
+          ledwall: "/stagelight/ledwall s:media",
+        },
+        mirror: 'io.stagelight.mirror: every live TAKE also sends trigger "scene.<code>", every GO "cue.<code>.<n>" (code as in list_scenes).',
+      },
       incoming: [{ kind: "osc", address: "/sls/go", args: [] }, { kind: "midi", bytes: [144, 60, 127] }],
       triggerActions: ["go", "back", "take {sceneId}", "takeNext", "fireCue {sceneId, index}", "blackout {on: true|false|\"toggle\"}", "standby {on}", "freeze {op}", "select {sceneId}", "selectNext", "selectPrev"],
       oscTargets: p.io?.osc.targets ?? [],
@@ -266,7 +406,8 @@ async function takeInIncoming({ pkg, preview }: { pkg: IncomingPackage; preview:
     missingInSource: pkg.manifest.missing.length ? pkg.manifest.missing : undefined,
   };
   if (a.dryRun) return { applied: false, plan };
-  const open = mode === "merge" ? conflicts.filter((c) => !choices[c.key]) : [];
+  // Replacing the whole show still asks about this computer's sound levels.
+  const open = conflicts.filter((c) => !choices[c.key] && (mode === "merge" || c.key === SOUND_LEVELS));
   if (open.length) return { applied: false, reason: `${open.length} conflict(s) need a choice (choices or resolve)`, plan };
   if (isLive() && !a.allowLive) throw new Error("A scene is live on the wall. Ask the operator, then pass allowLive: true to take it in anyway.");
   return { applied: true, plan, result: await takeInShowPackage(pkg, { mode, choices, allowLive: !!a.allowLive }) };
@@ -354,7 +495,14 @@ export const handlers: Record<AgentCommand, Handler> = {
         const left = r ? (r.running ? Math.max(0, (r.endsAt - now()) / 1000) : r.remaining) : t.duration;
         return { id: t.id, name: t.name, running: !!r?.running, secondsLeft: round(left, 1) };
       }),
-      io: { midi: io.midiStatus, osc: io.oscStatus, counters: io.counters, available: io.available },
+      io: {
+        midi: io.midiStatus,
+        osc: io.oscStatus,
+        counters: io.counters,
+        available: io.available,
+        soundApp: soundAppStatus(),
+        stagelight: p.project.io?.stagelight?.enabled ? stageLightReach() : "off",
+      },
       nextTransition: s.nextTransition,
       recentErrors: getErrors().slice(-5).map((e) => e.text),
     };
@@ -387,6 +535,27 @@ export const handlers: Record<AgentCommand, Handler> = {
   get_scene(a) {
     const s = sceneOf(a.scene);
     return { code: brief(s)!.code, ...(summarize(s, 20) as object) };
+  },
+
+  async timeline(a) {
+    const s = a.scene != null ? sceneOf(a.scene) : P().project.scenes.find((x) => x.id === P().selectedSceneId);
+    if (!s) throw new Error("No scene selected: pass scene");
+    const tl = await layoutScene(s);
+    return {
+      scene: brief(s),
+      end: tl.end,
+      takeAt: tl.takeAt,
+      cues: tl.cues,
+      tracks: tl.tracks.map((t) => ({
+        id: t.id,
+        label: t.label,
+        group: t.group,
+        componentId: t.componentId,
+        items: tl.items
+          .filter((it) => it.track === t.id)
+          .map(({ id: _id, track: _t, lane: _l, ...it }) => it),
+      })),
+    };
   },
 
   get_runtime(a) {
@@ -540,6 +709,20 @@ export const handlers: Record<AgentCommand, Handler> = {
     return runtimeSummary("preview", rtFor("preview")!);
   },
 
+  async preview_time(a) {
+    const rt = rtFor("preview")!;
+    const s = P().project.scenes.find((x) => x.id === rt.scene.id) ?? rt.scene;
+    const tl = await layoutScene(s);
+    previewAtTime(Number(a.seconds), tl.cues.map((c) => c.start));
+    return { ...runtimeSummary("preview", rtFor("preview")!), sceneTime: round(sceneNow(rtFor("preview")!) / 1000) };
+  },
+
+  preview_run(a) {
+    if (a.on === false) ops.stopRun();
+    else ops.startRun(a.scene != null ? sceneOf(a.scene).id : undefined);
+    return { running: ops.useRun.getState().on, ...runtimeSummary("preview", rtFor("preview")!) };
+  },
+
   run_action(a) {
     const target: Target = a.target;
     const action = normalizeAction(a.action);
@@ -664,6 +847,31 @@ export const handlers: Record<AgentCommand, Handler> = {
     return { sources: liveAudioSources().map((x) => ({ ...x, level: round(x.level, 2) })), trims: S().program.mix ?? {} };
   },
 
+  music_at(a) {
+    const scene = sceneOf(a.scene);
+    const index = a.cue === undefined || a.cue === null ? null : cueIndexOf(scene, a.cue);
+    const m = musicAt(scene.id, index);
+    if (!m) throw new Error(`Scene ${scene.name} is not in the running order`);
+    const name = (id: string) => S().assets.find((x) => x.id === id)?.name ?? id;
+    const learned = P().project.cueTimings?.[scene.id] ?? {};
+    const rt = S().program.runtime;
+    const t = rt ? sceneNow(rt) : 0;
+    return {
+      scene: brief(scene),
+      cue: index === null ? null : { index: index + 1, id: scene.cues[index].id, name: scene.cues[index].name },
+      chase: chaseMusicOn(),
+      sceneTime: round(m.sceneTime, 2),
+      showTime: round(m.showTime, 2),
+      sounds: m.sounds.map((x) => ({ assetId: x.assetId, name: name(x.assetId), offset: round(x.offset, 2), length: soundDuration(x.assetId) ?? null, loop: x.loop, keepPlaying: x.keepPlaying, from: { scene: brief(P().project.scenes.find((s) => s.id === x.sceneId)), cueId: x.cueId } })),
+      learned: Object.fromEntries(Object.entries(learned).map(([k, v]) => [scene.cues.find((c) => c.id === k)?.name ?? k, v])),
+      live: rt
+        ? soundLives(rt.sounds ?? [], soundDuration)
+            .filter((l) => lifePlaying(l, t))
+            .map((l) => ({ assetId: l.ev.assetId, name: name(l.ev.assetId), offset: round(filePos(l.ev, t, soundDuration(l.ev.assetId)), 2) }))
+        : [],
+    };
+  },
+
   async audio_output(a) {
     const list = async () => ({ native: await nativeOutputs(), web: await webOutputs() });
     if (a.device !== undefined) {
@@ -701,7 +909,8 @@ export const handlers: Record<AgentCommand, Handler> = {
   },
 
   async io_send(a) {
-    const m = { ...(a.message as Args) } as IoMessage & Args;
+    if (!isObj(a.message)) throw new Error("message must be an object");
+    const m = normalizeMessage({ ...(a.message as Args) }) as IoMessage & Args;
     if (m.type === "hog" && m.item) {
       const items = P().project.io?.hogItems ?? [];
       const it = items.find((x) => x.id === m.item) ?? items.find((x) => x.name.toLowerCase() === String(m.item).toLowerCase());
@@ -713,7 +922,87 @@ export const handlers: Record<AgentCommand, Handler> = {
     const lines = useIo.getState().log.slice(before);
     const err = lines.find((l) => l.dir === "error");
     if (err) throw new Error(err.text);
+    if (m.type === "sound") return { sent: describeMessage(m), wire: soundWire(m, { sceneId: contextScene() }), message: m };
+    if (m.type === "stagelight") return { sent: describeMessage(m), wire: stageLightWire(m) };
     return { sent: describeMessage(m) };
+  },
+
+  stagemics_status() {
+    return soundAppStatus();
+  },
+
+  stagelight_status() {
+    return stageLightStatus();
+  },
+
+  async stagelight_catalog(a) {
+    if (a.refresh) {
+      if (stageLightReach() !== "answering") throw new Error(`StageLight is not answering (reach: ${stageLightReach()}); the catalog below is the last one read`);
+      const since = Date.now();
+      await requestStageLightCatalog();
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(t);
+          unsub();
+          resolve();
+        };
+        const unsub = useStageLight.subscribe((s) => s.catalogState !== "loading" && s.catalogAt >= since && done());
+        const t = setTimeout(done, 3000);
+      });
+    }
+    const c = stageLightCatalog();
+    const state = useStageLight.getState().catalogState;
+    if (!c) return { state, catalog: null, note: state === "unsupported" ? "This StageLight has no catalog (before 0.3): give pages, cues and triggers by name." : "No catalog read yet: stagelight_link {enabled: true} with OSC listen on, then refresh." };
+    return { state, revision: c.revision, from: c.from, pages: c.pages, triggers: c.triggers, library: c.library };
+  },
+
+  async stagelight_link(a) {
+    if (a.port !== undefined && !(Number.isInteger(a.port) && a.port > 0 && a.port < 65536)) throw new Error("port must be 1-65535");
+    if (a.host !== undefined && !String(a.host).trim()) throw new Error("host must not be empty");
+    P().update((p) => {
+      // A fresh show has no I/O settings until something sets one.
+      p.io ??= factories.defaultIo();
+      p.io.stagelight ??= factories.defaultIo().stagelight;
+      const l = p.io.stagelight;
+      if (typeof a.enabled === "boolean") l.enabled = a.enabled;
+      // StageLight's hello, refusals and catalog come back on the OSC listen port.
+      if (a.enabled === true) p.io.osc.enabled = true;
+      if (a.host !== undefined) l.host = String(a.host).trim();
+      if (a.port !== undefined) l.port = a.port;
+      if (typeof a.mirror === "boolean") l.mirror = a.mirror;
+    });
+    if (!P().project.io?.stagelight.enabled) return stageLightStatus();
+    // Ping now and give StageLight a moment to say hello (it answers in milliseconds).
+    const since = Date.now();
+    await pingStageLight();
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(t);
+        unsub();
+        resolve();
+      };
+      const unsub = useStageLight.subscribe((s) => (s.hello?.at ?? 0) >= since && done());
+      const t = setTimeout(done, 800);
+    });
+    return stageLightStatus();
+  },
+
+  async stagelight_send(a) {
+    if (!isObj(a.message)) throw new Error("message must be an object");
+    const m = normalizeMessage({ ...(a.message as Args), type: "stagelight" }) as Extract<IoMessage, { type: "stagelight" }>;
+    if (!P().project.io?.stagelight?.enabled) throw new Error("The StageLight link is off: stagelight_link {enabled: true} first");
+    const before = useIo.getState().log.length;
+    const since = Date.now();
+    await sendMessage(m);
+    const err = useIo.getState().log.slice(before).find((l) => l.dir === "error");
+    if (err) throw new Error(err.text);
+    const answer = stageLightReach() === "answering" ? await stageLightAnswer(since) : null;
+    return {
+      sent: describeMessage(m),
+      wire: stageLightWire(m),
+      answer: answer ?? (stageLightReach() === "answering" ? "none (accepted, or StageLight does not announce GOs to this computer)" : `none seen (StageLight reach: ${stageLightReach()})`),
+      message: m,
+    };
   },
 
   io_inject(a) {
@@ -923,15 +1212,52 @@ export const handlers: Record<AgentCommand, Handler> = {
     return { order: sceneOf(s.id).cues.map((c, k) => `#${k + 1} ${c.name}`) };
   },
 
+  markers(a) {
+    const scene = sceneOf(a.scene);
+    const op = a.op ?? "list";
+    if (op === "list") return { scene: brief(scene), videos: markerHosts(scene).map((h) => ({ media: h.compId, clip: h.clipId, label: h.label, markers: h.markers.map((m) => markerBrief(scene, m)) })) };
+    const host = markerHostOf(scene, a.media, a.clip);
+    if (op === "remove") {
+      const r = String(a.id ?? "");
+      const m = host.markers.find((x) => x.id === r) ?? host.markers.find((x) => x.name === r);
+      if (!m) throw new Error(`No marker "${r}" on ${host.label}. Markers: ${host.markers.map((x) => `${x.name} (${x.id}) at ${x.at}s`).join("; ") || "none"}`);
+      editScene(scene.id, (s) => setHostMarkers(s, host.key, host.markers.filter((x) => x.id !== m.id)));
+      return { removed: markerBrief(scene, m), on: host.label };
+    }
+    if (op !== "upsert") throw new Error('op must be "list", "upsert" or "remove"');
+    if (!isObj(a.marker)) throw new Error("marker must be an object");
+    const given = a.marker as Args;
+    const old = given.id ? host.markers.find((x) => x.id === given.id) : undefined;
+    if (given.id && !old) throw new Error(`No marker "${given.id}" on ${host.label}; leave id out to add one`);
+    const at = given.at ?? old?.at;
+    if (typeof at !== "number" || !Number.isFinite(at) || at < 0) throw new Error("marker.at must be seconds (≥ 0) into the video");
+    const cueRef = given.cue ?? given.cueId;
+    const cueId = cueRef === null ? null : cueRef !== undefined ? scene.cues[cueIndexOf(scene, cueRef)].id : given.message ? null : (old?.cueId ?? null);
+    const m: MediaMarker = {
+      id: old?.id ?? uid("mk"),
+      name: String(given.name ?? old?.name ?? `Marker ${host.markers.length + 1}`),
+      at,
+      message: given.message !== undefined ? normalizeMessage(given.message) : (old?.message ?? defaultMarkerMessage()),
+      cueId,
+    };
+    editScene(scene.id, (s) => setHostMarkers(s, host.key, old ? host.markers.map((x) => (x.id === m.id ? m : x)) : [...host.markers, m]));
+    return { marker: markerBrief(scene, m), on: host.label, added: !old };
+  },
+
   upsert(a) {
     if (!isObj(a.item)) throw new Error("item must be an object");
     let out: unknown;
     P().update((d) => {
       const list = listOf(d, a.path) as Record<string, unknown>[];
       const item = structuredClone(a.item) as Record<string, unknown>;
+      // Media markers: StageLight messages in their stored shape (checked, stale fields dropped).
+      if (isObj(item.message) && item.message.type === "stagelight") item.message = normalizeMessage(item.message);
       const at = item.id ? list.findIndex((x) => isObj(x) && x.id === item.id) : -1;
+      // Media markers: StageMics messages in their stored shape (scene references resolved, stale fields dropped).
+      if (isObj(item.message) && item.message.type === "sound") item.message = normalizeMessage(item.message);
       if (at >= 0) {
         out = deepMerge(list[at], item);
+        if (isObj(item.message)) (out as Record<string, unknown>).message = item.message;
         return;
       }
       item.id ||= uid(String(a.path).split("/").filter(Boolean).pop()?.replace(/s$/, "").slice(0, 8) || "item");
@@ -1005,8 +1331,13 @@ export const handlers: Record<AgentCommand, Handler> = {
       case "import": {
         const proj = typeof a.json === "string" ? JSON.parse(a.json) : a.json;
         if (!isObj(proj) || !Array.isArray(proj.scenes)) throw new Error("Not a show file (no scenes)");
-        await P().replaceProject(proj as unknown as Project);
-        return { imported: P().project.name, scenes: P().project.scenes.length };
+        const incoming = proj as unknown as Project;
+        const differ = levelDifferences(P().project.mix, incoming.mix);
+        if (differ && a.levels !== "local" && a.levels !== "incoming") {
+          return { imported: false, reason: `${differ} sound level(s) set on this computer differ from the file's: pass levels "local" (keep this computer's) or "incoming" (the file's)` };
+        }
+        await P().replaceProject(differ && a.levels === "local" ? { ...incoming, mix: P().project.mix } : incoming);
+        return { imported: P().project.name, scenes: P().project.scenes.length, levels: differ ? a.levels : "same" };
       }
       case "reset_demo":
         P().resetToDemo();

@@ -1,5 +1,6 @@
 // Show Mode's live mixer: one fader per audio source sounding on the wall (cue sounds, and video
-// with its sound on). The faders trim the designed volume; the trims are show-wide live state.
+// with its sound on). The faders trim the designed volume; the trims are the show's sound levels, saved
+// in the show file (Project.mix).
 
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, ChevronDown, ChevronRight, Clapperboard, Film, Mic, Mountain, Music, RotateCcw, SlidersVertical, Sparkles, Trees, Volume2, VolumeX } from "lucide-react";
@@ -8,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { liveAudioSources, type MixSource } from "@/engine/mixer";
 import { useShow } from "@/store/show";
+import { useProject } from "@/store/project";
 import { InfoTip } from "../kit";
 
 /** Icon, colour and label for each kind of source: cue sounds by what they are, video sound in amber. */
@@ -33,9 +35,17 @@ export function MixerPanel() {
   // Re-render on a fader move straight away, not on the next tick.
   useShow((s) => s.program.mix);
   const lastLevel = useRef(new Map<string, number>());
+  // Reset wipes the rehearsed sound design: it takes a second click.
+  const [confirmReset, setConfirmReset] = useState(false);
+  useEffect(() => {
+    if (!confirmReset) return;
+    const h = setTimeout(() => setConfirmReset(false), 3000);
+    return () => clearTimeout(h);
+  }, [confirmReset]);
   const sources = liveAudioSources();
   const trimmed = Object.keys(useShow.getState().program.mix ?? {}).length > 0;
   const setMix = useShow.getState().setMix;
+  const chase = useProject((s) => s.project.chaseMusic !== false);
 
   return (
     <section className="border-b border-border">
@@ -47,14 +57,35 @@ export function MixerPanel() {
           <span className="text-[12px] text-muted-foreground">{sources.length ? `${sources.length} playing` : "nothing playing"}</span>
         </button>
         <InfoTip side="left">
-          Every sound on the live wall right now: music (violet), voice (blue), ambience (green), effects (orange) and video with its sound on (amber). The speakers it plays on are chosen under Settings → Audio output. Each fader trims that source on the speakers (100% = as designed). The trims stay through takes and reloads, and come back the next time the
-          same sound or video plays.
+          Every sound on the live wall right now: music (violet), voice (blue), ambience (green), effects (orange) and video with its sound on (amber). The speakers it plays on are chosen under Settings → Audio output. Each fader trims that source on the speakers (100% = as designed). The levels are saved in the show file, so they stay through takes and reloads,
+          come back the next time the same sound or video plays, and travel with show packages and cloud sync (taking in a version whose levels differ from the ones set here asks which to keep).
         </InfoTip>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("ml-auto h-6 gap-1 px-1.5 text-[12px]", chase ? "text-violet-400" : "text-muted-foreground")}
+          title={
+            chase
+              ? "Chase music on jumps is on: firing a cue out of order or taking a scene out of running order starts the music that would be playing there, at the second it would have reached. Click to turn off."
+              : "Chase music on jumps is off: a jump leaves the music to the cues. Click to turn on."
+          }
+          onClick={() => useProject.getState().update((p) => void (p.chaseMusic = !chase))}
+        >
+          <Music className="size-3" /> Chase {chase ? "on" : "off"}
+        </Button>
         {trimmed && (
-          <Button variant="ghost" size="sm" className="ml-auto h-6 gap-1 px-1.5 text-[12px] text-muted-foreground" title="Put every source back to its designed volume" onClick={() => {
-            for (const k of Object.keys(useShow.getState().program.mix ?? {})) setMix(k, null);
-          }}>
-            <RotateCcw className="size-3" /> Reset
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn("h-6 gap-1 px-1.5 text-[12px] text-muted-foreground", confirmReset && "text-live")}
+            title="Put every source back to its designed volume (clears the levels saved in the show)"
+            onClick={() => {
+              if (!confirmReset) return setConfirmReset(true);
+              setConfirmReset(false);
+              for (const k of Object.keys(useShow.getState().program.mix ?? {})) setMix(k, null);
+            }}
+          >
+            <RotateCcw className="size-3" /> {confirmReset ? "Reset all levels?" : "Reset"}
           </Button>
         )}
       </div>

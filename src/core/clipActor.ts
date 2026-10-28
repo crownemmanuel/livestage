@@ -19,9 +19,35 @@ export interface ClipState {
 
 const clipById = (c: ClipActorComponent, id: string) => c.clips.find((x) => x.id === id) ?? null;
 
+/** The looping idles of `pose`, in list order. Several take turns: each plays once, then the next. */
+export function idlesFor(c: ClipActorComponent, pose: string): ClipDef[] {
+  return c.clips.filter((k) => k.autoIdle && k.loop && k.startPose === pose && k.endPose === pose && (k.assetId || k.cutoutAssetId));
+}
+
 /** The looping idle that takes over when a clip finishes on `pose` (if one is set up). */
 export function idleFor(c: ClipActorComponent, pose: string): ClipDef | null {
-  return c.clips.find((k) => k.autoIdle && k.loop && k.startPose === pose && k.endPose === pose && (k.assetId || k.cutoutAssetId)) ?? null;
+  return idlesFor(c, pose)[0] ?? null;
+}
+
+/**
+ * Where a rotation of idles is at time `t`, when `seg` started `clip` (one of them): the idle on
+ * screen and the moment its own turn began, so cut points fall at the end of each idle.
+ */
+function idleTurn(c: ClipActorComponent, clip: ClipDef, seg: ClipSegment, t: number): { clip: ClipDef; segment: ClipSegment } | null {
+  const turns = idlesFor(c, clip.startPose);
+  const first = turns.indexOf(clip);
+  if (turns.length < 2 || first < 0) return null;
+  const len = (k: ClipDef) => Math.max(0.05, k.duration) * 1000;
+  const total = turns.reduce((s, k) => s + len(k), 0);
+  let off = (t - seg.at) % total;
+  let at = t - off;
+  for (let n = 0; n < turns.length; n++) {
+    const k = turns[(first + n) % turns.length];
+    if (off < len(k)) return { clip: k, segment: at === seg.at && k === clip ? seg : { clipId: k.id, at } };
+    off -= len(k);
+    at += len(k);
+  }
+  return null;
 }
 
 export function clipStateAt(c: ClipActorComponent, rt: ClipActorRuntime | undefined, t: number): ClipState {
@@ -44,6 +70,10 @@ export function clipStateAt(c: ClipActorComponent, rt: ClipActorRuntime | undefi
       active = { clipId: idle.id, at: endAt };
       clip = idle;
     }
+  }
+  if (clip.loop && clip.autoIdle) {
+    const turn = idleTurn(c, clip, active, t);
+    if (turn) ({ clip, segment: active } = turn);
   }
   const dur = Math.max(0.05, clip.duration);
   const el = (t - active.at) / 1000;
@@ -83,6 +113,13 @@ export function initialSegments(c: ClipActorComponent): ClipActorRuntime {
 }
 
 /** True when the clip continues seamlessly from the actor's pose at the time it will start. */
+/** Short text for a clip's show-mode button: its label, else its name up to the first comma, colon, bracket or dash. */
+export function clipLabel(c: ClipDef): string {
+  if (c.label?.trim()) return c.label.trim();
+  const first = c.name.split(/[,:(\u2014]| - /)[0].trim();
+  return first || c.name;
+}
+
 export function clipFits(c: ClipActorComponent, rt: ClipActorRuntime | undefined, clip: ClipDef, t: number): boolean {
   return clipStateAt(c, rt, t).pose === clip.startPose;
 }

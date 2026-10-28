@@ -23,6 +23,8 @@ On the show computer: **More → Import show package…** and choose the `.slsho
   - A scene removed on one side and changed on the other is asked about the same way ("Remove it" / "Keep it", "Restore it" / "Leave it removed").
 - If a scene is live on the wall, the import button stays disabled until you tick "Take in the package anyway". Media that is playing may be replaced.
 
+**Sound levels** (the live mixer's trims, saved in the show file as `mix`) are one unit, asked about more eagerly: whenever the levels were changed on this computer and differ from the incoming version's, the review asks *Keep this computer's levels* or *Use the incoming levels*, even when the incoming version did not change its levels, and also when replacing the whole show. Importing a plain show file (More → Import show file…) asks the same question. Levels changed only in the incoming version are taken without asking.
+
 Unless you pick otherwise, a conflict keeps this computer's version. Taking a package in never changes this computer's own settings: the output display, its fullscreen/window size, MIDI ports and whether MIDI/OSC are switched on.
 
 The media is copied into the app's data folder (`%APPDATA%\org.salvation.livestudio\` on Windows, `~/Library/Application Support/org.salvation.livestudio/` on a Mac). Each file is checked against its SHA-256 hash, and a file that is already there with the same hash is skipped, so the second package copies only what changed. A damaged copy is reported and never replaces a good file.
@@ -107,7 +109,7 @@ An app that is older than the package's `formatVersion` refuses it and asks to b
 
 An asset (`src/core/types.ts`) can carry a portable `file` key (and `macFile` for its HEVC-alpha twin): a path relative to the show's media folder, which is the app data folder on the desktop. Library imports get `assets/<id>_<name>`; media that ships with the app keeps its `/media/…` URL and gets the matching key `media/…` when it arrives in a package. On load (`resolveAssetUrls` in `src/core/platform.ts`) the desktop app plays the local copy when it has one, and otherwise the URL (the bundled file); a development build plays `public/` first (see above). Absolute paths are never needed. Show files from before keys existed are migrated on load: an absolute library path from this computer, another Mac or a Windows PC becomes `assets/<file name>`.
 
-New media that the build computer adds to `public/media/<scene>/` (for example re-rendered high-quality clips swapped in place) is picked up by the next package automatically, because export reads every asset the show references.
+New media that the build computer adds to `public/media/scenes/<Group>/` (for example re-rendered high-quality clips swapped in place) is picked up by the next package automatically, because export reads every asset the show references.
 
 ## Versions and conflicts
 
@@ -116,7 +118,7 @@ Every package and every cloud push is a **version**: a number for people ("v7", 
 - `showId`: the same show on every computer (made at the first export or push).
 - `sent` / `received`: the last version this computer sent out and the last one it took in.
 - `history`: the ids of the versions this computer's show descends from.
-- `bases`: for each version this computer sent or took in, a content hash of every unit (each scene, the running order and groups, the wall/output settings, show control, timers, announcements, effect presets, the show name).
+- `bases`: for each version this computer sent or took in, a content hash of every unit (each scene, the running order and groups, the wall/output settings, show control, timers, announcements, effect presets, sound levels, the show name).
 
 Taking a version in finds the **merge base**: the newest version in its ancestry that this computer also has in `bases`. Then each unit compares three hashes: here, incoming and base. Here equals base: only the other side changed it, so it is taken. Incoming equals base: only this side changed it, so it is kept. Neither: a conflict. Without a shared version (a fresh install, another show) everything that differs is a conflict and **Replace** is the default.
 

@@ -131,6 +131,27 @@ export async function closeOutputWindow(): Promise<void> {
   await win?.close();
 }
 
+/**
+ * Tear the output window down even though its page may be hung (the watchdog's last resort before
+ * reopening it). Unlike closeOutputWindow this is not "closed on purpose", so the watchdog goes on
+ * to reopen it. Closing is done from the operator's side, so a frozen output page cannot block it;
+ * if the window is still there after a moment it is destroyed outright.
+ */
+export async function destroyOutputWindow(): Promise<void> {
+  if (!isTauri) {
+    browserOutput?.close();
+    browserOutput = null;
+    return;
+  }
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+  const win = await WebviewWindow.getByLabel("output");
+  if (!win) return;
+  await win.close().catch(() => {});
+  await new Promise((r) => setTimeout(r, 1500));
+  const still = await WebviewWindow.getByLabel("output");
+  if (still) await still.destroy().catch(() => {});
+}
+
 // ---------------------------------------------------------------- persistence
 
 const LS_KEY = "sls.project.v1";

@@ -1,4 +1,6 @@
-// Show-control I/O: MIDI (notes, CC, program change, MIDI Show Control) and OSC over UDP.
+// Show-control I/O: MIDI (notes, CC, program change, MIDI Show Control) and OSC over UDP,
+// plus StageMics over OSC (engine/soundApp.ts), which owns the sound desk, and StageLight, the
+// lighting desk, over OSC (engine/stageLight.ts).
 // In the desktop app the Rust shell owns the ports (src-tauri/src/io.rs) and relays
 // messages as events; in a browser we fall back to Web MIDI (Chrome) and no OSC.
 
@@ -6,6 +8,11 @@ import { create } from "zustand";
 import { isTauri } from "@/core/platform";
 import type { HogKind, HogOp, IoAction, IoMatch, IoMessage, IoSettings } from "@/core/types";
 import { useProject } from "@/store/project";
+import { useShow } from "@/store/show";
+import { describeSound, formatOsc, soundOsc } from "@/core/soundControl";
+import { handleSoundReply, sendSoundApp, startSoundApp } from "./soundApp";
+import { describeStageLight } from "@/core/stageLight";
+import { handleStageLightReply, sendStageLight, stageLightCatalog, startStageLight } from "./stageLight";
 
 export type IncomingMessage =
   | { kind: "midi"; bytes: number[] }
@@ -71,7 +78,32 @@ export function describeMessage(m: IoMessage): string {
       const what = `${HOG_KIND_LABEL[r.kind].toLowerCase()} ${r.number || "?"}${hogCueSuffix(m, r.kind)}`;
       return `Hog ${HOG_OP_LABEL[m.op]} ${r.name ? `${r.name} (${what})` : what}${hogMaster(m) ? ` + master ${hogMaster(m)} up` : ""}`;
     }
+    case "sound":
+      return describeSound(m, soundSceneName);
+    case "stagelight":
+      return describeStageLight(m, stageLightCatalog());
   }
+}
+
+/** "scene 3 · Name" for a Sound-app message's scene; null = the scene the cue or marker belongs to. */
+function soundSceneName(id: string | null): string {
+  if (!id) return "this scene";
+  const sc = useProject.getState().project.scenes.find((x) => x.id === id);
+  return sc ? `scene ${sc.number} · ${sc.name}` : `scene ${id}`;
+}
+
+/** The exact OSC a StageMics message becomes, for the Test dialog (the error when it cannot be built). */
+export function soundWire(m: IoMessage, ctx?: SendContext): string[] {
+  const io = useProject.getState().project.io;
+  try {
+    if (m.type === "sound") {
+      const { address, args } = soundOsc(m, contextScene(ctx));
+      return [`${formatOsc(address, args)} → ${io?.sound?.host}:${io?.sound?.port}`];
+    }
+  } catch (e) {
+    return [String(e instanceof Error ? e.message : e)];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------- Hog 4
@@ -276,6 +308,10 @@ function mscAutoAction(msc: MscMessage): IoAction | null {
 }
 
 function handleIncoming(m: IncomingMessage) {
+  // StageMics' hello and state replies feed its status; they are not show triggers.
+  if (m.kind === "osc" && handleSoundReply(m.address, m.args, m.from)) return;
+  // StageLight's hello and refusals feed its status; they are not show triggers.
+  if (m.kind === "osc" && handleStageLightReply(m.address, m.args, m.from)) return;
   const io = useIo.getState();
   useIo.setState({ lastIn: { msg: m, at: Date.now() }, counters: { ...io.counters, in: io.counters.in + 1 } });
   ioLog("in", describeIncoming(m));
@@ -352,19 +388,35 @@ async function openMidi(settings: IoSettings["midi"]) {
   }
 }
 
+/** Bumped on every openOsc, so a retry left over from an older setting gives up. */
+let oscOpenGen = 0;
+
 async function openOsc(settings: IoSettings["osc"]) {
   if (!isTauri) {
     useIo.setState({ oscStatus: "off", oscError: settings.enabled ? "OSC needs the desktop app" : null });
     return;
   }
   const { invoke } = await import("@tauri-apps/api/core");
-  try {
-    await invoke("osc_listen", { port: settings.enabled ? settings.listenPort : null });
-    useIo.setState({ oscStatus: settings.enabled ? "listening" : "off", oscError: null });
-    if (settings.enabled) ioLog("info", `OSC listening on UDP ${settings.listenPort}`);
-  } catch (e) {
-    useIo.setState({ oscStatus: "error", oscError: String(e) });
-    ioLog("error", `OSC: ${String(e)}`);
+  const gen = ++oscOpenGen;
+  // After a reload the previous listener can hold the port for a moment (its read times out every
+  // 250 ms), so "address in use" is retried for about 1.5 s before it counts as an error.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await invoke("osc_listen", { port: settings.enabled ? settings.listenPort : null });
+      useIo.setState({ oscStatus: settings.enabled ? "listening" : "off", oscError: null });
+      if (settings.enabled) ioLog("info", `OSC listening on UDP ${settings.listenPort}`);
+      return;
+    } catch (e) {
+      if (gen !== oscOpenGen) return;
+      if (/in use/i.test(String(e)) && attempt < 5) {
+        await new Promise((r) => setTimeout(r, 300));
+        if (gen !== oscOpenGen) return;
+        continue;
+      }
+      useIo.setState({ oscStatus: "error", oscError: String(e) });
+      ioLog("error", `OSC: ${String(e)}`);
+      return;
+    }
   }
 }
 
@@ -391,10 +443,27 @@ function oscArgs(address: string, args: (number | string)[]) {
   return args.map((a) => (typeof a === "number" && !text ? (Number.isInteger(a) ? { t: "i", v: a } : { t: "f", v: a }) : { t: "s", v: String(a) }));
 }
 
+/** Where a message comes from: the scene of its cue or marker (Sound-app messages with no scene of their own use it). */
+export interface SendContext {
+  sceneId?: string | null;
+}
+
+/** The scene a Sound-app message without a scene belongs to: given, else the live scene, else the selected one. */
+export function contextScene(ctx?: SendContext): string | null {
+  if (ctx?.sceneId) return ctx.sceneId;
+  return useShow.getState().program.runtime?.scene.id ?? useProject.getState().selectedSceneId ?? null;
+}
+
 /** Send one message to the outside world. Never throws: failures go to the I/O log. */
-export async function sendMessage(msg: IoMessage): Promise<void> {
+export async function sendMessage(msg: IoMessage, ctx?: SendContext): Promise<void> {
   const settings = useProject.getState().project.io;
   try {
+    if (msg.type === "sound" || msg.type === "stagelight") {
+      const wire = msg.type === "sound" ? await sendSoundApp(msg, contextScene(ctx)) : await sendStageLight(msg);
+      useIo.setState((s) => ({ counters: { ...s.counters, out: s.counters.out + 1 } }));
+      ioLog("out", `${describeMessage(msg)} [${wire}]`);
+      return;
+    }
     if (msg.type === "osc" || msg.type === "hog") {
       const targets = settings?.osc.targets ?? [];
       const target = msg.type === "hog" ? hogTarget(settings) : (targets.find((t) => t.id === msg.target) ?? targets[0]);
@@ -447,6 +516,8 @@ export function startIo(): () => void {
     }),
   );
   if (useProject.getState().loaded) apply();
+  cleanups.push(startSoundApp(ioLog));
+  cleanups.push(startStageLight(ioLog));
   // Listing ports asks the browser for MIDI permission; only do it unprompted in the desktop app.
   if (isTauri) void refreshMidiPorts();
 

@@ -34,3 +34,37 @@ public/dev-project.json
 media-src/**/tmp/
 media-src/**/tmp-*/
 *.blend1
+
+# Show content stays out of the repo (AGENTS.md: the repository holds the app, never a show).
+# Shows move by show package or cloud sync. Built-in app media in public/media stays tracked.
+/public/media/scenes/
+/public/media/banners/
+/character-references/
+/media-src/*
+!/media-src/tools/
+/media-src/tools/*
+!/media-src/tools/gen.py
+!/media-src/tools/genlog.py
+~$*
+
+# Show-specific docs and skills (local only)
+/docs/PROLOGUE.md
+/docs/PROLOGUE_OPENING.md
+/docs/BETHLEHEM_OPENING_OPTIONS.md
+/docs/BETHLEHEM_TOWN.md
+/docs/SHOW_MAP.md
+/docs/SCENE_BACKDROPS.md
+/docs/stage-reference
+/.claude/skills/led-wall-scale
+/.claude/skills/plate-cutouts
+/.claude/skills/seamless-clip-chains
+/.claude/skills/still-plate-patches
+
+# The demo show that ships with the app (src/core/defaultProject.ts) needs its videos in the repo (~23 MB).
+!/public/media/lion-proof/*
+# Prologue-only media from the old built-in show.
+/public/media/app-demo/
+
+# Show documents (scripts, run sheets)
+*.docx
+*.pptx

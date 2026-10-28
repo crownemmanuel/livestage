@@ -49,7 +49,21 @@ function sharedIo(io: IoSettings | undefined) {
   if (!io) return null;
   const { enabled: _e, input: _i, output: _o, ...midi } = io.midi;
   const { enabled: _oe, ...osc } = io.osc;
-  return { ...io, midi, osc };
+  // Whether this computer drives StageMics or StageLight is its own choice (two machines must not both
+  // drive them), and so is the catalog it last read from StageLight.
+  const { enabled: _se, ...sound } = io.sound ?? {};
+  const { enabled: _le, catalog: _lc, ...stagelight } = io.stagelight ?? {};
+  return { ...io, midi, osc, sound, stagelight };
+}
+
+/** Keep this computer's own on/off for StageMics (an incoming show never switches it on). */
+function keepLocalSound(io: IoSettings, local: IoSettings) {
+  if (io.sound) io.sound = { ...io.sound, enabled: local.sound?.enabled ?? false };
+}
+
+/** Keep this computer's own StageLight switch (an incoming show never switches it on) and catalog. */
+function keepLocalStageLight(io: IoSettings, local: IoSettings) {
+  if (io.stagelight) io.stagelight = { ...io.stagelight, enabled: local.stagelight?.enabled ?? false, catalog: local.stagelight?.catalog ?? null };
 }
 
 /** A scene's content: what the operator edits (not its place in the running order or its thumbnail). */
@@ -57,6 +71,13 @@ function sceneContent(s: Scene) {
   const { thumbnail: _t, number: _n, groupId: _g, ...rest } = s;
   return rest;
 }
+
+/**
+ * The unit key of the show's sound levels (Project.mix). Levels set on this computer that differ from the
+ * incoming ones are always asked about (keep this computer's or take the incoming), even when the incoming
+ * version did not change them, and also when the whole show is replaced.
+ */
+export const SOUND_LEVELS = "mix";
 
 const SETTINGS: { key: string; label: string; value: (p: Project) => unknown }[] = [
   { key: "name", label: "Show name", value: (p) => p.name },
@@ -66,6 +87,8 @@ const SETTINGS: { key: string; label: string; value: (p: Project) => unknown }[]
   { key: "timers", label: "Show timers", value: (p) => p.timers ?? [] },
   { key: "announcements", label: "Announcements", value: (p) => p.announcements ?? [] },
   { key: "effectPresets", label: "Effect presets", value: (p) => p.effectPresets ?? [] },
+  { key: SOUND_LEVELS, label: "Sound levels (live mixer)", value: (p) => p.mix ?? {} },
+  { key: "chaseMusic", label: "Chase music on jumps", value: (p) => p.chaseMusic !== false },
 ];
 
 export interface UnitInfo {
@@ -129,6 +152,13 @@ function side(now: string | undefined, base: string | undefined) {
   return base === undefined ? ("added" as const) : ("changed" as const);
 }
 
+/** How many sources the two sets of sound levels set differently (a source missing on one side is at 100%). */
+export function levelDifferences(a: Record<string, number> | undefined, b: Record<string, number> | undefined): number {
+  const x = a ?? {};
+  const y = b ?? {};
+  return [...new Set([...Object.keys(x), ...Object.keys(y)])].filter((k) => Math.abs((x[k] ?? 1) - (y[k] ?? 1)) > 1e-4).length;
+}
+
 /** The newest version in the incoming version's ancestry that this machine also has: its unit hashes. */
 export function mergeBase(local: Project, incoming: Project, ancestry: string[] | undefined): Record<string, string> | null {
   const lin = local.lineage;
@@ -158,6 +188,8 @@ export function planMerge(local: Project, incoming: Project, ancestry?: string[]
     else if (l === b) state = "incoming";
     else if (i === b) state = "local";
     else state = "conflict";
+    // Sound levels changed here are this computer's overrides: never kept silently, the operator says.
+    if (key === SOUND_LEVELS && state === "local") state = "conflict";
     const bothExist = l !== undefined && i !== undefined;
     const options: MergeChoice[] = state !== "conflict" ? [] : kind === "scene" && bothExist ? ["incoming", "local", "media", "both"] : ["incoming", "local"];
     items.push({ key, label, kind, state, here, upstream, options, choice: state === "incoming" ? "incoming" : "local" });
@@ -203,14 +235,20 @@ export interface MergeResult {
   assets: Asset[];
 }
 
-/** The whole incoming show, keeping only this machine's own settings (output display, MIDI ports). */
-export function replaceWithIncoming(local: Project | null, incoming: Project, info: ReceiveInfo): MergeResult {
+/**
+ * The whole incoming show, keeping only this machine's own settings (output display, MIDI ports), and this
+ * machine's sound levels when `keepLocalLevels`.
+ */
+export function replaceWithIncoming(local: Project | null, incoming: Project, info: ReceiveInfo, keepLocalLevels = false): MergeResult {
   const p = structuredClone(incoming);
+  if (local && keepLocalLevels) p.mix = structuredClone(local.mix);
   if (local) {
     p.output = { ...p.output, monitorName: local.output.monitorName, fullscreen: local.output.fullscreen, windowWidth: local.output.windowWidth, windowHeight: local.output.windowHeight };
     if (p.io && local.io) {
       p.io.midi = { ...p.io.midi, enabled: local.io.midi.enabled, input: local.io.midi.input, output: local.io.midi.output };
       p.io.osc = { ...p.io.osc, enabled: local.io.osc.enabled };
+      keepLocalSound(p.io, local.io);
+      keepLocalStageLight(p.io, local.io);
     }
   }
   p.lineage = received(local, incoming, info);
@@ -254,11 +292,20 @@ export function applyMerge(local: Project, incoming: Project, plan: MergePlan, i
     if (mine) {
       out.io.midi = { ...out.io.midi, enabled: mine.midi.enabled, input: mine.midi.input, output: mine.midi.output };
       out.io.osc = { ...out.io.osc, enabled: mine.osc.enabled };
+      keepLocalSound(out.io, mine);
+      keepLocalStageLight(out.io, mine);
     }
   }
   if (takes("timers")) out.timers = inc.timers;
   if (takes("announcements")) out.announcements = inc.announcements;
   if (takes("effectPresets")) out.effectPresets = inc.effectPresets;
+  if (takes(SOUND_LEVELS)) out.mix = inc.mix;
+  if (takes("chaseMusic")) out.chaseMusic = inc.chaseMusic;
+  // Learned cue timings are not a choice: the ones learned here win, the other machine's fill in the rest.
+  if (inc.cueTimings) {
+    const mine = out.cueTimings ?? {};
+    out.cueTimings = Object.fromEntries([...new Set([...Object.keys(inc.cueTimings), ...Object.keys(mine)])].map((id) => [id, { ...inc.cueTimings![id], ...mine[id] }]));
+  }
 
   // Scenes: decide each one's content.
   const localById = new Map(out.scenes.map((s) => [s.id, s]));

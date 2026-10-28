@@ -21,11 +21,22 @@ Checklist for every feature change:
 
 `src/agent/spec.ts` is loaded by Node directly (type stripping): keep it free of imports and of non-erasable TypeScript (enums, namespaces, parameter properties).
 
+## The repository holds the app, never a show
+
+LiveStage is open source. The show we are building (Salvation) shapes the app, but the show itself stays out of git:
+
+- **Commit only code and its docs**: the app, the MCP, build tooling, docs about how the app works. A feature the show needs goes in as a general app feature.
+- **Never commit show content**: the show file (it lives in the app's data folder), show media (`public/media/scenes/`, audio, images, video, cut-outs), generation drafts, prompts and logs, per-show build scripts (`media-src/`), the archive, script or cast material. Do not stage them, even when a change made them; in a "commit everything" request, leave them out and say so.
+- **Shows move by the app's own export**: More → Export show package / Import show package, or cloud sync ([docs/SHOW_PACKAGE.md](docs/SHOW_PACKAGE.md)). If a show cannot be fully rebuilt on another computer from a package, fix the export, not the repo.
+
 ## Other house rules
 
 - Every animated value is a pure function of the shared clock; store timestamped events, never per-frame values (see ARCHITECTURE.md).
 - Only the operator window is authoritative; the output window is a view.
 - Dev server port is 1430 (another project uses 1420). The agent bridge uses 1431.
-- Ask before spending generation credits (Runway, ElevenLabs) and before firing cues on the real lighting console.
-- The LED wall is part of the set, kept at life-size scale next to the actors (no push-ins that blow things past life size): read [docs/SCENE_BACKDROPS.md](docs/SCENE_BACKDROPS.md) before designing any backdrop or camera move.
+- Ask before spending money on generation (KreatorFlow, Kie.ai, Runway, ElevenLabs) and before firing cues on the real lighting console. Video goes through `media-src/tools/gen.py` (Seedance 2.0 Fast 720p by default, then Topaz 2x), see [docs/MEDIA_GENERATION.md](docs/MEDIA_GENERATION.md).
+- The LED wall is part of the set, kept at life-size scale next to the actors (no push-ins that blow things past life size): read `docs/SCENE_BACKDROPS.md` (local show notes, not in the repo) before designing any backdrop or camera move.
 - Making AI video for the wall (Runway pipeline, 4:1 crops, no music, lip-sync to a recorded voice with the black-video trick): read [docs/MEDIA_GENERATION.md](docs/MEDIA_GENERATION.md).
+- Show media layout: finals go in `public/media/scenes/<Group>/images|videos|audio/` (one folder per running-order group, or per ungrouped scene), named `<scene code>-<description>.<ext>` in lowercase-hyphenated words (a webm and its `.mov` twin share the name). Drafts and sources stay in `media-src/`. Superseded or unused media moves to `media-src/archive/` (never deleted). When replacing a final, archive the old file and repoint the asset (`patch project/assets/<id>/url`, and `macUrl` for a cut-out's `.mov` twin: a stale one makes the Mac app skip the clip). See [docs/MEDIA_GENERATION.md](docs/MEDIA_GENERATION.md#where-media-lives).
+- Log every generation (prompt, model, sources, task id, which scene and asset it feeds) with `media-src/tools/genlog.py add`, and look there first when asked to regenerate something: `python3 media-src/tools/genlog.py find <scene code or asset id>`.
+- Names and notes the operator reads in the show (cues, scenes, components, assets) stay short: one line, only what the operator needs, e.g. "Auto, 2 s after the painting turns real." Reasons and history go in docs or the generation log, not the cue.

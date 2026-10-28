@@ -3,7 +3,9 @@ import { EFFECT_DEFS, num } from "./effects";
 import { uid } from "./ids";
 import { clipStateAt, initialSegments, scheduleClip } from "./clipActor";
 import { LION_ACTION_INFO } from "./lion";
+import { soundLives } from "./music";
 import type {
+  BackgroundComponent,
   ActorComponent,
   ActorPoses,
   ActorState,
@@ -37,9 +39,12 @@ export type Command =
   | { type: "cuePointer"; index: number }
   /**
    * Cue `index` has fired: remember it and move the GO pointer past it (and past cues that already fired).
-   * `rewind` (fired by hand): the list goes back to this cue, so every cue after it is un-fired and GO is the next one.
+   * `rewind` (fired by hand): the list goes back to this cue, so every cue after it is un-fired and GO is the next one;
+   * the cues before it count as passed (a time cue still ahead of the clock does not fire later by itself).
    */
-  | { type: "cueFired"; index: number; rewind?: boolean };
+  | { type: "cueFired"; index: number; rewind?: boolean }
+  /** Add sound events as they are (the music chase: `at` may be in the past, see SoundEvent.chase). */
+  | { type: "sounds"; events: SoundEvent[] };
 
 const LONG_AGO = -1e9;
 
@@ -95,9 +100,17 @@ function runtimeScene(scene: Scene): Scene {
   return s;
 }
 
+/**
+ * The plate a scene opens on. Backgrounds stack like layers: the first one (top of the list) marked
+ * visible at start wins; with none marked, the first background.
+ */
+export function startingBackground(scene: Scene): BackgroundComponent | undefined {
+  const bgs = scene.components.filter((c): c is BackgroundComponent => c.kind === "background");
+  return bgs.find((b) => b.initiallyVisible) ?? bgs[0];
+}
+
 export function createRuntime(scene: Scene, wallNow = now()): SceneRuntime {
-  const bgs = scene.components.filter((c) => c.kind === "background");
-  const bg = bgs.find((b) => b.initiallyVisible) ?? bgs[0];
+  const bg = startingBackground(scene);
   const tod = bg?.kind === "background" && bg.source === "environment" ? bg.env.timeOfDay : 0;
   const storm = bg?.kind === "background" && bg.source === "environment" ? bg.env.storm : 0;
   const shot = defaultShot(scene);
@@ -162,9 +175,14 @@ export function reconcileRuntime(rt: SceneRuntime, scene: Scene): SceneRuntime {
   for (const c of scene.components) if (c.kind === "clipActor" && !clipActors[c.id]) clipActors[c.id] = initialSegments(c);
   for (const m of [clipActors, layers, effects, names, routes]) for (const id of Object.keys(m)) if (!ids.has(id)) delete m[id];
   const bgValid = rt.background.current && ids.has(rt.background.current);
-  const background = bgValid
-    ? rt.background
-    : { current: scene.components.find((c) => c.kind === "background")?.id ?? null, previous: null, changedAt: LONG_AGO, dur: 0 };
+  const startBefore = startingBackground(rt.scene)?.id ?? null;
+  const start = startingBackground(scene);
+  let background = bgValid ? rt.background : { current: start?.id ?? null, previous: null, changedAt: LONG_AGO, dur: 0 };
+  // The starting plate changed (a plate switched on or off in the Media panel): a scene still on its
+  // starting plate follows, so what the preview shows is what TAKE puts on the wall.
+  if (bgValid && start && start.id !== startBefore && rt.background.current === startBefore) {
+    background = { current: start.id, previous: rt.background.current, changedAt: sceneNow(rt), dur: Math.min(start.transitionDuration, 0.5) * 1000 };
+  }
   // A new starting framing (set on the preview monitor) applies at once.
   const framing = JSON.stringify(scene.framing ?? null) !== JSON.stringify(rt.scene.framing ?? null) ? staticFraming(scene.framing) : rt.framing;
   return { ...rt, scene: runtimeScene(scene), layers, effects, background, clipActors, names, routes, framing };
@@ -308,14 +326,19 @@ export function mediaElapsed(rt: SceneRuntime, id: string, startAt: number, t: n
 
 /**
  * How loud a video's sound is allowed to be at scene time t (1 = untouched, 0 = faded out) after
- * sound cues that fade other audio out (the sound action's `fadeOthers`).
+ * sound cues that fade other audio out (the sound action's `fadeOthers`). A fade only reaches media that was
+ * already playing when it began: a video (re)started or a clip begun after it plays at full level.
  */
 export function videoAudioFade(rt: SceneRuntime, componentId: string, t: number): number {
+  const segs = rt.clipActors[componentId]?.segments;
+  const playingSince = segs ? (segs.filter((s) => s.at <= t).at(-1)?.at ?? -Infinity) : (rt.layers[componentId]?.startAt ?? -Infinity);
   let k = 1;
   for (const ev of rt.sounds ?? []) {
     const f = ev.fadeOthers;
     if (!f || ev.at > t || (f.which !== "all" && !f.which.includes(componentId))) continue;
-    k = Math.min(k, f.fade > 0 ? 1 - clamp((t - ev.at) / (f.fade * 1000), 0, 1) : 0);
+    const from = ev.at + (f.delay ?? 0) * 1000;
+    if (from > t || playingSince > from) continue;
+    k = Math.min(k, f.fade > 0 ? 1 - clamp((t - from) / (f.fade * 1000), 0, 1) : 0);
   }
   return k;
 }
@@ -479,7 +502,8 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
       if (!cue) return { rt, poses };
       if (cmd.rewind) {
         const later = new Set(scene.cues.slice(cmd.index + 1).map((c) => c.id));
-        const fired = [...(rt.fired ?? []).filter((id) => id !== cue.id && !later.has(id)), cue.id];
+        const earlier = scene.cues.slice(0, cmd.index).map((c) => c.id);
+        const fired = [...new Set([...(rt.fired ?? []).filter((id) => id !== cue.id && !later.has(id)), ...earlier]), cue.id];
         // Time cues already behind the clock become plain GO cues (as after a scrub) instead of all firing at once.
         const reached = Math.max(rt.clock.reached ?? 0, t);
         return { rt: { ...rt, fired, cuePointer: cmd.index + 1, clock: { ...rt.clock, reached } }, poses };
@@ -568,14 +592,32 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
       const ramp: SpeedRamp = { from, to: cmd.rate, at: t, dur: Math.max(0, cmd.duration) * 1000, elapsedAt };
       return { rt: { ...rt, speed: { ...(rt.speed ?? {}), [comp.id]: ramp } }, poses };
     }
+    case "audio.fade": {
+      if (cmd.which !== "all" && !cmd.which.length) return { rt, poses };
+      const ev: SoundEvent = { id: uid("snd"), assetId: "", at: t, volume: 0, fadeOthers: { which: cmd.which, fade: Math.max(0, cmd.fade) } };
+      return { rt: { ...rt, sounds: [...(rt.sounds ?? []).slice(-15), ev] }, poses };
+    }
     case "sound": {
       if (!cmd.assetId) return { rt, poses };
       const ev: SoundEvent = { id: uid("snd"), assetId: cmd.assetId, at: t, volume: cmd.volume, keepPlaying: !!cmd.keepPlaying };
       if (cmd.loop) ev.loop = true;
+      if (cmd.fadeIn && cmd.fadeIn > 0) ev.fadeIn = cmd.fadeIn;
       if (cmd.fadeOthers && (cmd.fadeOthers.which === "all" || cmd.fadeOthers.which.length)) ev.fadeOthers = cmd.fadeOthers;
-      return { rt: { ...rt, sounds: [...(rt.sounds ?? []).slice(-15), ev] }, poses };
+      return { rt: { ...rt, sounds: trimSounds([...(rt.sounds ?? []), ev]) }, poses };
     }
+    case "sounds":
+      return cmd.events.length ? { rt: { ...rt, sounds: trimSounds([...(rt.sounds ?? []), ...cmd.events]) }, poses } : { rt, poses };
   }
+}
+
+/**
+ * Keep a run's sound list short: the last 16 events, plus older ones still playing (music started long ago,
+ * carried in from earlier scenes), which a restarted audio host needs to bring back.
+ */
+function trimSounds(sounds: SoundEvent[]): SoundEvent[] {
+  if (sounds.length <= 16) return sounds;
+  const keep = new Set(soundLives(sounds).filter((l) => l.fadeFrom === null).map((l) => l.ev));
+  return sounds.filter((ev, i) => i >= sounds.length - 16 || keep.has(ev));
 }
 
 function syncDayNight(effects: SceneRuntime["effects"], scene: Scene, tod: number, t: number) {

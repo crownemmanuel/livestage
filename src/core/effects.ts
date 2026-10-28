@@ -130,6 +130,8 @@ export const EFFECT_DEFS: Record<EffectType, EffectDef> = {
       { key: "intensity", label: "Intensity", type: "range", min: 0.002, max: 0.08, step: 0.001 },
       { key: "duration", label: "Duration", type: "range", min: 0.1, max: 6, step: 0.05, unit: "s" },
       { key: "frequency", label: "Frequency", type: "range", min: 2, max: 30, step: 0.5, unit: "Hz" },
+      // For a video that already shakes (footsteps baked in): move the cut-outs on top of it to match.
+      { key: "cutOutsOnly", label: "Cut-outs only", type: "bool" },
     ],
   },
   projectile: {

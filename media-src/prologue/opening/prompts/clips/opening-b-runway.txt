@@ -1,8 +1,0 @@
-Extend the source video @Video1. 15 seconds, 21:9, continue this camera shot from its last frame: one continuous FPV point of view with no cuts and no transitions, in the same 2D hand-drawn storybook animation, ink outlines, cel shading and warm sunrise light.
-@Video1: the shot to continue (town square, DAVID leaving with the sheep, style, light). @Image1: the high view over Bethlehem and the valley. @Image2: the golden pasture under the great olive tree, the final destination.
-DAVID: Black shepherd boy, cream tunic, red sash, wooden staff, leading a small flock of sheep.
-Beat 1: The FPV point of view lifts off from the square, swoops past DAVID and his sheep, then races low and fast through the village: weaving along narrow lanes between limestone houses, under a vine-covered pergola, past glowing lanterns and clay jars, skimming the flat rooftops.
-Beat 2: It cranes up steeply over the last rooftops and rises high above Bethlehem, revealing the hill town and the misty valley at sunrise. Far below, DAVID walks with his flock along the winding road out of town toward the fields, the sheep moving with him.
-Beat 3: It glides forward and down across the valley, over olive groves and stone walls, slowing as it descends, and settles at eye level in the golden pasture under the great olive tree, the flock grazing.
-Final frame: a steady, still view of the pasture under the olive tree at sunrise, held for one second.
-No audio. Black letterbox bars stay fixed above and below the picture, as in the references. No text.

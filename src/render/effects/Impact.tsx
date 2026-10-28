@@ -3,13 +3,42 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { bool, num } from "@/core/effects";
 import { hash1 } from "@/core/noise";
-import type { EffectComponent } from "@/core/types";
+import type { EffectComponent, SceneRuntime } from "@/core/types";
 import { cached } from "../cache";
 import { useStage } from "../frame";
 
+/** Shake effects of a scene that move only the cut-out actors (the video under them shakes by itself). */
+export const isCutOutShake = (c: EffectComponent, rt: SceneRuntime | null | undefined) => bool(rt?.effects[c.id]?.params ?? c.params, "cutOutsOnly");
+
+/** Summed shake offset at time `t` (fractions of the frame height, +y down) and the strongest running intensity. */
+export function shakeOffset(comps: EffectComponent[], rt: SceneRuntime | null | undefined, t: number) {
+  let dx = 0;
+  let dy = 0;
+  let peak = 0;
+  for (const c of comps) {
+    const e = rt?.effects[c.id];
+    const p = e?.params ?? c.params;
+    const dur = num(p, "duration", 1.2);
+    const inten = num(p, "intensity", 0.025);
+    const f = num(p, "frequency", 14) * Math.PI * 2;
+    for (const ev of rt?.triggers ?? []) {
+      if (ev.effectId !== c.id) continue;
+      const dt = (t - ev.at) / 1000;
+      if (dt < 0 || dt > dur) continue;
+      const a = inten * Math.pow(1 - dt / dur, 2);
+      const s = hash1(ev.at) * 10;
+      dx += a * (0.6 * Math.sin(dt * f + s) + 0.4 * Math.sin(dt * f * 1.73 + s * 2.1));
+      dy += a * (0.6 * Math.sin(dt * f * 1.21 + s * 0.7) + 0.4 * Math.sin(dt * f * 2.07 + s * 1.3));
+      peak = Math.max(peak, inten);
+    }
+  }
+  return { dx, dy, peak };
+}
+
 /**
  * Screen shake: moves the whole rendered frame (3D, video and overlays alike),
- * slightly overscanned so the edges of the wall never show.
+ * slightly overscanned so the edges of the wall never show. "Cut-outs only" shakes
+ * are left to the cut-out actors (ClipActor).
  */
 export function ShakeDriver({ comps }: { comps: EffectComponent[] }) {
   const { getRt, frame } = useStage();
@@ -17,26 +46,7 @@ export function ShakeDriver({ comps }: { comps: EffectComponent[] }) {
   useFrame(() => {
     const rt = getRt();
     const el = gl.domElement;
-    let dx = 0;
-    let dy = 0;
-    let peak = 0;
-    for (const c of comps) {
-      const e = rt?.effects[c.id];
-      const p = e?.params ?? c.params;
-      const dur = num(p, "duration", 1.2);
-      const inten = num(p, "intensity", 0.025);
-      const f = num(p, "frequency", 14) * Math.PI * 2;
-      for (const ev of rt?.triggers ?? []) {
-        if (ev.effectId !== c.id) continue;
-        const dt = (frame.t - ev.at) / 1000;
-        if (dt < 0 || dt > dur) continue;
-        const a = inten * Math.pow(1 - dt / dur, 2);
-        const s = hash1(ev.at) * 10;
-        dx += a * (0.6 * Math.sin(dt * f + s) + 0.4 * Math.sin(dt * f * 1.73 + s * 2.1));
-        dy += a * (0.6 * Math.sin(dt * f * 1.21 + s * 0.7) + 0.4 * Math.sin(dt * f * 2.07 + s * 1.3));
-        peak = Math.max(peak, inten);
-      }
-    }
+    const { dx, dy, peak } = shakeOffset(comps.filter((c) => !isCutOutShake(c, rt)), rt, frame.t);
     if (peak === 0) {
       if (el.style.transform) el.style.transform = "";
       return;

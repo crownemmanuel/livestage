@@ -135,11 +135,11 @@ export function MediaLayer({ comp }: LayerProps) {
 }
 
 function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
-  const { assets, getRt, frame, canvasW, canvasH, isOutput, audio } = useStage();
+  const { assets, getRt, frame, canvasW, canvasH, isOutput, audio, role } = useStage();
   const assetId = comp.kind === "video" ? comp.media.assetId : comp.assetId;
   const asset = assetId ? assets.find((a) => a.id === assetId) : undefined;
   const isVideo = comp.kind === "video";
-  const video = useVideo(isVideo && asset ? playableUrl(asset) : null);
+  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, { alpha: asset?.hasAlpha });
   const image = useImageTexture(!isVideo && asset ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => {
@@ -189,7 +189,7 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
       const mediaSec = comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
       const time = mediaTime(m, mediaSec, videoDuration(video));
       const rate = comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
-      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video) }, frame.wall);
+      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, local: role === "preview", volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video), once: !m.loop }, frame.wall);
     }
     if (!show) return;
 
@@ -240,6 +240,14 @@ export function plateParallax(rt: import("@/core/types").SceneRuntime): number {
   return bg?.kind === "background" ? (bg.parallax ?? 0) : 0;
 }
 
+/** Ken Burns pan/zoom of the scene's current plate at `t` (ms), so what lies on the plate moves with it. */
+export function plateKenBurns(rt: import("@/core/types").SceneRuntime, t: number) {
+  const bg = rt.scene.components.find((c) => c.id === rt.background.current);
+  if (bg?.kind !== "background") return kenBurnsAt(undefined, 0);
+  const startAt = rt.background.changedAt > -1e8 ? rt.background.changedAt : 0;
+  return kenBurnsAt(bg.kenBurns, (t - startAt) / 1000);
+}
+
 /** Fit a frame of `aspect` into the canvas with the given fit mode and vertical framing. */
 export function fitFrame(fit: "cover" | "contain" | "stretch", aspect: number, canvasW: number, canvasH: number, anchorY = 0.5) {
   const canvasAspect = canvasW / canvasH;
@@ -259,10 +267,10 @@ export function fitFrame(fit: "cover" | "contain" | "stretch", aspect: number, c
 
 /** Full-frame media background with fit/crop, crossfade on activation, Ken Burns and parallax. */
 export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
-  const { assets, getRt, frame, canvasW, canvasH, isOutput, audio } = useStage();
+  const { assets, getRt, frame, canvasW, canvasH, isOutput, audio, role } = useStage();
   const asset = comp.media.assetId ? assets.find((a) => a.id === comp.media.assetId) : undefined;
   const isVideo = asset?.type === "video";
-  const video = useVideo(isVideo ? playableUrl(asset) : null);
+  const video = useVideo(isVideo ? playableUrl(asset) : null, { alpha: asset?.hasAlpha });
   const image = useImageTexture(asset && !isVideo ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat), [mat]);
@@ -288,7 +296,7 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
       const time = mediaTime(comp.media, mediaSec, videoDuration(video));
       syncVideo(
         video,
-        { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video) },
+        { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, local: role === "preview", volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video), once: !comp.media.loop },
         frame.wall,
       );
     }
