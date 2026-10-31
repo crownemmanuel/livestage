@@ -72,6 +72,8 @@ if (status.error) {
   ok("list_scenes", Array.isArray(scenes.json), `${scenes.json?.length} rows`);
   const schema = await call("schema", { topic: "cueActions" });
   ok("schema cueActions", Array.isArray(schema.json?.cueActions?.types), `${schema.json?.cueActions?.types?.length} action types`);
+  const weather = await call("schema", { topic: "effects" });
+  ok("schema weather controls", ["daynight", "rain", "fog"].every((type) => weather.json?.effects?.some((e: { type: string }) => e.type === type)));
   const width = await call("get", { path: "project/output/canvasWidth" });
   ok("get path", typeof width.json === "number", String(width.json));
   ok("bad path explains", !!(await call("get", { path: "project/nope/x" })).error);

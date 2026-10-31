@@ -32,6 +32,7 @@ export function SceneSettings({ scene }: { scene: Scene }) {
               { value: "lion-hills", label: "Wilderness hills (lion encounter)" },
               { value: "shepherd-valley", label: "Shepherd's valley (pasture)" },
               { value: "shepherd-photoreal", label: "Shepherd's valley · photoreal (photo-based)" },
+              { value: "shepherd-pbr", label: "Shepherd's valley · scanned (PBR assets + HDRI)" },
               { value: "none", label: "None — media plates only" },
             ]}
           />

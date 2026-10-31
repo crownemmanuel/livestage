@@ -3,8 +3,8 @@
 
 import { now, sceneNow } from "@/core/clock";
 import { num, str } from "@/core/effects";
-import { lifeAudible, soundKey, soundLives, type SoundLife } from "@/core/music";
-import type { LightningStrike, SceneRuntime, SoundEvent } from "@/core/types";
+import { lifeAudible, scheduleLevels, soundKey, soundLives, type SoundLife } from "@/core/music";
+import type { LightningStrike, SceneRuntime, SoundEvent, SoundLevel } from "@/core/types";
 import { mixLevel, useShow } from "@/store/show";
 import { registerAudioContext } from "./audioOutput";
 
@@ -99,11 +99,17 @@ interface CueSound {
   volume: number;
   runKey: string;
   keepPlaying: boolean;
-  /** Starts again from the top when it ends (a music bed). */
+  /** Starts again from the top (its trimStart) when it ends (a music bed). */
   loop: boolean;
+  /** Seconds cut off the top of the file: it plays from here (see the sound action). */
+  trim: number;
+  /** Seconds it fades out over before the file ends (0 = none). */
+  fadeOut: number;
+  /** Its level changes as it plays (a duck), on a gain of their own ahead of `gain`. */
+  levels?: SoundLevel[];
   /** Scene time (ms) of its run when it started. */
   at: number;
-  /** Seconds into the file at context time `ctx0` (negative: starts that much later). */
+  /** Seconds into the file at context time `ctx0` (less than `trim`: starts that much later). */
   pos: number;
   ctx0: number;
   src: AudioBufferSourceNode | null;
@@ -120,8 +126,8 @@ function applyMix() {
   for (const [key, s] of cueSounds) s.gain?.gain.setTargetAtTime(s.volume * mixLevel(soundMixKey(key)), ac.currentTime, 0.05);
 }
 
-/** A position past the end of a looping sound, wrapped back into the file. */
-const wrap = (s: CueSound, pos: number) => (s.loop && pos > 0 ? pos % s.buf.duration : pos);
+/** A position past the end of a looping sound, wrapped back to where its loop starts. */
+const wrap = (s: CueSound, pos: number) => (s.loop && pos > s.trim && s.buf.duration > s.trim ? s.trim + ((pos - s.trim) % (s.buf.duration - s.trim)) : pos);
 
 /** Seconds into the file now. */
 function soundPos(s: CueSound, ac: AudioContext) {
@@ -140,25 +146,44 @@ function stopNode(s: CueSound, seconds: number, delay = 0) {
   s.src = s.gain = null;
 }
 
-/** Play the sound from `pos` seconds into the file (negative: after that many seconds). */
+/** Play the sound from `pos` seconds into the file (less than its trim: from the trim, after that many seconds). */
 function startNode(key: string, s: CueSound, pos: number, fadeIn = 0) {
   const ac = audio();
   const src = ac.createBufferSource();
   src.buffer = s.buf;
   src.loop = s.loop;
+  if (s.loop && s.trim > 0) {
+    src.loopStart = s.trim;
+    src.loopEnd = s.buf.duration;
+  }
+  // Seconds since it started (before wrapping a loop): its level changes are timed from there.
+  const since = pos - s.trim;
   pos = wrap(s, pos);
   const gain = ac.createGain();
   const level = s.volume * mixLevel(soundMixKey(key));
-  const at = ac.currentTime + Math.max(0, -pos);
+  const at = ac.currentTime + Math.max(0, s.trim - pos);
+  const from = Math.max(s.trim, pos);
   if (fadeIn > 0) {
     gain.gain.setValueAtTime(0.0001, at);
     gain.gain.linearRampToValueAtTime(level, at + fadeIn);
   } else gain.gain.value = level;
-  src.connect(gain).connect(ac.destination);
+  // Its own fade-out into the end of the file (a fade already under way picks up where it is).
+  if (s.fadeOut > 0 && !s.loop) {
+    const left = s.buf.duration - from;
+    const into = s.fadeOut - left;
+    const start = at + Math.max(0, -into);
+    gain.gain.setValueAtTime(into > 0 ? Math.max(0.0001, level * (1 - into / s.fadeOut)) : level, Math.max(start, at + Math.max(0, fadeIn)));
+    gain.gain.linearRampToValueAtTime(0.0001, at + left);
+  }
+  if (s.levels?.length) {
+    const env = ac.createGain();
+    scheduleLevels(env.gain, s.levels, since, ac.currentTime);
+    src.connect(env).connect(gain).connect(ac.destination);
+  } else src.connect(gain).connect(ac.destination);
   src.onended = () => {
     if (cueSounds.get(key)?.src === src) cueSounds.delete(key);
   };
-  src.start(at, Math.max(0, pos));
+  src.start(at, from);
   s.src = src;
   s.gain = gain;
   s.pos = pos;
@@ -235,7 +260,7 @@ function followClock(rt: SceneRuntime | null) {
   // How far the scene jumped (a scrub); a hold or a resume alone moves it by nothing.
   const jump = (c.pausedAt ?? t) - c.base - ((prev.pausedAt ?? t) - prev.base);
   for (const [key, s] of [...cueSounds]) {
-    const pos = s.runKey === rt.key ? (sceneNow(rt, t) - s.at) / 1000 : soundPos(s, ac) + jump / 1000;
+    const pos = s.runKey === rt.key ? (sceneNow(rt, t) - s.at) / 1000 + s.trim : soundPos(s, ac) + jump / 1000;
     stopNode(s, 0.06);
     if (pos >= s.buf.duration && !s.loop) {
       cueSounds.delete(key);
@@ -260,22 +285,25 @@ async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: st
   const own = rt?.key === runKey;
   // Its scene was replaced while the file loaded.
   if (!own && !ev.keepPlaying) return;
-  let pos = own ? (sceneNow(rt!) - ev.at) / 1000 : (now() - wallAt) / 1000;
+  const trim = Math.min(Math.max(0, ev.trimStart ?? 0), buf.duration);
+  // Seconds since it started; the file is `trim` further in.
+  let since = own ? (sceneNow(rt!) - ev.at) / 1000 : (now() - wallAt) / 1000;
   let at = ev.at;
   // A little late (still decoding): start from the top rather than cut its first words.
-  if (!resume && pos > 0 && pos < 1.5) {
-    at += pos * 1000;
-    pos = 0;
+  if (!resume && since > 0 && since < 1.5) {
+    at += since * 1000;
+    since = 0;
   }
+  const pos = since + trim;
   const old = cueSounds.get(key);
-  if (old) stopNode(old, 0.15, Math.max(0, -pos));
+  if (old) stopNode(old, 0.15, Math.max(0, -since));
   cueSounds.delete(key);
   if (pos >= buf.duration && !ev.loop) return;
-  const s: CueSound = { buf, volume: ev.volume, runKey, keepPlaying: !!ev.keepPlaying, loop: !!ev.loop, at, pos, ctx0: 0, src: null, gain: null };
+  const s: CueSound = { buf, volume: ev.volume, runKey, keepPlaying: !!ev.keepPlaying, loop: !!ev.loop, trim, fadeOut: Math.max(0, ev.fadeOut ?? 0), levels: ev.levels, at, pos, ctx0: 0, src: null, gain: null };
   cueSounds.set(key, s);
   // A fade-in already under way when the file is ready picks up where it should be.
-  let fadeIn = ev.fadeIn ? Math.max(0, ev.fadeIn - Math.max(0, pos)) : 0;
-  if (resume && pos > 0) fadeIn = Math.max(fadeIn, RESUME_FADE);
+  let fadeIn = ev.fadeIn ? Math.max(0, ev.fadeIn - Math.max(0, since)) : 0;
+  if (resume && since > 0) fadeIn = Math.max(fadeIn, RESUME_FADE);
   if (rt?.clock.pausedAt == null) startNode(key, s, pos, fadeIn);
   if (resume?.fadeFrom != null && own) {
     const t = sceneNow(rt!);
@@ -373,6 +401,8 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     let lives: Map<SoundEvent, SoundLife> | null = null;
     for (const ev of sounds) {
       if (heard.has(ev.id)) continue;
+      // A window just (re)opened may have the live state before the media library: try again when it comes.
+      if (ev.assetId && !s.assets.some((a) => a.id === ev.assetId)) continue;
       heard.add(ev.id);
       // Judged on the scene clock: a sound fired while the scene is held waits for the resume.
       const late = t - ev.at > 1500;
@@ -440,7 +470,7 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     const a = s.program.runtime?.strikes;
     if (a && a !== prev.program.runtime?.strikes) handleStrikes(a);
     const b = s.program.runtime?.sounds;
-    if (b && b !== prev.program.runtime?.sounds) handleSounds(b);
+    if (b && (b !== prev.program.runtime?.sounds || s.assets !== prev.assets)) handleSounds(b);
   });
   return () => {
     unsub();

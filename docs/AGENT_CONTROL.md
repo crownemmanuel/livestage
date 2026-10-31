@@ -58,7 +58,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `preview_step` | Preview the scene as it looks after N cues |
 | `preview_time` | Preview the scene as it looks N seconds into its Build timeline (GO cues at their planned holds), held on that frame |
 | `preview_run` | Run the show in the preview from a scene's TAKE: GO cues fire at their planned holds, takes go on to the next scene; `on: false` stops it |
-| `run_action` | Run any cue action now |
+| `run_action` | Run any cue action now. Existing `effect` actions control Day / Night, rain and fog; `effect.param` adjusts their live settings. Unlit photographic/baked GLB surfaces follow the same night/storm grade as media. |
 | `transport` [LIVE] | Hold, resume, seek or nudge the scene's video in its own seconds; the live wall scrubs only while held ([VIDEO_TRANSPORT.md](VIDEO_TRANSPORT.md)) |
 | `seek`, `freeze` [LIVE] | Scene clock: jump (program only while held), freeze / resume |
 | `cancel_pending`, `restart_preview` | Pending actions, restart the preview |
@@ -77,7 +77,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | **Build** | |
 | `scene_create`, `scene_update`, `scene_duplicate`, `scene_delete`, `scene_move`, `scene_group` | Scenes and running order |
 | `group_update` | Rename, recolour, flow, move or dissolve a group |
-| `component_add`, `component_update`, `component_remove`, `component_arrange` | Components (built from the app's defaults, deep-merged edits) |
+| `component_add`, `component_update`, `component_remove`, `component_arrange` | Components (built from the app's defaults, deep-merged edits). Model components accept complete textured GLB environments as well as individual props; imported textures use hardware-capped anisotropic filtering automatically. |
 | `cue_add`, `cue_update`, `cue_remove`, `cue_move` | Cues, with any actions and fire mode. A StageLight action is `{type: "send", message: {type: "stagelight", op: "goCue", page: "Act 1", cue: "4"}}`; StageLight messages are checked (a trigger needs a name, GO cue a page) and tidied. To edit or remove one action, `get_scene`, change the list and `cue_update` it back |
 | `markers` | Time markers by video name: list every video's markers (and what each does), add or change one (`{name, at, message}` or `cue` to run instead), remove one. Markers send from PROGRAM only, once per pass, never while scrubbing |
 | `stagelight_link` | Set up the StageLight link (on, IP, port, mirror TAKE / GO as triggers `scene.<code>` / `cue.<code>.<n>`), ping it and return `stagelight_status` |

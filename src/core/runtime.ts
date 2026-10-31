@@ -602,6 +602,9 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
       const ev: SoundEvent = { id: uid("snd"), assetId: cmd.assetId, at: t, volume: cmd.volume, keepPlaying: !!cmd.keepPlaying };
       if (cmd.loop) ev.loop = true;
       if (cmd.fadeIn && cmd.fadeIn > 0) ev.fadeIn = cmd.fadeIn;
+      if (cmd.trimStart && cmd.trimStart > 0) ev.trimStart = cmd.trimStart;
+      if (cmd.fadeOut && cmd.fadeOut > 0) ev.fadeOut = cmd.fadeOut;
+      if (cmd.levels?.length) ev.levels = cmd.levels;
       if (cmd.fadeOthers && (cmd.fadeOthers.which === "all" || cmd.fadeOthers.which.length)) ev.fadeOthers = cmd.fadeOthers;
       return { rt: { ...rt, sounds: trimSounds([...(rt.sounds ?? []), ev]) }, poses };
     }

@@ -11,7 +11,7 @@
 import { idleFor, initialSegments, scheduleClip } from "./clipActor";
 import { EFFECT_DEFS } from "./effects";
 import { LAYER_KINDS } from "./runtime";
-import type { AudioRole, ClipActorComponent, ClipSegment, Cue, CueAction, CueFire, IoMessage, MediaMarker, Scene, SceneComponent } from "./types";
+import type { AudioRole, ClipActorComponent, ClipSegment, Cue, CueAction, CueFire, IoMessage, MediaMarker, Scene, SceneComponent, SoundLevel } from "./types";
 
 export type TrackGroup = "picture" | "effects" | "camera" | "sound" | "outputs";
 export type ItemTone = "picture" | "loop" | "held" | "effect" | "music" | "voice" | "ambience" | "sfx" | "sound" | "camera" | "light" | "show";
@@ -57,6 +57,12 @@ export interface TimelineItem {
   carriesOut?: boolean;
   /** It fades out from here to `end`. */
   fadeFrom?: number;
+  /** A sound: seconds it fades in over from `start`. */
+  fadeIn?: number;
+  /** A sound: seconds cut off the top of its file (its left edge drags this). */
+  trim?: number;
+  /** A sound: its level changes, timed from `start`. */
+  levels?: SoundLevel[];
   /** Scene times of markers inside it (lights, MIDI/OSC). */
   marks?: number[];
   /** The action that ends it, when one does (moving its end moves that action). */
@@ -224,6 +230,11 @@ interface Snd {
   action: number | null;
   carried?: boolean;
   endBy?: EndRef;
+  /** Seconds cut off the top of its file, its fade-in and its fade-out into the file's end (the sound action's). */
+  trim?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  levels?: SoundLevel[];
 }
 
 const SOUND_TRACK: Record<AudioRole | "none", { id: string; label: string; tone: ItemTone }> = {
@@ -404,7 +415,7 @@ function build(scene: Scene, starts: (number | null)[], env: TimelineEnv): Built
         }
         // One copy per sound file: firing it again replaces the playing one.
         for (const s of sounds) if (s.end == null && s.assetId === a.assetId) Object.assign(s, { end: t, endBy: { cue: e.cue, action: e.action, kind: "refire" } });
-        sounds.push({ assetId: a.assetId!, start: t, end: null, loop: !!a.loop, keep: !!a.keepPlaying, cue: e.cue, action: e.action });
+        sounds.push({ assetId: a.assetId!, start: t, end: null, loop: !!a.loop, keep: !!a.keepPlaying, cue: e.cue, action: e.action, trim: a.trimStart || undefined, fadeIn: a.fadeIn || undefined, fadeOut: a.fadeOut || undefined, levels: a.levels?.length ? a.levels : undefined });
         break;
       }
       case "send":
@@ -435,7 +446,9 @@ function build(scene: Scene, starts: (number | null)[], env: TimelineEnv): Built
   for (const s of starts) known(s != null ? s + MIN_HOLD : null);
   for (const it of items) known(it.end);
   for (const s of sounds) {
-    const d = env.duration(s.assetId);
+    const file = env.duration(s.assetId);
+    // How long it plays: the file less what is cut off its top.
+    const d = file != null ? Math.max(0, file - (s.trim ?? 0)) : undefined;
     if (!s.loop) known(d != null ? s.start + d : s.start + OPEN_SOUND);
     known(s.end);
   }
@@ -529,7 +542,9 @@ function build(scene: Scene, starts: (number | null)[], env: TimelineEnv): Built
 
   // Sounds: their file's length, or until something stops them; the take fades the rest.
   for (const s of sounds) {
-    const d = env.duration(s.assetId);
+    const file = env.duration(s.assetId);
+    // How long it plays: the file less what is cut off its top.
+    const d = file != null ? Math.max(0, file - (s.trim ?? 0)) : undefined;
     let to = s.end ?? Infinity;
     let fadeFrom = s.fadeFrom;
     let endBy = s.endBy;
@@ -537,7 +552,7 @@ function build(scene: Scene, starts: (number | null)[], env: TimelineEnv): Built
     if (!s.loop && !s.carried) {
       if (d != null && s.start + d < to) {
         to = s.start + d;
-        fadeFrom = undefined;
+        fadeFrom = s.fadeOut ? Math.max(s.start, to - s.fadeOut) : undefined;
         endBy = undefined;
       }
       else if (s.end == null) {
@@ -573,6 +588,9 @@ function build(scene: Scene, starts: (number | null)[], env: TimelineEnv): Built
       carriedIn: s.carried || undefined,
       carriesOut: carriesOut || undefined,
       fadeFrom,
+      fadeIn: s.fadeIn,
+      trim: s.trim,
+      levels: s.levels,
       cue: s.cue,
       action: s.action,
       endBy,

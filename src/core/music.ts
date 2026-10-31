@@ -15,7 +15,7 @@
 import { sceneNow } from "./clock";
 import { initialSegments, scheduleClip } from "./clipActor";
 import { cueMarkers } from "./markers";
-import type { Cue, CueAction, Project, Scene, SceneRuntime, SoundEvent } from "./types";
+import type { Cue, CueAction, Project, Scene, SceneRuntime, SoundEvent, SoundLevel } from "./types";
 
 /** Mixer key of a cue sound (see ProgramState.mix). */
 export const soundKey = (assetId: string) => `sound:${assetId}`;
@@ -62,7 +62,10 @@ export function soundLives(events: SoundEvent[], duration?: (assetId: string) =>
       }
     }
     const d = ev.loop ? undefined : duration?.(ev.assetId);
-    out.push({ ev, fadeFrom, fadeSecs, endsAt: d ? ev.at + d * 1000 : null });
+    const endsAt = d ? ev.at + Math.max(0, d - (ev.trimStart ?? 0)) * 1000 : null;
+    // Its own fade-out before the file ends.
+    if (endsAt !== null && ev.fadeOut && ev.fadeOut > 0) kill(Math.max(ev.at, endsAt - ev.fadeOut * 1000), ev.fadeOut);
+    out.push({ ev, fadeFrom, fadeSecs, endsAt });
   });
   return out;
 }
@@ -77,10 +80,41 @@ export function lifePlaying(l: SoundLife, t: number): boolean {
   return lifeAudible(l, t) && (l.fadeFrom === null || l.fadeFrom > t);
 }
 
-/** Seconds into its file at time t (ms), wrapped for a loop when the length is known. */
+/** A sound's level (share of its volume) `since` seconds after it started, from its level changes. */
+export function levelAt(levels: SoundLevel[] | undefined, since: number): number {
+  let level = 1;
+  for (const p of [...(levels ?? [])].sort((a, b) => a.at - b.at)) {
+    if (since <= p.at) break;
+    const fade = Math.max(0, p.fade ?? 0);
+    level = fade > 0 && since < p.at + fade ? level + (p.level - level) * ((since - p.at) / fade) : p.level;
+  }
+  return level;
+}
+
+/**
+ * Glide a gain node through a sound's level changes: `since` seconds after it started is now (context
+ * time `ctxNow`); a change already under way picks up where it is.
+ */
+export function scheduleLevels(param: AudioParam, levels: SoundLevel[] | undefined, since: number, ctxNow: number) {
+  param.cancelScheduledValues(ctxNow);
+  param.setValueAtTime(Math.max(0.0001, levelAt(levels, since)), ctxNow);
+  for (const p of [...(levels ?? [])].sort((a, b) => a.at - b.at)) {
+    const end = p.at + Math.max(0, p.fade ?? 0);
+    if (end <= since) continue;
+    const from = Math.max(since, p.at);
+    param.setValueAtTime(Math.max(0.0001, levelAt(levels, from)), ctxNow + (from - since));
+    param.linearRampToValueAtTime(Math.max(0.0001, p.level), ctxNow + (end - since));
+  }
+}
+
+/**
+ * Seconds into its file at time t (ms), wrapped for a loop when the length is known. A trimmed sound starts at
+ * its trimStart (and loops back to it); less than that means it has not started yet.
+ */
 export function filePos(ev: SoundEvent, t: number, duration?: number): number {
-  const pos = (t - ev.at) / 1000;
-  return ev.loop && duration && pos > 0 ? pos % duration : pos;
+  const trim = ev.trimStart ?? 0;
+  const pos = (t - ev.at) / 1000 + trim;
+  return ev.loop && duration && duration > trim && pos > trim ? trim + ((pos - trim) % (duration - trim)) : pos;
 }
 
 /**
@@ -189,6 +223,14 @@ export interface NominalSound {
   volume: number;
   loop: boolean;
   keepPlaying: boolean;
+  /** Fades out over this many seconds before its file ends (see the sound action). */
+  fadeOut?: number;
+  /** Where a loop goes back to (see the sound action's trimStart). */
+  trimStart?: number;
+  /** Its level changes, timed from when it started (see the sound action). */
+  levels?: SoundLevel[];
+  /** Seconds since it started at that point. */
+  since?: number;
   /** The scene and cue whose sound action started it. */
   sceneId: string;
   cueId: string;
@@ -229,6 +271,9 @@ export function nominalMusic(project: Pick<Project, "scenes" | "cueTimings">, sc
         if (t > cut) continue;
         const ev: TimedEvent = { id: `n${n++}`, assetId: a.assetId, at: (T + t) * 1000, volume: a.volume, keepPlaying: !!a.keepPlaying, sceneId: scene.id, cueId: cue.id };
         if (a.loop) ev.loop = true;
+        if (a.trimStart && a.trimStart > 0) ev.trimStart = a.trimStart;
+        if (a.fadeOut && a.fadeOut > 0) ev.fadeOut = a.fadeOut;
+        if (a.levels?.length) ev.levels = a.levels;
         if (a.fadeOthers && (a.fadeOthers.which === "all" || a.fadeOthers.which.length)) ev.fadeOthers = a.fadeOthers;
         events.push(ev);
       }
@@ -240,7 +285,7 @@ export function nominalMusic(project: Pick<Project, "scenes" | "cueTimings">, sc
         .filter((l) => lifePlaying(l, at))
         .map((l) => {
           const e = l.ev as TimedEvent;
-          return { assetId: e.assetId, offset: filePos(e, at, duration(e.assetId)), volume: e.volume, loop: !!e.loop, keepPlaying: !!e.keepPlaying, sceneId: e.sceneId, cueId: e.cueId };
+          return { assetId: e.assetId, offset: filePos(e, at, duration(e.assetId)), volume: e.volume, loop: !!e.loop, keepPlaying: !!e.keepPlaying, fadeOut: e.fadeOut, trimStart: e.trimStart, levels: e.levels, since: (at - e.at) / 1000, sceneId: e.sceneId, cueId: e.cueId };
         });
       return { showTime: T + cut, sceneTime: cut, sounds };
     }

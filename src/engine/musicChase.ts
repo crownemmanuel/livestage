@@ -41,8 +41,15 @@ function note(started: NominalSound[], stopped: string[]) {
 }
 
 const toEvent = (s: NominalSound, at: number): SoundEvent => {
-  const ev: SoundEvent = { id: uid("snd"), assetId: s.assetId, at: at - s.offset * 1000, volume: s.volume, keepPlaying: s.keepPlaying, chase: true };
+  // `at` stays where the file's (trimmed) start would have been, so it is at `offset` now.
+  const trim = s.trimStart ?? 0;
+  // Level changes are timed from its start: keep that start where it was (a loop has wrapped its offset).
+  const since = s.levels?.length && s.since != null ? s.since : s.offset - trim;
+  const ev: SoundEvent = { id: uid("snd"), assetId: s.assetId, at: at - since * 1000, volume: s.volume, keepPlaying: s.keepPlaying, chase: true };
   if (s.loop) ev.loop = true;
+  if (trim > 0) ev.trimStart = trim;
+  if (s.fadeOut) ev.fadeOut = s.fadeOut;
+  if (s.levels?.length) ev.levels = s.levels;
   return ev;
 };
 

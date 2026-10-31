@@ -10,6 +10,7 @@ export function terrainHeight(preset: EnvironmentPreset, x: number, z: number): 
   if (preset === "lion-hills") return lionHills(x, z);
   if (preset === "shepherd-valley") return shepherdValley(x, z);
   if (preset === "shepherd-photoreal") return shepherdPhotoreal(x, z);
+  if (preset === "shepherd-pbr") return shepherdPbr(x, z);
   return 0;
 }
 
@@ -36,6 +37,21 @@ function lionHills(x: number, z: number): number {
   h += Math.max(0, -z - 70) * 0.07;
   // Gentle rise behind the camera so the frame edge never shows the world's end.
   h += Math.max(0, z - 18) * 0.25;
+  return h;
+}
+
+/**
+ * The scanned-asset valley: the pasture's near ground (so the flock, fire, markers and cameras of a
+ * pasture scene carry over) without the procedural town hill and ridge; beyond ~250 m the ground
+ * falls away so the HDRI's own photographed hills make the horizon.
+ */
+function shepherdPbr(x: number, z: number): number {
+  const d = Math.hypot(x * 0.7, (z + 10) * 0.5);
+  let h = (fbm(x * 0.005 + 21, z * 0.005 + 5, 4) - 0.45) * 26 * smoothstep(25, 140, d);
+  h += (fbm(x * 0.028 + 2, z * 0.028 + 13, 3) - 0.5) * 2.2 * smoothstep(4, 35, d);
+  h += (fbm(x * 0.11, z * 0.11, 2) - 0.5) * 0.35;
+  h += Math.max(0, z - 20) * 0.2;
+  h -= smoothstep(220, 520, Math.hypot(x * 0.6, z + 10)) * 140;
   return h;
 }
 
@@ -66,7 +82,7 @@ export interface EnvLook {
   mountains: { dist: number; height: number; rough: number; color: string; seed: number }[];
 }
 
-export const ENV_LOOKS: Record<"lion-hills" | "shepherd-valley", EnvLook> = {
+export const ENV_LOOKS: Record<"lion-hills" | "shepherd-valley" | "shepherd-pbr", EnvLook> = {
   "lion-hills": {
     ground: { grass: "#8f7a45", grassDry: "#b39a5e", dirt: "#8a6d4a", rock: "#7d7268" },
     grass: { count: 150000, area: [-60, 60, -120, 5], base: "#5a4824", tip: "#c4a866", height: [0.14, 0.5] },
@@ -92,6 +108,22 @@ export const ENV_LOOKS: Record<"lion-hills" | "shepherd-valley", EnvLook> = {
   "shepherd-valley": {
     ground: { grass: "#5d7238", grassDry: "#8d8a4c", dirt: "#7a6448", rock: "#7a756c" },
     grass: { count: 160000, area: [-70, 70, -130, 6], base: "#34491f", tip: "#9bae5c", height: [0.12, 0.42] },
+    rocks: { count: 160, area: [-110, 110, -260, 16], size: [0.12, 0.7], color: "#8a857b" },
+    boulders: [
+      [-14, -12, 1.4],
+      [12, -24, 1.1],
+      [9.4, -15.2, 0.6],
+    ],
+    trees: { count: 46, area: [-120, 120, -300, -18] },
+    mountains: [
+      { dist: 800, height: 90, rough: 0.9, color: "#6f7c74", seed: 21 },
+      { dist: 1400, height: 170, rough: 0.8, color: "#8693a0", seed: 23 },
+      { dist: 2200, height: 300, rough: 0.7, color: "#a1adc0", seed: 29 },
+    ],
+  },
+  "shepherd-pbr": {
+    ground: { grass: "#5d7238", grassDry: "#8d8a4c", dirt: "#7a6448", rock: "#7a756c" },
+    grass: { count: 120000, area: [-70, 70, -130, 6], base: "#3f4d22", tip: "#a4b45e", height: [0.12, 0.42] },
     rocks: { count: 160, area: [-110, 110, -260, 16], size: [0.12, 0.7], color: "#8a857b" },
     boulders: [
       [-14, -12, 1.4],

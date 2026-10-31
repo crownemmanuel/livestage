@@ -7,12 +7,12 @@ import { ENV_LOOKS, terrainHeight } from "@/core/terrain";
 import { cached } from "../cache";
 import { useStage } from "../frame";
 
-type Preset = "lion-hills" | "shepherd-valley";
+type Preset = "lion-hills" | "shepherd-valley" | "shepherd-pbr";
 
 /** One merged mesh of grass blades; wind sway happens entirely in the vertex shader. */
 function buildGrass(preset: Preset) {
   const look = ENV_LOOKS[preset].grass;
-  const r = rng(preset === "lion-hills" ? 1234 : 4321);
+  const r = rng(preset === "lion-hills" ? 1234 : preset === "shepherd-pbr" ? 2468 : 4321);
   const [x0, x1, z0, z1] = look.area;
   const blades: number[][] = [];
   for (let tries = 0; tries < look.count * 4 && blades.length < look.count; tries++) {

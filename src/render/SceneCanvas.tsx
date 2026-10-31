@@ -13,6 +13,7 @@ import { Mountains } from "./env/Mountains";
 import { Lights } from "./env/Lights";
 import { ProceduralElement } from "./env/Procedural";
 import { PhotoValley } from "./env/photoreal/PhotoValley";
+import { PbrValley } from "./env/pbr/PbrValley";
 import { Lion } from "./actors/Lion";
 import { MediaBackground, MediaLayer } from "./layers/MediaLayers";
 import { ModelLayer } from "./layers/ModelLayer";
@@ -386,11 +387,15 @@ const SceneContent = memo(
 
   return (
     <Compositor back={back} front={front} fx={fx} background={background} onCapture={onCapture} look={scene.look}>
-      <Lights shadows={shadows} plate={flat ? scene.plateLight ?? null : null} />
+      <Lights shadows={shadows} plate={flat ? scene.plateLight ?? null : null} skyFill={preset === "shepherd-pbr" ? 0.25 : 1} fogScale={preset === "shepherd-pbr" ? 0.45 : 1} />
       {shakes.length > 0 && <ShakeDriver comps={shakes} />}
       {preset === "shepherd-photoreal" ? (
         <group ref={envGroup}>
           <PhotoValley sheep={comps.find((c): c is Extract<typeof c, { kind: "procedural" }> => c.kind === "procedural" && c.element === "sheep") ?? null} />
+        </group>
+      ) : preset === "shepherd-pbr" ? (
+        <group ref={envGroup}>
+          <PbrValley />
         </group>
       ) : preset !== "none" ? (
         <group ref={envGroup}>

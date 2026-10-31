@@ -491,8 +491,37 @@ export function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueActi
             <Switch size="sm" checked={!!a.loop} onCheckedChange={(v) => onChange({ ...a, loop: v })} />
             loop
           </label>
+          <span className="flex items-center gap-1" title="Seconds cut off the top of the file: it starts this far in (the timeline's left edge drags it).">
+            {lbl("start at s")}
+            <NumberInput className="h-6 w-12" value={a.trimStart ?? 0} min={0} step={0.5} onChange={(v) => onChange({ ...a, trimStart: Math.max(0, v) || undefined })} />
+          </span>
           {lbl("fade in s")}
           <NumberInput className="h-6 w-12" value={a.fadeIn ?? 0} min={0} step={0.5} onChange={(v) => onChange({ ...a, fadeIn: Math.max(0, v) })} />
+          <span className="flex items-center gap-1" title="Seconds it fades out over before its file ends. A fade that stops it earlier is set where it stops (drag the timeline's right edge).">
+            {lbl("fade out s")}
+            <NumberInput className="h-6 w-12" value={a.fadeOut ?? 0} min={0} step={0.5} onChange={(v) => onChange({ ...a, fadeOut: Math.max(0, v) || undefined })} />
+          </span>
+          <div className="flex w-full flex-wrap items-center gap-1">
+            {(a.levels ?? []).map((l, i) => {
+              const set = (p: Partial<typeof l>) => onChange({ ...a, levels: (a.levels ?? []).map((x, j) => (j === i ? { ...x, ...p } : x)) });
+              return (
+                <span key={i} className="flex items-center gap-1 rounded border border-border px-1" title="A level change as it plays (a duck under a voice). Timed from when the sound starts; it carries into the next scene with the sound.">
+                  {lbl("after s")}
+                  <NumberInput className="h-6 w-12" value={l.at} min={0} step={0.5} onChange={(v) => set({ at: Math.max(0, v) })} />
+                  {lbl("to %")}
+                  <NumberInput className="h-6 w-12" value={Math.round(l.level * 100)} min={0} max={100} step={5} onChange={(v) => set({ level: Math.max(0, Math.min(100, v)) / 100 })} />
+                  {lbl("over s")}
+                  <NumberInput className="h-6 w-12" value={l.fade ?? 0} min={0} step={0.5} onChange={(v) => set({ fade: Math.max(0, v) })} />
+                  <button type="button" className="px-0.5 text-muted-foreground hover:text-destructive" aria-label="Remove level change" onClick={() => onChange({ ...a, levels: (a.levels ?? []).filter((_, j) => j !== i) })}>
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+            <button type="button" className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10.5px] text-muted-foreground hover:text-foreground" onClick={() => onChange({ ...a, levels: [...(a.levels ?? []), { at: 10, level: 0.6, fade: 2 }] })}>
+              + level change
+            </button>
+          </div>
           {lbl("as it starts")}
           {sel(
             !a.fadeOthers ? "keep" : a.fadeOthers.which === "all" ? "all" : "chosen",

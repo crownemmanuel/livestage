@@ -5,12 +5,14 @@
 import { ListOrdered, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import type { EndRef } from "@/core/timeline";
 import type { CueAction, Scene } from "@/core/types";
+import { NumberInput } from "@/ui/fields";
 import { useProject } from "@/store/project";
 import { ACTION_INFO, ActionRow, focusCue, MENU, type MenuType } from "./CueEditor";
 
-/** What the pop-up shows: one action to edit, or a moment to add one at. */
-export type ActionTarget = { cue: number; action: number } | { at: number; where: string };
+/** What the pop-up shows: one action to edit (a sound: with the action that stops it), or a moment to add one at. */
+export type ActionTarget = { cue: number; action: number; endBy?: EndRef } | { at: number; where: string };
 
 export function ActionDialog({ scene, target, onClose, onAdd }: { scene: Scene; target: ActionTarget | null; onClose: () => void; onAdd: (t: MenuType, at: number) => void }) {
   const scenes = useProject((s) => s.project.scenes);
@@ -20,6 +22,18 @@ export function ActionDialog({ scene, target, onClose, onAdd }: { scene: Scene; 
   const typeOf = (a: CueAction): MenuType => (a.type === "send" ? (a.message.type === "hog" ? "hog" : a.message.type === "stagelight" ? "stagelight" : a.message.type === "sound" ? "soundApp" : "send") : a.type);
   const info = action ? ACTION_INFO[typeOf(action)] : null;
   const change = (fn: (actions: CueAction[]) => void) => editing && useProject.getState().updateScene(scene.id, (s) => fn(s.cues[editing.cue].actions));
+  // A sound stopped in this scene by a fade: its length is set on that action.
+  const by = editing?.endBy && (editing.endBy.kind === "fade" || editing.endBy.kind === "fadeOthers") ? editing.endBy : null;
+  const stopper = by ? scene.cues[by.cue]?.actions[by.action] : undefined;
+  const stopFade = stopper?.type === "audio.fade" ? stopper.fade : stopper?.type === "sound" ? stopper.fadeOthers?.fade : undefined;
+  const shared = stopper?.type === "sound" || (stopper?.type === "audio.fade" && (stopper.which === "all" || stopper.which.length > 1));
+  const setStopFade = (v: number) =>
+    by &&
+    useProject.getState().updateScene(scene.id, (s) => {
+      const a = s.cues[by.cue]?.actions[by.action];
+      if (a?.type === "audio.fade") a.fade = Math.max(0, v);
+      else if (a?.type === "sound" && a.fadeOthers) a.fadeOthers.fade = Math.max(0, v);
+    });
 
   return (
     <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
@@ -47,6 +61,16 @@ export function ActionDialog({ scene, target, onClose, onAdd }: { scene: Scene; 
                 }}
               />
             </div>
+            {by && stopFade !== undefined && (
+              <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/20 p-2 text-[11px]">
+                <span className="text-muted-foreground">Fades out over</span>
+                <NumberInput className="h-6 w-14" value={stopFade} min={0} step={0.5} onChange={setStopFade} />
+                <span className="text-muted-foreground">
+                  s, stopped by cue {by.cue + 1}
+                  {shared ? " (the same fade stops other audio too)" : ""}. Drag the block's right edge to move where.
+                </span>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Button
                 size="xs"

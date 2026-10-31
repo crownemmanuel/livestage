@@ -37,8 +37,12 @@ export function BuilderMode() {
   // Fold the scene list and the components panel away to give the timeline the width.
   const [leftOpen, setLeftOpen] = useStored("build.left", true);
   const [rightOpen, setRightOpen] = useStored("build.right", true);
-  // Rehearsing here: hear the preview's sounds on this computer.
-  useEffect(() => startPreviewAudio(), []);
+  // Rehearsing here: hear the preview's sounds on this computer. Opening Build holds the preview first, so
+  // nothing plays until Play (or Space).
+  useEffect(() => {
+    hold("preview", "pause");
+    return startPreviewAudio();
+  }, []);
   // A rehearsal run belongs to Build: leaving stops it.
   useEffect(() => () => stopRun(), []);
   // A cue opened from the timeline shows in the run sheet.

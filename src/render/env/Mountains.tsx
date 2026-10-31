@@ -8,7 +8,7 @@ import { cached } from "../cache";
 import { useStage } from "../frame";
 import { debugHidden } from "../debug";
 
-type Preset = "lion-hills" | "shepherd-valley";
+type Preset = "lion-hills" | "shepherd-valley" | "shepherd-pbr";
 
 /** A curved ridge band around the stage; several stacked give aerial perspective. */
 function ridgeGeometry(dist: number, height: number, rough: number, seed: number) {

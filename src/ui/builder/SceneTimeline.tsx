@@ -2,15 +2,16 @@
 // it out), and editable by dragging (core/timelineEdit.ts). Click or drag in the ruler or an empty
 // stretch of a track to see the preview at that moment. Drag a block to move it: it belongs to the
 // cue whose stretch it lands in, with the rest as that action's delay (Alt: copy). Drag a block's
-// right edge to move where it stops (a sound's fade, a layer's hide, an effect's stop). Drag a cue
+// right edge to move where it stops (a sound's fade, a layer's hide, an effect's stop). Drag the dot in
+// a sound's top-left or top-right corner to set how long it fades in or out. Drag a cue
 // flag to move a timed cue, or a GO line to plan the wait before it. Click a block to open its cue
 // in the run sheet; Delete removes it; ⌘Z / ⇧⌘Z undo and redo timeline edits.
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Clapperboard, Clock, CloudRain, Film, ChartGantt, Hand, Lightbulb, Link2, Minus, Music, Pause, Play, Plus, Redo2, Square, Undo2, Video, Volume2, VolumeX } from "lucide-react";
+import { Clapperboard, Clock, CloudRain, Film, ChartGantt, FoldVertical, Hand, Lightbulb, Link2, Minus, Music, Pause, Play, Plus, Redo2, Square, Undo2, UnfoldVertical, Video, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
-import { addActionAt, anchorAt, endDraggable, endFade, moveCue, placeAction, removeAction, setItemEnd } from "@/core/timelineEdit";
+import { addActionAt, anchorAt, endDraggable, endFade, fadeInDraggable, fadeOutDraggable, fadeOutFrom, moveCue, placeAction, removeAction, setFadeIn, setFadeOut, setItemEnd, setItemStart, startDraggable, trimAt } from "@/core/timelineEdit";
 import { sceneTimeline, type ItemTone, type SceneTimeline as Layout, type TimelineCue, type TimelineItem, type TimelineTrack, type TrackGroup } from "@/core/timeline";
 import type { Asset, Cue, Scene } from "@/core/types";
 import { previewAtTime, startRun, stopRun, useRun } from "@/engine/operator";
@@ -27,7 +28,9 @@ import { openMarkers } from "../PreviewTools";
 const LABEL_W = 148;
 
 type ScrubProps = Pick<React.HTMLAttributes<HTMLDivElement>, "onPointerDown" | "onPointerMove" | "onDoubleClick">;
-const ROW_H = 20;
+/** Lane height: compact fits many tracks, wide (the default) leaves room to grab and read blocks. */
+const ROW_H = { compact: 20, wide: 52 } as const;
+type RowSize = keyof typeof ROW_H;
 const RULER_H = 18;
 const CUE_H = 24;
 
@@ -140,6 +143,7 @@ export function SceneTimeline() {
   const scene = useProject(selectedScene);
   const [sound, setSound] = useState(() => readStored("sound", true));
   const [zoom, setZoom] = useState(1);
+  const [rows, setRows] = useState<RowSize>(() => (readStored<string>("rows", "wide") === "compact" ? "compact" : "wide"));
   const [draft, setDraft] = useState<{ scene: Scene; label: string } | null>(null);
   const [selected, setSelected] = useState<ItemRef | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -264,6 +268,19 @@ export function SceneTimeline() {
           <Redo2 />
         </Button>
         <span className="mx-1 h-4 w-px bg-border" />
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={rows === "wide" ? "Compact tracks" : "Wide tracks"}
+          title={rows === "wide" ? "Compact tracks: fit more on screen" : "Wide tracks: taller, easier to edit"}
+          onClick={() => {
+            const next = rows === "wide" ? "compact" : "wide";
+            setRows(next);
+            writeStored("rows", next);
+          }}
+        >
+          {rows === "wide" ? <FoldVertical /> : <UnfoldVertical />}
+        </Button>
         <Button size="icon-xs" variant="ghost" aria-label="Zoom out" title="Zoom out" disabled={zoom <= 1} onClick={() => setZoom((z) => Math.max(1, z / 1.5))}>
           <Minus />
         </Button>
@@ -307,7 +324,7 @@ export function SceneTimeline() {
             }
           }}
         >
-          <Body scene={scene} tl={tl} pps={pps} />
+          <Body scene={scene} tl={tl} pps={pps} rowH={ROW_H[rows]} />
         </div>
         <ActionDialog scene={scene} target={dialog} onClose={() => setDialog(null)} onAdd={add} />
       </div>
@@ -455,7 +472,7 @@ function landing(base: Layout, scene: Scene, t: number): string {
   return `cue ${a.cue + 1} (${kind}: ${scene.cues[a.cue]?.name.slice(0, 28) ?? ""}) + ${a.delay.toFixed(1)} s`;
 }
 
-const Body = memo(function Body({ scene, tl, pps }: { scene: Scene; tl: Layout; pps: number }) {
+const Body = memo(function Body({ scene, tl, pps, rowH }: { scene: Scene; tl: Layout; pps: number; rowH: number }) {
   const edit = useEditor();
   const width = Math.ceil(Math.max(tl.end, edit.base.end) * pps) + 16;
   const starts = edit.base.cues.map((c) => c.start);
@@ -496,7 +513,7 @@ const Body = memo(function Body({ scene, tl, pps }: { scene: Scene; tl: Layout; 
   };
   const goLines = tl.cues.filter((c) => c.mode === "go" && c.start != null);
   const rows: { track: TimelineTrack; items: TimelineItem[] }[] = tl.tracks.map((track) => ({ track, items: tl.items.filter((it) => it.track === track.id) }));
-  const totalH = RULER_H + CUE_H + rows.reduce((n, r) => n + r.track.lanes * ROW_H + 4, 0);
+  const totalH = RULER_H + CUE_H + rows.reduce((n, r) => n + r.track.lanes * rowH + 4, 0);
 
   return (
     <div className="relative" style={{ width: LABEL_W + width, minHeight: totalH }}>
@@ -522,7 +539,7 @@ const Body = memo(function Body({ scene, tl, pps }: { scene: Scene; tl: Layout; 
       </div>
       {/* tracks */}
       {rows.map(({ track, items }) => (
-        <TrackRow key={track.id} track={track} items={items} width={width} pps={pps} scene={scene} scrubProps={scrubProps} onSeek={seek} />
+        <TrackRow key={track.id} track={track} items={items} width={width} pps={pps} rowH={rowH} scene={scene} scrubProps={scrubProps} onSeek={seek} />
       ))}
       {/* GO lines over every track */}
       <div className="pointer-events-none absolute bottom-0 z-10" style={{ left: LABEL_W, top: RULER_H, width }}>
@@ -625,9 +642,9 @@ function HoldHandle({ cue, scene, pps }: { cue: TimelineCue; scene: Scene; pps: 
   );
 }
 
-function TrackRow({ track, items, width, pps, scene, scrubProps, onSeek }: { track: TimelineTrack; items: TimelineItem[]; width: number; pps: number; scene: Scene; scrubProps: ScrubProps; onSeek: (t: number) => void }) {
+function TrackRow({ track, items, width, pps, rowH, scene, scrubProps, onSeek }: { track: TimelineTrack; items: TimelineItem[]; width: number; pps: number; rowH: number; scene: Scene; scrubProps: ScrubProps; onSeek: (t: number) => void }) {
   const Icon = track.componentId && scene.components.find((c) => c.id === track.componentId)?.kind === "clipActor" ? Clapperboard : GROUP_ICON[track.group];
-  const h = track.lanes * ROW_H + 4;
+  const h = track.lanes * rowH + 4;
   return (
     <div className="flex" style={{ height: h }}>
       <button
@@ -642,7 +659,7 @@ function TrackRow({ track, items, width, pps, scene, scrubProps, onSeek }: { tra
       </button>
       <div className="relative border-b border-border/50" style={{ width }} {...scrubProps}>
         {items.map((it) => (
-          <Block key={it.id} it={it} pps={pps} scene={scene} onSeek={onSeek} />
+          <Block key={it.id} it={it} pps={pps} rowH={rowH} scene={scene} onSeek={onSeek} />
         ))}
       </div>
     </div>
@@ -679,16 +696,19 @@ function describe(it: TimelineItem, scene: Scene): string {
   if (it.requested != null) lines.push(`Asked for at ${fmt(it.requested)}; waits for the clip before to reach a clean cut`);
   if (it.loop) lines.push("Loops until something replaces or stops it");
   if (it.open) lines.push("Length not known yet");
+  if (it.trim) lines.push(`Starts ${it.trim.toFixed(1)} s into its file`);
+  if (it.fadeIn) lines.push(`Fades in over ${it.fadeIn} s`);
+  for (const l of it.levels ?? []) lines.push(`To ${Math.round(l.level * 100)}% at ${fmt(it.start + l.at)}${l.fade ? ` over ${l.fade} s` : ""}`);
   if (it.fadeFrom != null) lines.push(`Fades out from ${fmt(it.fadeFrom)}`);
   if (it.carriesOut) lines.push("Keeps playing into the next scene");
-  const how = [it.cue != null && it.action != null ? "drag: move (Alt: copy)" : null, endDraggable(it) ? "drag the right edge: where it stops" : null, "click: select", it.action != null || it.markerHost ? "double-click: settings" : it.cue != null ? "double-click: open the cue" : "double-click: preview here"].filter(Boolean);
+  const how = [it.cue != null && it.action != null ? "drag: move (Alt: copy)" : null, startDraggable(it) ? "drag the left edge: trim its start" : null, fadeInDraggable(it) || fadeOutDraggable(it) ? "drag a top corner dot: fade length" : null, endDraggable(it) ? "drag the right edge: where it stops" : null, "click: select", it.action != null || it.markerHost ? "double-click: settings" : it.cue != null ? "double-click: open the cue" : "double-click: preview here"].filter(Boolean);
   lines.push(how.join(" · "));
   return lines.join("\n");
 }
 
 const isSelected = (it: TimelineItem, r: ItemRef | null) => !!r && it.cue === r.cue && it.action === r.action && it.track === r.track;
 
-function Block({ it, pps, scene, onSeek }: { it: TimelineItem; pps: number; scene: Scene; onSeek: (t: number) => void }) {
+function Block({ it, pps, rowH, scene, onSeek }: { it: TimelineItem; pps: number; rowH: number; scene: Scene; onSeek: (t: number) => void }) {
   const edit = useEditor();
   // Click selects (and selects its component, if it has one); double-click opens its cue in the run sheet.
   const open = () => {
@@ -699,7 +719,7 @@ function Block({ it, pps, scene, onSeek }: { it: TimelineItem; pps: number; scen
   };
   const openCue = () => {
     if (it.markerHost) openMarkers(it.markerHost);
-    else if (it.cue != null && it.action != null && scene.cues[it.cue]?.actions[it.action]) edit.open({ cue: it.cue, action: it.action });
+    else if (it.cue != null && it.action != null && scene.cues[it.cue]?.actions[it.action]) edit.open({ cue: it.cue, action: it.action, endBy: it.endable === "sound" ? it.endBy : undefined });
     else if (it.cue != null && scene.cues[it.cue]) focusCue(scene.cues[it.cue].id);
     else onSeek(it.start);
   };
@@ -731,7 +751,7 @@ function Block({ it, pps, scene, onSeek }: { it: TimelineItem; pps: number; scen
     onClick: (e: React.MouseEvent) => e.detail === 0 && open(),
     onDoubleClick: openCue,
   };
-  const top = 2 + it.lane * ROW_H;
+  const top = 2 + it.lane * rowH;
   if (it.end <= it.start)
     return (
       <button
@@ -739,18 +759,22 @@ function Block({ it, pps, scene, onSeek }: { it: TimelineItem; pps: number; scen
         aria-label={it.label}
         {...common}
         className={cn("absolute z-[1] size-[9px] -translate-x-1/2 rotate-45 rounded-[1px] border hover:scale-125", POINT[it.tone] ?? TONE[it.tone], movable && "cursor-grab", sel && "ring-2 ring-white")}
-        style={{ left: it.start * pps, top: top + 5 }}
+        style={{ left: it.start * pps, top: top + (rowH - 3) / 2 - 4.5 }}
       />
     );
   const left = it.start * pps;
   const w = Math.max(3, (it.end - it.start) * pps);
   const endable = endDraggable(it);
+  const startable = startDraggable(it);
+  const fadeInable = fadeInDraggable(it);
+  const fadeOutable = fadeOutDraggable(it);
+  const fadeHandle = "absolute top-0 z-[3] size-2.5 -translate-x-1/2 cursor-ew-resize rounded-full border border-black/40 bg-white/70 opacity-0 group-hover:opacity-100 hover:scale-125 hover:bg-white";
   return (
     <button
       type="button"
       {...common}
-      className={cn("absolute overflow-hidden rounded-[3px] border px-1 text-left text-[10.5px] leading-[14px] hover:brightness-125", TONE[it.tone], it.carriedIn && "rounded-l-none border-l-2", it.carriesOut && "rounded-r-none", movable && "cursor-grab active:cursor-grabbing", sel && "ring-2 ring-white")}
-      style={{ left, width: w, top, height: ROW_H - 3, ...(it.carriedIn ? { borderLeftStyle: "dashed" } : {}), ...(it.loop ? STRIPES : {}), ...(it.open ? { maskImage: "linear-gradient(to right, black 60%, transparent)" } : {}) }}
+      className={cn("group absolute overflow-hidden rounded-[3px] border px-1 text-left text-[10.5px] leading-[14px] hover:brightness-125", TONE[it.tone], it.carriedIn && "rounded-l-none border-l-2", it.carriesOut && "rounded-r-none", movable && "cursor-grab active:cursor-grabbing", sel && "ring-2 ring-white")}
+      style={{ left, width: w, top, height: rowH - 3, ...(it.carriedIn ? { borderLeftStyle: "dashed" } : {}), ...(it.loop ? STRIPES : {}), ...(it.open ? { maskImage: "linear-gradient(to right, black 60%, transparent)" } : {}) }}
     >
       {it.requested != null && <span className="pointer-events-none absolute inset-y-0 left-0 w-px bg-white/40" />}
       <span className="pointer-events-none relative z-[1] block truncate">
@@ -758,13 +782,75 @@ function Block({ it, pps, scene, onSeek }: { it: TimelineItem; pps: number; scen
         {it.label}
         {it.carriesOut && " ▸ next scene"}
       </span>
+      {it.levels?.map((l, i) => (
+        <span key={`lv${i}`} className="pointer-events-none absolute top-0 h-1.5 w-px bg-white/80" style={{ left: l.at * pps }} />
+      ))}
       {it.marks?.map((m, i) => (
         <span key={i} className="pointer-events-none absolute bottom-0 h-1.5 w-px bg-armed" style={{ left: (m - it.start) * pps }} />
       ))}
+      {!!it.fadeIn && (
+        <span
+          className="pointer-events-none absolute inset-y-0 left-0"
+          style={{ width: Math.max(2, Math.min(it.fadeIn, it.end - it.start) * pps), background: "linear-gradient(to bottom left, transparent 49%, rgba(0,0,0,0.5) 51%)" }}
+        />
+      )}
       {it.fadeFrom != null && it.fadeFrom < it.end && (
         <span
           className="pointer-events-none absolute inset-y-0 right-0"
           style={{ width: Math.max(2, (it.end - Math.max(it.start, it.fadeFrom)) * pps), background: "linear-gradient(to bottom right, transparent 49%, rgba(0,0,0,0.5) 51%)" }}
+        />
+      )}
+      {startable && (
+        <span
+          role="slider"
+          aria-label={`Trim the start of “${it.label}”`}
+          aria-valuenow={it.trim ?? 0}
+          className="absolute inset-y-0 left-0 z-[2] w-1.5 cursor-ew-resize hover:bg-white/50"
+          onPointerDown={(e) => {
+            startDrag(e, {
+              t0: it.start,
+              pps,
+              snap: snapper(edit.base, pps, scene.id, it),
+              edit,
+              op: (t) => ({ op: (s, base) => setItemStart(s, base, it, t), label: startLabel(it, t, edit.base, scene) }),
+            });
+          }}
+        />
+      )}
+      {fadeInable && (
+        <span
+          role="slider"
+          aria-label={`Fade-in of “${it.label}”`}
+          aria-valuenow={it.fadeIn ?? 0}
+          className={cn(fadeHandle, it.fadeIn && "opacity-80")}
+          style={{ left: Math.max(5, (it.fadeIn ?? 0) * pps) }}
+          onPointerDown={(e) => {
+            startDrag(e, {
+              t0: it.start + (it.fadeIn ?? 0),
+              pps,
+              snap: snapper(edit.base, pps, scene.id, it),
+              edit,
+              op: (t) => ({ op: (s) => setFadeIn(s, it, t), label: `“${it.label.slice(0, 32)}” fades in over ${Math.max(0, Math.min(t, it.fadeFrom ?? it.end) - it.start).toFixed(1)} s` }),
+            });
+          }}
+        />
+      )}
+      {fadeOutable && (
+        <span
+          role="slider"
+          aria-label={`Fade-out of “${it.label}”`}
+          aria-valuenow={it.fadeFrom != null ? it.end - it.fadeFrom : 0}
+          className={cn(fadeHandle, it.fadeFrom != null && "opacity-80")}
+          style={{ left: Math.min(w - 5, ((it.fadeFrom ?? it.end) - it.start) * pps) }}
+          onPointerDown={(e) => {
+            startDrag(e, {
+              t0: it.fadeFrom ?? it.end,
+              pps,
+              snap: snapper(edit.base, pps, scene.id, it),
+              edit,
+              op: (t) => ({ op: (s, base) => setFadeOut(s, base, it, t), label: `“${it.label.slice(0, 32)}” fades out over ${(it.end - fadeOutFrom(it, t)).toFixed(1)} s, ending at ${fmt(it.end)}` }),
+            });
+          }}
         />
       )}
       {endable && (
@@ -786,6 +872,12 @@ function Block({ it, pps, scene, onSeek }: { it: TimelineItem; pps: number; scen
       )}
     </button>
   );
+}
+
+function startLabel(it: TimelineItem, t: number, base: Layout, scene: Scene): string {
+  const { start, trim } = trimAt(it, t);
+  const cut = trim > 0 ? `${trim.toFixed(1)} s cut off its top` : "from the top of its file";
+  return `“${it.label.slice(0, 32)}” starts at ${fmt(start)}, ${cut} → ${landing(base, scene, start)}`;
 }
 
 function endLabel(it: TimelineItem, t: number, base: Layout, scene: Scene): string {

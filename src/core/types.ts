@@ -90,7 +90,7 @@ export interface TimerOverlayStyle {
 
 // ---------------------------------------------------------------- scene
 
-export type EnvironmentPreset = "lion-hills" | "shepherd-valley" | "shepherd-photoreal" | "none";
+export type EnvironmentPreset = "lion-hills" | "shepherd-valley" | "shepherd-photoreal" | "shepherd-pbr" | "none";
 
 /** Camera "look": HDR render with bloom and a filmic grade, like a cinema camera. */
 export interface LookSettings {
@@ -589,6 +589,12 @@ export type CueAction =
       loop?: boolean;
       /** Seconds to fade this sound in from silence (absent/0 = starts at full level). */
       fadeIn?: number;
+      /** Seconds cut off the top of the file: it starts that far in (a loop goes back to there). Absent/0 = from the top. */
+      trimStart?: number;
+      /** Seconds it fades out over before its file ends (absent/0 = plays to the last sample). */
+      fadeOut?: number;
+      /** Level changes as it plays (a duck under a voice), timed from its start; they go with it into the next scene. */
+      levels?: SoundLevel[];
       /** When this sound starts, fade other audio out (null/absent = leave it). See AudioFadeOut. */
       fadeOthers?: AudioFadeOut | null;
     }
@@ -966,6 +972,12 @@ export interface SoundEvent {
   loop?: boolean;
   /** Seconds it fades in over (see the sound action). */
   fadeIn?: number;
+  /** Seconds into the file it starts from (see the sound action): at time t it is at (t - at) / 1000 + trimStart. */
+  trimStart?: number;
+  /** Seconds it fades out over before its file ends (see the sound action). */
+  fadeOut?: number;
+  /** Level changes as it plays (see the sound action). */
+  levels?: SoundLevel[];
   /** Other audio this sound fades out as it starts (see the sound action). */
   fadeOthers?: AudioFadeOut;
   /**
@@ -974,6 +986,16 @@ export interface SoundEvent {
    * may be long before now (or before the run). An event with no assetId only fades others (a chase's stop).
    */
   chase?: boolean;
+}
+
+/**
+ * A sound's level changing as it plays: `at` seconds after it starts it glides over `fade` seconds to `level`
+ * (a share of its volume: 0.6 = 40% down) and stays there until the next change.
+ */
+export interface SoundLevel {
+  at: number;
+  level: number;
+  fade?: number;
 }
 
 /**

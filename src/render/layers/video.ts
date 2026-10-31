@@ -18,6 +18,8 @@ export interface VideoHandle {
   correcting: -1 | 0 | 1;
   /** Parked (told to stay paused) since it last played: its next start lands on the clock first. */
   parked: boolean;
+  /** The element has shown a frame of its current file (see useVideo): only then may it be uploaded outside three's own frame callback. */
+  framed: boolean;
 }
 
 // ---------------------------------------------------------------- sync diagnostics
@@ -198,15 +200,31 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
     const releaseFrame = alpha ? uploadAsVideoFrame(v, texture) : null;
-    // VideoTexture refreshes on requestVideoFrameCallback, which WebKit does not fire for a
-    // seek on a paused video: scrubbing or parking a paused clip would never reach the screen.
+    // Uploading an element that has no frame yet hangs WebKit: texImage2D asks the GPU process for the
+    // picture over a sync IPC, and a player with none waits up to a second for it in a nested run loop that
+    // serves every window's requests. At a TAKE, with new players in the operator and the output, those
+    // waits nested a dozen deep and starved the output's request for seconds (sampled 2026-10-30: output
+    // stuck in texImage2D -> videoFrameForCurrentTime, GPU process 12 deep in
+    // waitForVideoOutputMediaDataWillChange), so the watchdog rebuilt the window and the music cut out.
+    // VideoTexture uploads on requestVideoFrameCallback, which only fires once there is a frame (on
+    // load, on each frame played, and after a paused seek on macOS 26). Our own extra uploads below wait
+    // for the first one of each file.
+    const hasFrameCallback = "requestVideoFrameCallback" in v;
+    const arm = () => {
+      handle.framed = !hasFrameCallback;
+      if (hasFrameCallback) v.requestVideoFrameCallback(() => (handle.framed = true));
+    };
+    // Belt and braces for a paused frame (a seek while paused, a clip parked on its first frame).
     const refresh = () => {
-      texture.needsUpdate = true;
+      if (handle.framed) texture.needsUpdate = true;
     };
     v.addEventListener("seeked", refresh);
     v.addEventListener("loadeddata", refresh);
+    // A new file (a cold clip warmed) has no frame until it shows one.
+    v.addEventListener("loadstart", arm);
     hostVideo(v);
-    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true };
+    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true, framed: false };
+    arm();
     setH(handle);
     return () => {
       v.pause();
@@ -279,12 +297,16 @@ export interface SyncWant {
  * - beyond it: one step of ±NUDGE until the drift is back under SETTLED (hysteresis);
  * - beyond SEEK_DRIFT, or across a loop wrap: a hard seek, at most every SEEK_GAP ms,
  *   then SEEK_GRACE ms for the player to settle before drift is judged again.
+ * A video playing sound is never nudged: every playbackRate change rebuilds its audio stream, which on a
+ * Bluetooth headset is a link renegotiation heard as stutter (measured on AirPods: ~8 rate changes in 6 s,
+ * ~100 CoreAudio overloads in 13 s). It plays at its own rate and is re-seated with a seek past SOUND_SEEK_DRIFT.
  * Paused and reverse playback park on the wanted frame as before (that is what scrubbing needs).
  */
 const DEAD_BAND = { sound: 0.12, muted: 0.05 };
 const SETTLED = { sound: 0.04, muted: 0.02 };
 const NUDGE = 0.05;
 const SEEK_DRIFT = 0.6;
+const SOUND_SEEK_DRIFT = 0.25;
 const SEEK_GAP = 1500;
 const SEEK_GRACE = 1000;
 
@@ -310,7 +332,7 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
       seekTo(h, want.time, wallMs);
     }
     // Belt and braces for a paused frame: upload it whenever the parked time changes, even if no 'seeked' event arrives.
-    if (!v.seeking && v.readyState >= 2 && v.currentTime !== h.shownTime) {
+    if (h.framed && !v.seeking && v.readyState >= 2 && v.currentTime !== h.shownTime) {
       h.shownTime = v.currentTime;
       h.texture.needsUpdate = true;
     }
@@ -338,8 +360,11 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
     setRate(h, rate);
   } else if (v.seeking || sinceSeek < SEEK_GRACE) {
     // Let the player land and settle before judging drift again.
-  } else if ((Math.abs(drift) > SEEK_DRIFT || wrapped) && sinceSeek > SEEK_GAP) {
+  } else if ((Math.abs(drift) > (v.muted ? SEEK_DRIFT : SOUND_SEEK_DRIFT) || wrapped) && sinceSeek > SEEK_GAP) {
     seekTo(h, want.time, wallMs);
+    h.correcting = 0;
+    setRate(h, rate);
+  } else if (!v.muted) {
     h.correcting = 0;
     setRate(h, rate);
   } else {

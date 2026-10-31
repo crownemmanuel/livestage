@@ -4,6 +4,7 @@ import { clamp, lerp, sceneNow, smoothstep } from "@/core/clock";
 import { num, str } from "@/core/effects";
 import { effectLevel, envAt, evalFraming } from "@/core/runtime";
 import type { ActorPoses, Asset, SceneRuntime, TransitionSpec } from "@/core/types";
+import { hdriSun } from "./env/pbr/hdri";
 
 export type SlotRole = "preview" | "live" | "outgoing";
 
@@ -207,6 +208,8 @@ export function updateFrame(f: FrameState, rt: SceneRuntime, wall: number) {
   f.sunDir.set(ce * Math.cos(az) * 0.9, Math.sin(sunElev), ce * Math.sin(az)).normalize();
   // Photographic environments: the sun must sit where it is in the photo (low, front-left).
   if (rt.scene.environment === "shepherd-photoreal") f.sunDir.set(-0.62 * ce, Math.sin(sunElev), -0.78 * ce).normalize();
+  // HDRI-lit valley: the sun's azimuth is read from the sky image itself (its brightest texel).
+  if (rt.scene.environment === "shepherd-pbr") f.sunDir.set(hdriSun.x * ce, Math.sin(sunElev), hdriSun.z * ce).normalize();
   f.moonDir.set(-0.5, 0.42, -0.8).normalize();
 
   sampleStops(ZENITH, f.tod, f.zenith).lerp(tmp.copy(STORM_Z).multiplyScalar(1 - f.tod * 0.85), f.storm * 0.85);

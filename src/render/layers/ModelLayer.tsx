@@ -1,5 +1,5 @@
 import { Component, Suspense, useEffect, useMemo, type ReactNode } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -36,20 +36,37 @@ export function ModelLayer({ comp }: { comp: ModelComponent }) {
 
 function GlbModel({ comp, url, assetId }: { comp: ModelComponent; url: string; assetId: string }) {
   const { getRt, frame } = useStage();
+  const anisotropy = useThree((s) => Math.min(8, s.gl.capabilities.getMaxAnisotropy()));
   const gltf = useGLTF(url);
   const presence = useLayerPresence(comp.id, 1);
-  const { model, mixer, materials } = useMemo(() => {
+  const { model, mixer, materials, surfaces, unlit } = useMemo(() => {
     const model = cloneSkinned(gltf.scene);
     const materials: THREE.MeshStandardMaterial[] = [];
+    const surfaces: { material: THREE.Material; opacity: number; transparent: boolean; depthWrite: boolean }[] = [];
+    const unlit: { material: THREE.MeshBasicMaterial; color: THREE.Color }[] = [];
     model.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
       const m = Array.isArray(mesh.material) ? mesh.material.map((x) => x.clone()) : mesh.material.clone();
       mesh.material = m;
+      // Ground and walls viewed at a grazing angle otherwise shimmer badly.
+      // GLTF textures are shared: tune sampling, never replace or dispose them here.
+      for (const material of Array.isArray(m) ? m : [m]) {
+        surfaces.push({ material, opacity: material.opacity, transparent: material.transparent, depthWrite: material.depthWrite });
+        if ((material as THREE.MeshBasicMaterial).isMeshBasicMaterial) {
+          unlit.push({ material: material as THREE.MeshBasicMaterial, color: (material as THREE.MeshBasicMaterial).color.clone() });
+        }
+        for (const value of Object.values(material)) {
+          if (value instanceof THREE.Texture && value.anisotropy !== anisotropy) {
+            value.anisotropy = anisotropy;
+            value.needsUpdate = true;
+          }
+        }
+      }
       for (const mm of Array.isArray(m) ? m : [m]) if ((mm as THREE.MeshStandardMaterial).isMeshStandardMaterial) materials.push(mm as THREE.MeshStandardMaterial);
     });
-    return { model, mixer: new THREE.AnimationMixer(model), materials };
-  }, [gltf]);
+    return { model, mixer: new THREE.AnimationMixer(model), materials, surfaces, unlit };
+  }, [gltf, anisotropy]);
   const base = useMemo(() => materials.map((m) => ({ color: m.color.clone(), roughness: m.roughness, metalness: m.metalness })), [materials]);
 
   useEffect(() => {
@@ -79,13 +96,21 @@ function GlbModel({ comp, url, assetId }: { comp: ModelComponent; url: string; a
     return a;
   }, [mixer, gltf, comp.clip]);
 
+  const tint = useMemo(() => new THREE.Color(comp.material.tint), [comp.material.tint]);
+
   useFrame(() => {
     const rt = getRt();
     const v = presence();
     model.visible = v > 0.01;
-    materials.forEach((m) => {
-      m.transparent = v < 0.999;
-      m.opacity = v;
+    surfaces.forEach(({ material, opacity, transparent, depthWrite }) => {
+      material.transparent = transparent || v < 0.999;
+      material.opacity = opacity * v;
+      material.depthWrite = depthWrite && v > 0.5;
+    });
+    // glTF unlit materials contain photographed/baked light. Apply the same
+    // timestamp-driven night/storm grade as media, without lighting them twice.
+    unlit.forEach(({ material, color }) => {
+      material.color.copy(color).multiply(tint).multiply(frame.mediaGrade);
     });
     model.position.set(...comp.position);
     model.rotation.set(...(comp.rotation.map((d) => (d * Math.PI) / 180) as [number, number, number]));

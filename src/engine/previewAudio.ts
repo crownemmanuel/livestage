@@ -6,7 +6,7 @@
 // puts every sound where the clock says it is.
 
 import { sceneNow } from "@/core/clock";
-import { filePos, soundLives, type SoundLife } from "@/core/music";
+import { filePos, scheduleLevels, soundLives, type SoundLife } from "@/core/music";
 import { useSyncExternalStore } from "react";
 import { useShow } from "@/store/show";
 
@@ -93,7 +93,8 @@ let generation = 0;
 function sync() {
   const rt = useShow.getState().preview;
   const gen = ++generation;
-  if (!enabled || !rt || rt.clock.pausedAt !== null) {
+  // Only while Build mode follows the preview: nothing else would ever stop these sounds.
+  if (!active || !enabled || !rt || rt.clock.pausedAt !== null) {
     silenceAll();
     last = rt ? { key: rt.key, base: rt.clock.base, paused: rt.clock.pausedAt !== null } : null;
     return;
@@ -126,21 +127,39 @@ function sync() {
     }
     const pos = filePos(l.ev, t, buf.duration);
     if (pos >= buf.duration && !l.ev.loop) continue;
+    const trim = Math.min(Math.max(0, l.ev.trimStart ?? 0), buf.duration);
     const ac = audio();
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.loop = !!l.ev.loop;
+    if (l.ev.loop && trim > 0) {
+      src.loopStart = trim;
+      src.loopEnd = buf.duration;
+    }
     const gain = ac.createGain();
-    const at = ac.currentTime + Math.max(0, -pos);
+    const at = ac.currentTime + Math.max(0, trim - pos);
+    const from = Math.max(trim, pos);
     // A fade-in that is still under way carries on from where it is.
     const fadeIn = l.ev.fadeIn ?? 0;
-    const inLeft = fadeIn - Math.max(0, pos);
+    const inLeft = fadeIn - Math.max(0, pos - trim);
     if (fadeIn > 0 && inLeft > 0) {
       gain.gain.setValueAtTime(Math.max(0.0001, l.ev.volume * (1 - inLeft / fadeIn)), at);
       gain.gain.linearRampToValueAtTime(l.ev.volume, at + inLeft);
     } else gain.gain.value = l.ev.volume;
-    src.connect(gain).connect(ac.destination);
-    src.start(at, Math.max(0, pos));
+    // Its own fade-out into the end of the file.
+    const fadeOut = l.ev.loop ? 0 : (l.ev.fadeOut ?? 0);
+    if (fadeOut > 0) {
+      const left = buf.duration - from;
+      const into = fadeOut - left;
+      gain.gain.setValueAtTime(into > 0 ? Math.max(0.0001, l.ev.volume * (1 - into / fadeOut)) : l.ev.volume, Math.max(at + Math.max(0, -into), at + Math.max(0, inLeft)));
+      gain.gain.linearRampToValueAtTime(0.0001, at + left);
+    }
+    if (l.ev.levels?.length) {
+      const env = ac.createGain();
+      scheduleLevels(env.gain, l.ev.levels, (t - l.ev.at) / 1000, ac.currentTime);
+      src.connect(env).connect(gain).connect(ac.destination);
+    } else src.connect(gain).connect(ac.destination);
+    src.start(at, from);
     const v: Voice = { evId: l.ev.id, src, gain, fadeFrom: null };
     src.onended = () => {
       if (voices.get(key) === v) voices.delete(key);

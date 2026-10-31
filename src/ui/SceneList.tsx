@@ -11,6 +11,7 @@ import { sceneCodes, sceneRows } from "@/core/groups";
 import type { Scene, SceneGroup } from "@/core/types";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
+import { hold } from "@/engine/transport";
 
 function fmtDur(s: number | null) {
   if (!s) return null;
@@ -203,7 +204,12 @@ function SceneItem({ scene: s, code, group, live, selected, groups }: { scene: S
   return (
     <li className="group/scene relative">
       <button
-        onClick={() => selectScene(s.id)}
+        onClick={() => {
+          const other = s.id !== useProject.getState().selectedSceneId;
+          selectScene(s.id);
+          // In Build a scene comes up held, so its sound does not start until Play (or Space).
+          if (other && useProject.getState().mode === "builder") hold("preview", "pause");
+        }}
         className={cn("flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors", selected ? "bg-accent ring-1 ring-preview/70" : "hover:bg-accent/50")}
       >
         <div className={cn("relative aspect-video shrink-0 overflow-hidden rounded-md bg-black", group ? "w-[92px]" : "w-[104px]", live && "on-air-frame")}>
