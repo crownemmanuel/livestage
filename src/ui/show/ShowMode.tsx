@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRightLeft,
   ChevronRight,
-  CircleDot,
+  Minus,
+  Plus,
   Clapperboard,
   Crosshair,
   Eye,
@@ -33,7 +34,6 @@ import {
   X,
   Megaphone,
   Timer,
-  Zap,
   Cable,
   Check,
   MonitorPlay,
@@ -42,9 +42,10 @@ import {
   CircleHelp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { sceneNow } from "@/core/clock";
+import { clamp, now, sceneNow } from "@/core/clock";
 import { nextCueIsAuto } from "@/core/runtime";
 import type { CueAction, TransitionKind, TransitionSpec } from "@/core/types";
 import { describeMessage, useIo } from "@/engine/io";
@@ -52,7 +53,7 @@ import { cancelPending, cueControl, pendingCount, takeScene } from "@/engine/ope
 import { StageView } from "@/render/StageView";
 import { selectedScene, useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
-import { NumberInput, SelectBox } from "../fields";
+import { SelectBox } from "../fields";
 import { FramingBar, FramingOverlay, Timeline } from "../PreviewTools";
 import { SceneList, useSceneCodes } from "../SceneList";
 import { FireIcon, fireLabel } from "../builder/FireField";
@@ -150,7 +151,7 @@ function Monitors() {
 
   return (
     <div className="border-b border-border px-3 pb-3 pt-2">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-[minmax(0,1fr)_clamp(128px,12vw,168px)_minmax(0,1fr)] items-start gap-3">
         <div className="min-w-0">
           <MonitorHeader kind="preview" info="Rehearse here: selecting a scene, firing its cues, zooming and scrubbing never reach the audience until you take it live.">
             <SceneTitle scene={scene} />
@@ -162,6 +163,7 @@ function Monitors() {
           <PreviewTransport />
           <Timeline editable={false} />
         </div>
+        <TakeBar />
         <div className="min-w-0">
           <MonitorHeader kind="program" info="Exactly what the LED wall shows right now.">
             {program.standby ? <span className="text-muted-foreground">Standby picture</span> : <SceneTitle scene={program.runtime?.scene} />}
@@ -184,7 +186,6 @@ function Monitors() {
           <LiveNextCue />
         </div>
       </div>
-      <TakeBar />
     </div>
   );
 }
@@ -227,7 +228,7 @@ function PreviewTransport() {
   const dur = rt?.scene.duration;
   const shots = rt?.scene.cameraShots ?? [];
   return (
-    <div className="mt-2 flex items-center gap-1 text-[12px]">
+    <div className="mt-2 flex flex-wrap items-center gap-1 text-[12px]">
       <Tip label={paused ? "Play the preview" : "Pause the preview"}>
         <Button size="icon-sm" variant="ghost" className="size-8" disabled={!rt} onClick={() => useShow.getState().dispatch("preview", { type: "clock", op: paused ? "resume" : "pause" })}>
           {paused ? <Play /> : <Pause />}
@@ -275,47 +276,111 @@ function TakeBar() {
   const spec: TransitionSpec | null = next ?? scene?.transition ?? null;
   const setSpec = (p: Partial<TransitionSpec>) => spec && useShow.getState().setNextTransition({ ...spec, ...p });
   const videos = assets.filter((a) => a.type === "video");
-  const isLiveAlready = !!scene && program.runtime?.scene.id === scene.id && !program.standby;
   const busy = !!program.transition;
+  const wipe = useRef<HTMLSpanElement>(null);
+  const startedAt = program.transition?.startedAt;
+  const duration = program.transition?.spec.duration;
+  // Read the show's clock rather than starting a separate UI timer: the wipe follows the actual TAKE.
+  useEffect(() => {
+    if (startedAt === undefined || duration === undefined) return;
+    let frame = 0;
+    const tick = () => {
+      const progress = clamp((now() - startedAt) / Math.max(1, duration * 1000), 0, 1);
+      if (wipe.current) wipe.current.style.transform = `scaleX(${progress})`;
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(frame);
+  }, [startedAt, duration]);
 
   return (
-    <div className="mt-3 flex items-center gap-2 rounded-lg border border-border bg-well p-2">
-      <Tip label="How the wall changes to the preview scene when you take it live">
-        <ArrowRightLeft className="ml-1 size-4 shrink-0 text-muted-foreground" />
-      </Tip>
-      <SelectBox className="h-9 w-[150px]" value={spec?.kind ?? "crossfade"} onChange={(kind) => setSpec({ kind })} options={TRANSITIONS} />
+    <div className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-border bg-gradient-to-b from-card to-well p-2 shadow-[inset_0_1px_0_0_rgb(255_255_255/0.04)]" role="group" aria-label="Transition controls">
+      <div className="flex h-4 items-center justify-between gap-1 text-[11px] font-semibold text-foreground/80">
+        Transition
+        {next && (
+          <Tip label="Back to the scene's own transition">
+            <Button size="icon-sm" variant="ghost" className="size-5" aria-label="Reset transition" onClick={() => useShow.getState().setNextTransition(null)}>
+              <RotateCcw className="size-3" />
+            </Button>
+          </Tip>
+        )}
+      </div>
+      <SelectBox className="h-7 w-full min-w-0 px-2 text-[11px]" value={spec?.kind ?? "crossfade"} onChange={(kind) => setSpec({ kind })} options={TRANSITIONS} />
       {spec && spec.kind !== "cut" && spec.kind !== "video" && (
-        <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
-          <NumberInput className="h-9 w-16" value={spec.duration} min={0} max={60} step={0.5} onChange={(duration) => setSpec({ duration })} />s
-        </div>
+        <DurationPicker value={spec.duration} onChange={(duration) => setSpec({ duration })} />
       )}
       {spec?.kind === "wipe" && (
-        <SelectBox className="h-9 w-[100px]" value={spec.direction ?? "left"} onChange={(direction) => setSpec({ direction })} options={[{ value: "left", label: "From left" }, { value: "right", label: "From right" }, { value: "up", label: "From top" }, { value: "down", label: "From bottom" }]} />
+        <SelectBox className="h-7 w-full min-w-0 px-2 text-[11px]" value={spec.direction ?? "left"} onChange={(direction) => setSpec({ direction })} options={[{ value: "left", label: "From left" }, { value: "right", label: "From right" }, { value: "up", label: "From top" }, { value: "down", label: "From bottom" }]} />
       )}
       {spec?.kind === "video" && (
         <SelectBox
-          className="h-9 w-[180px]"
+          className="h-7 w-full min-w-0 px-2 text-[11px]"
           value={spec.videoAssetId ?? "__none__"}
           onChange={(v) => setSpec({ videoAssetId: v === "__none__" ? null : v })}
           options={[{ value: "__none__", label: videos.length ? "Choose video" : "No videos imported" }, ...videos.map((v) => ({ value: v.id, label: v.name }))]}
         />
       )}
-      {next && (
-        <Tip label="Back to the scene's own transition">
-          <Button size="icon-sm" variant="ghost" className="size-8" onClick={() => useShow.getState().setNextTransition(null)}>
-            <RotateCcw />
-          </Button>
-        </Tip>
-      )}
       <Button
         disabled={!scene || busy}
         onClick={() => scene && void takeScene(scene.id)}
-        className="ml-auto h-11 min-w-[200px] gap-2 rounded-lg bg-live font-key text-[17px] font-bold tracking-wide text-white shadow-[0_0_20px_-6px] shadow-live hover:bg-live/85 disabled:bg-muted disabled:shadow-none"
-        title="Ctrl/⌘ + Enter"
+        className={cn("relative h-9 w-full min-w-0 overflow-hidden rounded-lg border border-white/10 px-1 font-key text-[13px] font-bold text-white shadow-[0_0_22px_-6px] shadow-live disabled:opacity-100", busy || !scene ? "bg-muted shadow-none" : "bg-gradient-to-b from-red-500 to-red-600 hover:from-red-400 hover:to-red-500")}
+        aria-busy={busy}
+        title={busy ? "Transition in progress" : "Ctrl/⌘ + Enter"}
       >
-        {busy ? <Loader2 className="size-5 animate-spin" /> : <CircleDot className="size-5" />}
-        {busy ? "Transitioning" : isLiveAlready ? "Re-take live" : "Take live"}
+        {busy && <span key={startedAt} ref={wipe} aria-hidden="true" className="pointer-events-none absolute inset-0 origin-left bg-gradient-to-b from-red-500 to-red-600" style={{ transform: "scaleX(0)" }} />}
+        <span className="relative flex items-center justify-center gap-2">
+          <Play className="size-4 shrink-0 fill-current" /> Take Live
+        </span>
       </Button>
+      <Button
+        variant="secondary"
+        disabled={!scene || busy}
+        onClick={() => scene && void takeScene(scene.id, { ...scene.transition, kind: "cut", duration: 0 })}
+        className="h-7 w-full rounded-md border border-border bg-gradient-to-b from-muted to-card font-key text-[12px] font-semibold"
+        title="Switch the preview to live immediately"
+      >
+        Cut
+      </Button>
+    </div>
+  );
+}
+
+/** One-second steps or a custom duration typed directly into the centre. */
+function DurationPicker({ value, onChange }: { value: number; onChange: (seconds: number) => void }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const parsed = () => text.trim() && Number.isFinite(Number(text)) && Number(text) >= 0 ? Number(text) : value;
+  const commit = () => {
+    const seconds = parsed();
+    setText(String(seconds));
+    onChange(seconds);
+  };
+  const step = (by: number) => {
+    const seconds = Math.max(0, Math.round((parsed() + by) * 1000) / 1000);
+    setText(String(seconds));
+    onChange(seconds);
+  };
+  return (
+    <div className="flex flex-col gap-0.5">
+      <label htmlFor="transition-duration" className="text-[11px] text-muted-foreground">Duration (seconds)</label>
+      <div className="flex h-7 min-w-0 items-center rounded-lg border border-input bg-input/20 p-0.5 shadow-inner focus-within:ring-1 focus-within:ring-ring">
+        <Button variant="secondary" size="icon-sm" className="size-6 shrink-0 rounded-md" aria-label="Decrease duration by one second" disabled={parsed() <= 0} onMouseDown={(e) => e.preventDefault()} onClick={() => step(-1)}>
+          <Minus className="size-3.5" />
+        </Button>
+        <Input
+          id="transition-duration"
+          aria-label="Transition duration in seconds"
+          inputMode="decimal"
+          className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-0.5 text-center text-[13px] font-semibold tabular shadow-none focus-visible:ring-0"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
+        />
+        <Button variant="secondary" size="icon-sm" className="size-6 shrink-0 rounded-md" aria-label="Increase duration by one second" onMouseDown={(e) => e.preventDefault()} onClick={() => step(1)}>
+          <Plus className="size-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -456,7 +521,7 @@ function CueList() {
                   ) : (
                     <Tip label={live ? "Fire this cue on the live wall" : "Fire this cue in the preview"}>
                       <Button size="icon-sm" className={cn("size-9 rounded-lg", live ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70")} onClick={() => cueControl.fire(target, i)}>
-                        <Zap />
+                        <Play className="fill-current" />
                       </Button>
                     </Tip>
                   )}

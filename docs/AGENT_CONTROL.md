@@ -53,7 +53,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `connections` | Connected app windows; choose desktop or browser |
 | **Run the show** | |
 | `select_scene` | Load a scene in the preview |
-| `take` [LIVE] | TAKE a scene live, optional transition |
+| `take` [LIVE] | TAKE a scene live, optional transition. The Show Mode **Cut** button uses this same operation with `transition: {kind: "cut", duration: 0}`. |
 | `cue` | GO (also fires a next cue that would fire by itself, early), fire (a cue's Fire now button: rewinds the list to that cue), set pointer, and back, skip, repeat (no buttons on screen; agents and MIDI/OSC only), on preview or program. On program, GO or fire during a video transition ends the transition so the cue shows at once |
 | `preview_step` | Preview the scene as it looks after N cues |
 | `preview_time` | Preview the scene as it looks N seconds into its Build timeline (GO cues at their planned holds), held on that frame |
