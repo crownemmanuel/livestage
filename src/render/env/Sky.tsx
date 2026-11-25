@@ -127,7 +127,9 @@ export function Sky() {
     u.uStorm.value = frame.storm;
     u.uTime.value = frame.ts;
     u.uFlash.value = frame.flash;
-    u.uWind.value = frame.windNow;
+    // Cloud drift is time x (0.4 + wind): the steady strength, not the per-frame gust (windNow),
+    // which made the clouds slosh by an amount growing with scene time.
+    u.uWind.value = frame.windStrength;
     u.uAmbient.value = frame.ambient;
     mesh.position.copy(camera.position);
     mesh.visible = !debugHidden.has("sky");

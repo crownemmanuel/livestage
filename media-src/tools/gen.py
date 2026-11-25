@@ -8,14 +8,14 @@ folder's prompts.jsonl (genlog), so `genlog.py find` can trace it.
 Keys live in the repo-root .env (git-ignored): KREATORFLOW_API_KEY and KIE_API_KEY.
 
     # draft a clip (Seedance 2.0 Fast, 720p, 21:9, 10 s), first/last frames from local files
-    python3 media-src/tools/gen.py video media-src/scene1/bg01-hd --out left-palm.mp4 \
+    python3 media-src/tools/gen.py video "$EDITS/scene1/bg01-hd" --out left-palm.mp4 \
         --prompt-file left-palm.txt --first start.png --last end.png --scenes 2.1 --status draft
 
     # same clip on Kling 3.0 (Kie.ai). Kling has no 21:9: pass 16:9 frames, or let it follow the frame
-    python3 media-src/tools/gen.py video media-src/scene1/bg01-hd --model kling --out left-palm-kling.mp4 ...
+    python3 media-src/tools/gen.py video "$EDITS/scene1/bg01-hd" --model kling --out left-palm-kling.mp4 ...
 
     # upscale an approved clip 2x with Topaz (Kie.ai), writes left-palm-2x.mp4
-    python3 media-src/tools/gen.py upscale media-src/scene1/bg01-hd --in left-palm.mp4 --scenes 2.1
+    python3 media-src/tools/gen.py upscale "$EDITS/scene1/bg01-hd" --in left-palm.mp4 --scenes 2.1
 
     python3 media-src/tools/gen.py status kreatorflow <job id>      # poll a job again
     python3 media-src/tools/gen.py models                           # KreatorFlow model list (durations, limits)
@@ -256,10 +256,8 @@ def log(folder, entry):
 
 
 def rel(p):
-    try:
-        return str(Path(p).resolve().relative_to(ROOT))
-    except ValueError:
-        return str(p)
+    from workspace import short
+    return short(p)
 
 
 def cmd_video(a):
@@ -354,7 +352,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     v = sub.add_parser("video", help="generate a clip")
-    v.add_argument("folder", help="media-src folder the output and its log line go in")
+    v.add_argument("folder", help="folder under the show's edits/ (workspace) the output and its log line go in")
     v.add_argument("--out", required=True, help="output file name, e.g. 1.2-lion-idle.mp4")
     v.add_argument("--prompt")
     v.add_argument("--prompt-file")

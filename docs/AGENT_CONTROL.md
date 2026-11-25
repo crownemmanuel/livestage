@@ -54,25 +54,26 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | **Run the show** | |
 | `select_scene` | Load a scene in the preview |
 | `take` [LIVE] | TAKE a scene live, optional transition |
-| `cue` | GO (also fires a next cue that would fire by itself, early), fire (a cue's Fire now button: rewinds the list to that cue), set pointer, and back, skip, repeat (no buttons on screen; agents and MIDI/OSC only), on preview or program. On program, GO or fire during a video transition ends the transition so the cue shows at once |
+| `cue` | GO (also fires a next cue that would fire by itself, early), fire (a cue's Fire now button: rewinds the list to that cue; on a cue already passed, the scene goes back to that cue's moment and plays on), set pointer, and back, skip, repeat (no buttons on screen; agents and MIDI/OSC only), on preview or program. On program, GO or fire during a video transition ends the transition so the cue shows at once |
 | `preview_step` | Preview the scene as it looks after N cues |
 | `preview_time` | Preview the scene as it looks N seconds into its Build timeline (GO cues at their planned holds), held on that frame |
 | `preview_run` | Run the show in the preview from a scene's TAKE: GO cues fire at their planned holds, takes go on to the next scene; `on: false` stops it |
 | `run_action` | Run any cue action now. Existing `effect` actions control Day / Night, rain and fog; `effect.param` adjusts their live settings. Unlit photographic/baked GLB surfaces follow the same night/storm grade as media. |
-| `transport` [LIVE] | Hold, resume, seek or nudge the scene's video in its own seconds; the live wall scrubs only while held ([VIDEO_TRANSPORT.md](VIDEO_TRANSPORT.md)) |
-| `seek`, `freeze` [LIVE] | Scene clock: jump (program only while held), freeze / resume |
+| `transport` [LIVE] | Hold, resume, seek or nudge the scene's video in its own seconds, or the whole scene (source `scene`); a seek replays the run to that moment; the live wall scrubs only while held ([VIDEO_TRANSPORT.md](VIDEO_TRANSPORT.md)) |
+| `seek`, `freeze` [LIVE] | Scene clock: put the scene at any moment as the run played to there (program only while held), freeze / resume |
 | `cancel_pending`, `restart_preview` | Pending actions, restart the preview |
 | `blackout`, `standby` [LIVE] | Wall-wide controls |
 | `timer`, `timer_overlay`, `announce` [LIVE] | Show timers, on-screen clock, front-of-house announcements |
 | `mixer` [LIVE] | Live mixer: list what is sounding on the wall (cue sounds, video with sound) and trim one source's volume, or reset all. The trims are the show's sound levels, saved in the show file (`project/mix`) |
 | `music_at` | The cue sounds that would be playing just before a cue fires (or as a scene is taken) had the show run in sequence, and how far into each file: what the music chase starts on a jump. Shows the chase setting (`project/chaseMusic`), the learned GO timings (`project/cueTimings`) and what the live wall plays now |
 | `audio_output` [LIVE] | List this computer's audio outputs (native CoreAudio devices on the Mac; every Windows playback device through the webview; Dante flagged in both; on Windows `danteNotListed` says when Dante Virtual Soundcard needs switching to WDM mode) and route all of the app's sound to one, or back to the computer default |
+| `speakers` [LIVE] | This computer's surround speakers (left, right, back1, back2): which sound card and channel each one is; set them, or play a test burst on one. Sound actions, announcements (`speakers`) and thunder (`thunderSpeakers`) choose among them |
 | `next_transition` | Transition for the next TAKE |
 | `io_send` [LIVE] | Send MIDI / OSC / MSC / Hog 4 (lighting items by name; `master` raises a fader before a GO) or StageMics commands (`{type: "sound", op: "mic", who: "Joseph", live: false}` …; StageMics acts on the dLive). Returns the exact OSC sent for StageMics and StageLight |
 | `stagelight_send` [LIVE] | Send one StageLight command now (GO page or cue, named trigger, back, stop, clear, blackout, master, library cue, LED wall) and report the OSC sent and StageLight's answer: a refusal with its reason, or its GO announcement |
 | `io_inject` | Simulate an incoming MIDI/OSC message to test triggers |
 | `output_window` [LIVE] | Open, close or check the audience output |
-| `ui` | Show/Build mode, selected component, isolate (solo), hidden components |
+| `ui` | Show/Build/Room mode, selected component, solo (one component, or one sound as `sound:<assetId>`), hidden components; in Room mode `roomView` (which room photo) and `roomShow` (an image or video asset on the wall, or the preview). Room photos are `project.roomViews` (schema topic `room`) |
 | `update_live_scene` [LIVE] | Push edits onto the running live scene |
 | **Build** | |
 | `scene_create`, `scene_update`, `scene_duplicate`, `scene_delete`, `scene_move`, `scene_group` | Scenes and running order |
@@ -81,12 +82,14 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `cue_add`, `cue_update`, `cue_remove`, `cue_move` | Cues, with any actions and fire mode. A StageLight action is `{type: "send", message: {type: "stagelight", op: "goCue", page: "Act 1", cue: "4"}}`; StageLight messages are checked (a trigger needs a name, GO cue a page) and tidied. To edit or remove one action, `get_scene`, change the list and `cue_update` it back |
 | `markers` | Time markers by video name: list every video's markers (and what each does), add or change one (`{name, at, message}` or `cue` to run instead), remove one. Markers send from PROGRAM only, once per pass, never while scrubbing |
 | `stagelight_link` | Set up the StageLight link (on, IP, port, mirror TAKE / GO as triggers `scene.<code>` / `cue.<code>.<n>`), ping it and return `stagelight_status` |
+| `wall_video` | Wall video link ([WALL_VIDEO_LINK.md](WALL_VIDEO_LINK.md)): switch the stream of what the LED wall shows (the operator's PROGRAM monitor, or the preview: `source`) to StageLight's virtual LED wall on or off and set its width, fps, JPEG quality and port; returns its status (state, viewers, frames sent / dropped, fps, kbps, capture and encode ms, StageLight's latency / jitter / light delay, preview light cues sent / held). Off at every start; while on, preview cues also send their StageLight messages to an unarmed StageLight |
 | `upsert`, `remove` | Any list by path: camera shots, media markers, clips, timers, announcements, triggers, OSC targets, Hog items, presets (StageLight messages in markers are checked as in `cue_add`) |
 | `patch` | Set / merge / insert / remove anything in the show file in one change; returns the old values |
-| `asset_import`, `asset_remove` | Library media (local file or URL). An imported video is probed and, when the wall would not play it well, re-encoded into the wall format on the way in (`optimise: false` to only report) |
-| `asset_check` | What a video is (codec, size, frame rate, keyframe gap, bit rate, audio) and whether the wall plays it well: problems with severity and whether optimising fixes them; the encoder tools on this machine |
-| `asset_optimise` | Re-encode a library video into the wall format (H.264, fitted to the wall, keyframe every ½ s, fast start); `force` when no problem was found |
+| `asset_import`, `asset_remove` | Library media (local file or URL). An imported video is probed and, when the wall would not play it well, re-encoded into the wall format on the way in (`optimise: false` to only report). `alphaPacked: true` imports a file that is already alpha-packed |
+| `asset_check` | What a video is (codec, size, frame rate, keyframe gap, bit rate, audio) and whether the wall plays it well: problems with severity and whether optimising fixes them; for a transparent video, whether it can be alpha-packed (`canPack`, `pack`); the encoder tools on this machine |
+| `asset_optimise` | Re-encode a library video into the wall format (H.264, fitted to the wall, keyframe every ½ s, fast start); `force` when no problem was found. `pack: true` turns a transparent video (VP9 / VP8 alpha WebM, ProRes 4444) into an alpha-packed one: one H.264 file, colour over matte, that plays on the GPU path on Mac and Windows (`alphaPacked` on the asset, `<name>.packed.mp4` beside the source). The files the asset no longer plays stay on disk and come back in `kept`, to be archived |
 | `asset_reveal` | Open the operator's Finder / Explorer with an asset's file selected (desktop app only) |
+| `workspace_get`, `workspace_set` | This computer's workspace folder (default `~/Documents/LiveStage`): where each show's media finals live as `<root>/<show>/<scene folder>/<images\|audio\|video\|other>/<file>`. `workspace_get` reports the root, the show folder and how many assets have a `rel`; `workspace_set {path}` changes the root (moves nothing). `list_assets` shows each asset's `rel` and `playsFrom`; `schema` topic `assets` explains `rel` |
 | `output_settings` | Wall size, scaling, standby card, timer style |
 | `project` | Save, export/import a show file, reset to the demo, rename. Import needs `levels` (`local` or `incoming`) when the file's sound levels differ from this computer's |
 | `package_export` | Write a show package (show file, versioned manifest, every media file) for another computer; desktop app ([SHOW_PACKAGE.md](SHOW_PACKAGE.md)) |
@@ -116,6 +119,7 @@ stagelight_link {enabled: true, host: "127.0.0.1", port: 1461}        → reach 
 cue_add {scene: "1.2", cue: {name: "Lights up", actions: [{type: "send", message: {type: "stagelight", op: "goCue", page: "Act 1", cue: "4"}}]}}
 markers {scene: "1.2", op: "upsert", media: "Lion", clip: "Run", marker: {name: "Leap", at: 1.8, message: {type: "stagelight", op: "trigger", name: "lion.leap"}}}
 stagelight_send {message: {op: "trigger", name: "lion.leap"}}           → wire + StageLight's answer (only when the operator asks: it may move real lights)
+wall_video {on: true}                                                  → state "connected", viewers, fps; off again with {on: false}
 ```
 
 `node mcp/check.ts --build` exercises the StageLight cue action and markers in a scratch scene (nothing is sent); `node mcp/check.ts --stagelight 1471` pings, GOes and fires a trigger on a development desk through the app, then puts the link back.

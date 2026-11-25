@@ -281,9 +281,9 @@ fn asio_drivers() -> Vec<String> {
 
 /// The ASIO drivers installed on this computer (Windows; empty elsewhere).
 #[tauri::command]
-pub fn audio_asio_drivers() -> Vec<String> {
+pub async fn audio_asio_drivers() -> Vec<String> {
     #[cfg(windows)]
-    return asio_drivers();
+    return tauri::async_runtime::spawn_blocking(asio_drivers).await.unwrap_or_default();
     #[cfg(not(windows))]
     Vec::new()
 }
@@ -298,20 +298,28 @@ pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+// The commands below talk to CoreAudio, whose property reads and writes can block for a while
+// when a device reconfigures (Dante Virtual Soundcard restarting, an interface replugged). They run
+// on a worker thread, never the main thread, which carries every window's IPC and events.
+
+async fn off_main<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
+}
+
 /// Every audio output device of this computer. Empty where native listing is not supported.
 #[tauri::command]
-pub fn audio_outputs() -> Vec<AudioOutputDevice> {
+pub async fn audio_outputs() -> Vec<AudioOutputDevice> {
     #[cfg(target_os = "macos")]
-    return mac::outputs();
+    return off_main(mac::outputs).await.unwrap_or_default();
     #[cfg(not(target_os = "macos"))]
     Vec::new()
 }
 
 /// Send the app's sound to this device (by UID).
 #[tauri::command]
-pub fn audio_output_route(uid: String) -> Result<(), String> {
+pub async fn audio_output_route(uid: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    return mac::route(&uid);
+    return off_main(move || mac::route(&uid)).await?;
     #[cfg(not(target_os = "macos"))]
     {
         let _ = uid;
@@ -321,7 +329,12 @@ pub fn audio_output_route(uid: String) -> Result<(), String> {
 
 /// Give the computer back its own default output.
 #[tauri::command]
-pub fn audio_output_restore() -> Result<(), String> {
+pub async fn audio_output_restore() -> Result<(), String> {
+    off_main(restore_default_output).await?
+}
+
+/// Put the default output back (also called directly when the app quits).
+pub fn restore_default_output() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     return mac::restore();
     #[cfg(not(target_os = "macos"))]

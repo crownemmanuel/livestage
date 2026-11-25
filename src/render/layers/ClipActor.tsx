@@ -1,18 +1,18 @@
 import { useEffect, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { clipStateAt } from "@/core/clipActor";
+import { clipStateAt, type ClipState } from "@/core/clipActor";
 import { defaultActorLayout } from "@/core/factories";
 import { playableUrl } from "@/core/platform";
-import type { ClipActorComponent, ClipDef, EffectComponent, SceneRuntime } from "@/core/types";
+import type { ClipActorComponent, ClipActorRuntime, ClipDef, EffectComponent, Scene, SceneRuntime } from "@/core/types";
 import { mixLevel } from "@/store/show";
 import { videoAudioFade } from "@/core/runtime";
 import { QUAD_VERT } from "../glsl";
 import { isCutOutShake, shakeOffset } from "../effects/Impact";
 import { useStage } from "../frame";
-import { applyMediaSettings, makeMediaMaterial, setMap } from "./mediaMaterial";
+import { applyMediaSettings, makeMediaMaterial, setMap, setPacked } from "./mediaMaterial";
 import { plateKenBurns, plateParallax } from "./MediaLayers";
-import { setWarm, syncVideo, useVideo, videoDuration, type VideoHandle } from "./video";
+import { setWarm, syncVideo, useVideo, videoAlpha, videoAspect, videoDuration, type VideoHandle } from "./video";
 
 /**
  * Full-frame video actor: one quad per clip, only the scheduled one visible.
@@ -21,13 +21,31 @@ import { setWarm, syncVideo, useVideo, videoDuration, type VideoHandle } from ".
 export function ClipActorLayer({ comp, order = 0 }: { comp: ClipActorComponent; order?: number }) {
   // Every clip's video, so a quad can tell whether the clip taking over from it has a frame yet.
   const handles = useMemo(() => new Map<string, VideoHandle>(), []);
+  // The actor's state this frame, worked out by the first quad that asks and shared with the rest:
+  // every quad of an eight-clip actor used to schedule the actor again for itself.
+  const shared = useMemo<SharedState>(() => ({ t: NaN, art: undefined, st: null }), []);
   return (
     <>
       {comp.clips.map((c) => (
-        <ClipQuad key={c.id} actor={comp} clip={c} order={order} handles={handles} />
+        <ClipQuad key={c.id} actor={comp} clip={c} order={order} handles={handles} shared={shared} />
       ))}
     </>
   );
+}
+
+interface SharedState {
+  t: number;
+  actor?: ClipActorComponent;
+  art: ClipActorRuntime | undefined;
+  st: ClipState | null;
+}
+
+function actorStateAt(shared: SharedState, actor: ClipActorComponent, art: ClipActorRuntime | undefined, t: number): ClipState {
+  if (shared.st && shared.t === t && shared.art === art && shared.actor === actor) return shared.st;
+  shared.t = t;
+  shared.art = art;
+  shared.actor = actor;
+  return (shared.st = clipStateAt(actor, art, t));
 }
 
 /** Does the cue the GO pointer is on start this clip? */
@@ -45,9 +63,12 @@ uniform float ground;   // uv.y of the ground contact line (y up)
 uniform float squash;   // how flat the shadow lies
 uniform float shear;    // sideways lean from the sun direction
 uniform float opacity;
+uniform float packed;     // alpha-packed video: the matte is the bottom half of the frame (mediaMaterial.ts)
+uniform float packedEdge;
 varying vec2 vUv;
 float alphaAt(vec2 p) {
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 0.0;
+  if (packed > 0.5) return clamp((texture2D(map, vec2(p.x, clamp(p.y * 0.5, packedEdge, 0.5 - packedEdge))).g - 0.02) / 0.96, 0.0, 1.0);
   return texture2D(map, p).a;
 }
 void main() {
@@ -68,14 +89,14 @@ void main() {
 }
 `;
 
-function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; clip: ClipDef; order: number; handles: Map<string, VideoHandle> }) {
+function ClipQuad({ actor, clip, order, handles, shared }: { actor: ClipActorComponent; clip: ClipDef; order: number; handles: Map<string, VideoHandle>; shared: SharedState }) {
   const { assets, getRt, frame, canvasW, canvasH, audio, role } = useStage();
   // Cut-out mode prefers the transparent version of the clip when one exists.
   const srcId = actor.matted && clip.cutoutAssetId ? clip.cutoutAssetId : clip.assetId;
   const asset = srcId ? assets.find((a) => a.id === srcId) : undefined;
   // Cold until the frame loop decides the clip can come next (see setWarm): an actor with ten
   // clips must not hold ten decoders in every window for the one clip that is on screen.
-  const video = useVideo(playableUrl(asset), { lazy: true, alpha: asset?.hasAlpha });
+  const video = useVideo(playableUrl(asset), { lazy: true, ...videoAlpha(asset) });
   useEffect(() => {
     if (!video) return;
     handles.set(clip.id, video);
@@ -97,7 +118,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
         transparent: true,
         depthWrite: false,
         depthTest: false,
-        uniforms: { map: { value: null }, flipX: { value: 0 }, ground: { value: 0.25 }, squash: { value: 0.22 }, shear: { value: 0.6 }, opacity: { value: 0.5 } },
+        uniforms: { map: { value: null }, flipX: { value: 0 }, ground: { value: 0.25 }, squash: { value: 0.22 }, shear: { value: 0.6 }, opacity: { value: 0.5 }, packed: { value: 0 }, packedEdge: { value: 0 } },
       }),
     [],
   );
@@ -127,7 +148,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
       return;
     }
     const art = rt.clipActors?.[actor.id];
-    const st = clipStateAt(actor, art, frame.t);
+    const st = actorStateAt(shared, actor, art, frame.t);
     const dur = videoDuration(video) || clip.duration;
     // Crossfade: for `crossfade` seconds after a clip starts, the clip it replaced keeps playing underneath.
     const xf = Math.max(0, actor.crossfade ?? 0) * 1000;
@@ -135,9 +156,21 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
     let fadeIn = 1;
     let outgoing: ReturnType<typeof clipStateAt> | null = null;
     if (xf > 0 && since < xf && st.segment) {
-      fadeIn = Math.max(0, since / xf);
-      const prev = clipStateAt(actor, { segments: (art?.segments ?? []).filter((x) => x !== st.segment) }, frame.t);
-      if (prev.clip && prev.clip.id !== st.clip?.id) outgoing = prev;
+      // What was on screen just before this segment began. Idle hand-overs and idle turns are not in
+      // the cue's segment list (clipStateAt makes them up), so look back in time rather than dropping
+      // the segment from the list: dropping it found the same idle again, nothing to fade from, and
+      // the clip faded up from nothing, a visible blink at every hand-over.
+      const before = clipStateAt(actor, art, st.segment.at - 1);
+      if (before.clip && before.clip.id === st.clip?.id) {
+        fadeIn = 1; // same clip carrying on (a loop restart): nothing to fade
+      } else {
+        fadeIn = Math.max(0, since / xf);
+        if (before.clip && before.segment) {
+          const d = Math.max(0.05, before.clip.duration);
+          const el = (frame.t - before.segment.at) / 1000;
+          outgoing = { ...before, localT: before.clip.loop ? el % d : Math.min(el, d) };
+        }
+      }
     }
     const isOut = outgoing?.clip?.id === clip.id;
     const active = st.clip?.id === clip.id || isOut;
@@ -180,7 +213,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
     mat.uniforms.grade.value.copy(frame.mediaGrade);
 
     // Frame rectangle: fitted to the plate's aspect and framing so it lines up with the background.
-    const aspect = actor.frameAspect > 0 ? actor.frameAspect : video.video.videoWidth / Math.max(1, video.video.videoHeight);
+    const aspect = actor.frameAspect > 0 ? actor.frameAspect : videoAspect(video);
     const canvasAspect = canvasW / canvasH;
     let w = canvasW;
     let h = canvasH;
@@ -224,6 +257,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
       shadow.position.copy(mesh.position);
       const u = shadowMat.uniforms;
       u.map.value = video.texture;
+      setPacked(shadowMat, video.texture);
       u.flipX.value = mirror ? 1 : 0;
       u.ground.value = 1 - L.pivotY;
       u.shear.value = mirror ? -0.6 : 0.6;
@@ -240,8 +274,15 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
   );
 }
 
+/** The scene's shake effects (a scene object never changes: an edit makes a new one). Most scenes have none. */
+const shakesOf = new WeakMap<Scene, EffectComponent[]>();
+
 function cutOutShake(rt: SceneRuntime | null | undefined, t: number) {
-  const comps = (rt?.scene.components ?? []).filter((c): c is EffectComponent => c.kind === "effect" && c.effect === "shake" && isCutOutShake(c, rt));
+  if (!rt) return null;
+  let shakes = shakesOf.get(rt.scene);
+  if (!shakes) shakesOf.set(rt.scene, (shakes = rt.scene.components.filter((c): c is EffectComponent => c.kind === "effect" && c.effect === "shake")));
+  if (!shakes.length) return null;
+  const comps = shakes.filter((c) => isCutOutShake(c, rt));
   if (!comps.length) return null;
   const o = shakeOffset(comps, rt, t);
   return o.peak > 0 ? o : null;

@@ -111,6 +111,16 @@ An asset (`src/core/types.ts`) can carry a portable `file` key (and `macFile` fo
 
 New media that the build computer adds to `public/media/scenes/<Group>/` (for example re-rendered high-quality clips swapped in place) is picked up by the next package automatically, because export reads every asset the show references.
 
+## The workspace (phase 1 of the move off the repo)
+
+Show finals are moving out of the repository into a per-computer **workspace**: `<workspace root>/<show name>/<scene folder>/images|audio|video|other/<file>`. Editable work (Premiere edits, sources, drafts, logs, archive) goes in `<root>/<show name>/edits/`: it is where agents and people work, and it stays on its computer (packages and cloud sync carry finals only). The app never treats `edits` as a scene folder.
+
+- **Root**: a per-computer setting (Settings → Workspace folder, or MCP `workspace_get` / `workspace_set`), default `~/Documents/LiveStage` (`Documents\LiveStage` on Windows). It is kept in `workspace.json` in the app data folder, never in the show file, a package or the repository. Changing it moves nothing.
+- **Show folder**: `<root>/<show name>/`, with a `.show.json` marker holding the show's `lineage.showId`, so a renamed show finds its folder again and two shows never share one. It is created the first time a show has an asset with a `rel`; reading the setting creates nothing but the root.
+- **`rel`** (new asset field, with `macRel` for the HEVC-alpha twin): the file's place inside the show folder. In `resolveAssetUrls` a `rel` whose file exists wins over `file`, the library copy and `url`; if it is missing the asset plays exactly as before. The asset protocol serves the workspace root (added to its scope at start-up and whenever the root changes).
+- **Packages and cloud sync send workspace files**: when an asset's `rel` (or `macRel`) file exists on the sending computer, that file is what is sent (it is what plays there), under the key `workspace/<rel>` in `file` (`macFile`); `portableAssets` takes the map from `workspaceFiles` in `src/core/platform.ts`. The receiving computer stores it at that key in its data folder and plays it from there, unless the same `rel` exists in its own workspace (which then wins, as everywhere). Before this, media that lived only in the workspace (cut-out `.mov` twins, new finals) never left the computer.
+- Still to come: import straight into the workspace, package format 2 and the one-off migration.
+
 ## Versions and conflicts
 
 Every package and every cloud push is a **version**: a number for people ("v7", counted per computer) and a unique id. A version also lists the ids of the versions its content descends from (`ancestry`). The show file remembers in `project.lineage`:
@@ -134,6 +144,7 @@ A scene's hash covers its content (components, cues, camera, look, notes). Its t
 - `cloud_status`: set up or not, the signed-in account, local versions, the cloud's shows and versions.
 - `cloud_push {force?, allowLive?}`: push this show (refused, with the reason, when the cloud is ahead).
 - `cloud_pull {dryRun | choices | resolve, mode?, showId?, allowLive?}`: the same as `package_import`, from the cloud.
+- `workspace_get`, `workspace_set {path}`: this computer's workspace root and the current show's folder (see above); `list_assets` shows each asset's `rel`.
 - Keys and sign-in are only entered by the operator in the app.
 
 ## Code

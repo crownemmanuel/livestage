@@ -3,7 +3,7 @@
 // happen natively (src-tauri/src/package.rs), so the desktop app is needed to write or take in media.
 
 import { uid } from "./ids";
-import { bundledOnDisk, isTauri } from "./platform";
+import { bundledOnDisk, isTauri, workspaceFiles } from "./platform";
 import { applyMerge, outgoingShow, planMerge, replaceWithIncoming, showUnits, SOUND_LEVELS, stampOutgoing, type MergeChoice, type MergePlan, type MergeResult, type ReceiveInfo, type UnitInfo } from "./showMerge";
 import type { Asset, Project } from "./types";
 
@@ -54,10 +54,22 @@ interface ExportFile {
 const isBundled = (url: string | undefined): url is string => !!url && url.startsWith("/media/");
 const keyOfUrl = (url: string) => decodeURI(url.split(/[?#]/)[0].slice(1));
 
-/** The show's assets with machine-independent references, and where each file comes from here. */
-export function portableAssets(assets: Asset[], root: string, join: (...p: string[]) => string): { assets: Asset[]; files: ExportFile[]; unpackable: string[] } {
+/**
+ * The show's assets with machine-independent references, and where each file comes from here.
+ * `workspace` maps an asset's `rel` / `macRel` to its file on this computer (only files that exist): such a file
+ * is what the show plays here, so it is the one sent, under the key `workspace/<rel>`. The receiving computer
+ * stores it at that key in its data folder and plays it from there, unless it has the file in its own workspace.
+ */
+export function portableAssets(assets: Asset[], root: string, join: (...p: string[]) => string, workspace?: Map<string, string>): { assets: Asset[]; files: ExportFile[]; unpackable: string[] } {
   const files: ExportFile[] = [];
   const unpackable: string[] = [];
+  const fromWorkspace = (rel: string | undefined): string | undefined => {
+    const path = rel ? workspace?.get(rel) : undefined;
+    if (!rel || !path) return undefined;
+    const key = `workspace/${rel.replace(/\\/g, "/")}`;
+    files.push({ key, path });
+    return key;
+  };
   const source = (file: string | undefined, url: string | undefined, path: string | undefined): string | undefined => {
     if (file) {
       files.push({ key: file, path: join(root, ...file.split("/")), bundled: isBundled(url) ? url : undefined });
@@ -76,18 +88,20 @@ export function portableAssets(assets: Asset[], root: string, join: (...p: strin
     return undefined;
   };
   const out = assets.map((a) => {
-    const file = source(a.file, a.url, a.path);
-    const macFile = a.macUrl || a.macFile ? source(a.macFile, a.macUrl, undefined) : undefined;
+    const wsFile = fromWorkspace(a.rel);
+    const wsMac = fromWorkspace(a.macRel);
+    const file = wsFile ?? source(a.file, a.url, a.path);
+    const macFile = wsMac ?? (a.macUrl || a.macFile ? source(a.macFile, a.macUrl, undefined) : undefined);
     if (!file && (a.ephemeral || a.url.startsWith("blob:"))) unpackable.push(a.name);
     const p: Asset = { ...a, path: undefined, ephemeral: undefined };
     if (file) {
       p.file = file;
-      // Bundled media keeps its URL (it also works where the app ships it); library files are found by key.
-      if (!isBundled(a.url)) p.url = "";
+      // Bundled media keeps its URL (it also works where the app ships it); library and workspace files are found by key.
+      if (wsFile || !isBundled(a.url)) p.url = "";
     }
     if (macFile) {
       p.macFile = macFile;
-      if (!isBundled(a.macUrl)) p.macUrl = undefined;
+      if (wsMac || !isBundled(a.macUrl)) p.macUrl = undefined;
     }
     return JSON.parse(JSON.stringify(p)) as Asset;
   });
@@ -112,7 +126,8 @@ export async function exportPackage(project: Project, dir: string): Promise<Expo
   const root = await appDataDir();
   const sep = root.includes("\\") ? "\\" : "/";
   const { project: stamped, version, versionId, ancestry } = stampOutgoing(project, uid);
-  const { assets, files, unpackable } = portableAssets(stamped.assets, root.replace(/[\\/]+$/, ""), (...p) => p.join(sep));
+  const ws = await workspaceFiles(stamped.assets, { id: stamped.lineage?.showId, name: stamped.name });
+  const { assets, files, unpackable } = portableAssets(stamped.assets, root.replace(/[\\/]+$/, ""), (...p) => p.join(sep), ws);
   const show: Project = { ...outgoingShow(stamped), assets };
   const manifest: Omit<PackageManifest, "files" | "missing"> = {
     format: PACKAGE_FORMAT,

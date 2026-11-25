@@ -12,10 +12,22 @@ export function steadyInterval(fn: () => void, ms: number): () => void {
   let url: string | null = null;
   try {
     if (typeof Worker !== "undefined" && typeof Blob !== "undefined") {
-      const src = "let t=null;onmessage=e=>{if(t)clearInterval(t);t=setInterval(()=>postMessage(0),e.data)};";
+      // Each tick carries the time the worker sent it (both sides read the same clock: timeOrigin + now).
+      const src = "let t=null;onmessage=e=>{if(t)clearInterval(t);t=setInterval(()=>postMessage(performance.timeOrigin+performance.now()),e.data)};";
       url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
       worker = new Worker(url);
-      worker.onmessage = () => fn();
+      // After the page stalls (a long frame, a blocked main thread), the ticks the worker sent meanwhile
+      // arrive back to back: 60 per second of stall at 60 Hz. The first of them runs; the rest (ticks that
+      // waited in the queue longer than one interval, arriving less than an interval after the last run)
+      // are dropped. Callers work out elapsed time from the clock themselves, so nothing is lost.
+      let lastRun = -Infinity;
+      worker.onmessage = (e: MessageEvent) => {
+        const at = performance.timeOrigin + performance.now();
+        const sent = typeof e.data === "number" ? e.data : at;
+        if (at - sent > ms && at - lastRun < ms) return;
+        lastRun = at;
+        fn();
+      };
       worker.postMessage(ms);
     }
   } catch {

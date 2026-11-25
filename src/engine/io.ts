@@ -350,11 +350,113 @@ let webAccess: MIDIAccess | null = null;
 let webInput: MIDIInput | null = null;
 let noteOffTimers: ReturnType<typeof setTimeout>[] = [];
 
+/** Bumped on every openMidi (and when I/O stops), so a watcher or open left over from an older setting gives up. */
+let midiGen = 0;
+let midiWatch: ReturnType<typeof setTimeout> | null = null;
+/** Which configured sides are open right now (desktop app). */
+let midiOpen = { input: false, output: false };
+/** The last MIDI state written to the log, so a port that stays missing is logged once, not every check. */
+let midiLogged = "";
+
+/** While a configured port is missing or failed, look for it this often; while all is open, check this often that none was unplugged. */
+const MIDI_RETRY_MS = 2000;
+const MIDI_WATCH_MS = 10_000;
+
+function midiLog(dir: "info" | "error", text: string) {
+  if (text === midiLogged) return;
+  midiLogged = text;
+  ioLog(dir, text);
+}
+
+function stopMidiWatch() {
+  if (midiWatch) clearTimeout(midiWatch);
+  midiWatch = null;
+}
+
+/** midi_open's error lists each failed side as "MIDI input …" / "MIDI output …", joined with "; ". */
+function midiFailures(err: string | null) {
+  const parts = err ? err.split("; ") : [];
+  const input = parts.some((p) => p.startsWith("MIDI input"));
+  const output = parts.some((p) => p.startsWith("MIDI output"));
+  // An error naming neither side (the MIDI system itself) means nothing opened.
+  const all = !!err && !input && !output;
+  return { input: input || all, output: output || all };
+}
+
+function setMidiState(settings: IoSettings["midi"], err: string | null, invoke: typeof import("@tauri-apps/api/core").invoke) {
+  midiOut = midiOpen.output ? { send: (bytes) => invoke("midi_send", { bytes }) } : null;
+  if (err) {
+    useIo.setState({ midiStatus: "error", midiError: err });
+    midiLog("error", `MIDI: ${err}`);
+  } else {
+    useIo.setState({ midiStatus: "open", midiError: null });
+    midiLog("info", `MIDI open: in ${settings.input ?? "—"}, out ${settings.output ?? "—"}`);
+  }
+}
+
+/** Open the configured ports (a side already open on the same port is kept by the Rust side). */
+async function tryOpenMidi(settings: IoSettings["midi"], gen: number) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  let err: string | null = null;
+  try {
+    await invoke("midi_open", { input: settings.input, output: settings.output });
+  } catch (e) {
+    err = String(e);
+  }
+  if (gen !== midiGen) return;
+  const failed = midiFailures(err);
+  midiOpen = { input: !!settings.input && !failed.input, output: !!settings.output && !failed.output };
+  setMidiState(settings, err, invoke);
+}
+
+/** Desktop app: reopen a configured port that was missing (plugged in late) or unplugged and plugged back in. */
+function scheduleMidiWatch(settings: IoSettings["midi"], gen: number) {
+  stopMidiWatch();
+  if (gen !== midiGen || !settings.enabled || (!settings.input && !settings.output)) return;
+  const missing = (!!settings.input && !midiOpen.input) || (!!settings.output && !midiOpen.output);
+  midiWatch = setTimeout(() => void checkMidi(settings, gen), missing ? MIDI_RETRY_MS : MIDI_WATCH_MS);
+}
+
+async function checkMidi(settings: IoSettings["midi"], gen: number) {
+  midiWatch = null;
+  if (gen !== midiGen) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    const ports = await invoke<{ inputs: string[]; outputs: string[] }>("midi_ports");
+    if (gen !== midiGen) return;
+    const st = useIo.getState();
+    if (st.midiInputs.join("\n") !== ports.inputs.join("\n") || st.midiOutputs.join("\n") !== ports.outputs.join("\n")) {
+      useIo.setState({ midiInputs: ports.inputs, midiOutputs: ports.outputs });
+    }
+    const inHere = !settings.input || ports.inputs.includes(settings.input);
+    const outHere = !settings.output || ports.outputs.includes(settings.output);
+    const lostIn = midiOpen.input && !inHere;
+    const lostOut = midiOpen.output && !outHere;
+    if (lostIn || lostOut) {
+      // Close the side that went away, so it gets a fresh connection when it comes back; keep the other.
+      midiOpen = { input: midiOpen.input && !lostIn, output: midiOpen.output && !lostOut };
+      await invoke("midi_open", { input: midiOpen.input ? settings.input : null, output: midiOpen.output ? settings.output : null }).catch(() => {});
+      if (gen !== midiGen) return;
+      const lost = [lostIn && `MIDI input '${settings.input}' lost`, lostOut && `MIDI output '${settings.output}' lost`].filter(Boolean).join("; ");
+      setMidiState(settings, lost, invoke);
+    } else if ((settings.input && !midiOpen.input && inHere) || (settings.output && !midiOpen.output && outHere)) {
+      await tryOpenMidi(settings, gen);
+    }
+  } catch {
+    // Listing failed this time; try again on the next check.
+  }
+  scheduleMidiWatch(settings, gen);
+}
+
 async function openMidi(settings: IoSettings["midi"]) {
+  const gen = ++midiGen;
+  stopMidiWatch();
+  midiLogged = "";
   noteOffTimers.forEach(clearTimeout);
   noteOffTimers = [];
   if (!settings.enabled) {
     midiOut = null;
+    midiOpen = { input: false, output: false };
     if (isTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("midi_open", { input: null, output: null }).catch(() => {});
@@ -362,22 +464,28 @@ async function openMidi(settings: IoSettings["midi"]) {
       webInput.onmidimessage = null;
       webInput = null;
     }
-    useIo.setState({ midiStatus: "off", midiError: null });
+    if (gen === midiGen) useIo.setState({ midiStatus: "off", midiError: null });
+    return;
+  }
+  if (isTauri) {
+    await tryOpenMidi(settings, gen);
+    scheduleMidiWatch(settings, gen);
     return;
   }
   try {
-    if (isTauri) {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("midi_open", { input: settings.input, output: settings.output });
-      midiOut = settings.output ? { send: (bytes) => invoke("midi_send", { bytes }) } : null;
-    } else {
-      webAccess ??= await navigator.requestMIDIAccess({ sysex: true });
-      if (webInput) webInput.onmidimessage = null;
-      webInput = settings.input ? ([...webAccess.inputs.values()].find((i) => i.name === settings.input) ?? null) : null;
-      if (webInput) webInput.onmidimessage = (e) => e.data && handleIncoming({ kind: "midi", bytes: Array.from(e.data) });
-      const out = settings.output ? [...webAccess.outputs.values()].find((o) => o.name === settings.output) : undefined;
-      midiOut = out ? { send: (bytes) => out.send(bytes) } : null;
-      if (settings.input && !webInput) throw new Error(`MIDI input '${settings.input}' not found`);
+    webAccess ??= await navigator.requestMIDIAccess({ sysex: true });
+    if (webInput) webInput.onmidimessage = null;
+    webInput = settings.input ? ([...webAccess.inputs.values()].find((i) => i.name === settings.input) ?? null) : null;
+    if (webInput) webInput.onmidimessage = (e) => e.data && handleIncoming({ kind: "midi", bytes: Array.from(e.data) });
+    const out = settings.output ? [...webAccess.outputs.values()].find((o) => o.name === settings.output) : undefined;
+    midiOut = out ? { send: (bytes) => out.send(bytes) } : null;
+    const missing = [settings.input && !webInput && `MIDI input '${settings.input}' not found`, settings.output && !out && `MIDI output '${settings.output}' not found`]
+      .filter(Boolean)
+      .join("; ");
+    if (missing) {
+      useIo.setState({ midiStatus: "error", midiError: missing });
+      ioLog("error", `MIDI: ${missing}`);
+      return;
     }
     useIo.setState({ midiStatus: "open", midiError: null });
     ioLog("info", `MIDI open: in ${settings.input ?? "—"}, out ${settings.output ?? "—"}`);
@@ -497,6 +605,9 @@ export async function sendMessage(msg: IoMessage, ctx?: SendContext): Promise<vo
   }
 }
 
+/** When each OSC send error (link, address, error) was last logged. */
+const oscErrorLogged = new Map<string, number>();
+
 /** Start the I/O services: follows the project's I/O settings and relays incoming messages. */
 export function startIo(): () => void {
   const cleanups: (() => void)[] = [];
@@ -528,15 +639,30 @@ export function startIo(): () => void {
       const u2 = await listen<{ address: string; args: { t: string; v: number | string | boolean }[]; from: string }>("sls://osc", (e) =>
         handleIncoming({ kind: "osc", address: e.payload.address, args: e.payload.args.map((a) => a.v), from: e.payload.from }),
       );
+      // OSC sends are queued in the Rust shell; a failure it finds after osc_send returned arrives here.
+      const u3 = await listen<{ host: string; port: number; address: string; error: string }>("sls://osc-error", (e) => {
+        const { host, port, address, error } = e.payload;
+        const key = `${host}:${port} ${address} ${error}`;
+        const now = Date.now();
+        // A link that keeps failing (a ping every few seconds) is logged once a minute, not every time.
+        if (now - (oscErrorLogged.get(key) ?? 0) < 60_000) return;
+        oscErrorLogged.set(key, now);
+        ioLog("error", `OSC ${address} → ${host}:${port}: ${error}`);
+      });
       if (!alive) {
         u1();
         u2();
-      } else cleanups.push(u1, u2);
+        u3();
+      } else cleanups.push(u1, u2, u3);
     });
     cleanups.push(() => {
       alive = false;
     });
   }
+  cleanups.push(() => {
+    midiGen++;
+    stopMidiWatch();
+  });
   return () => cleanups.forEach((c) => c());
 }
 

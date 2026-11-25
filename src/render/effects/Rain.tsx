@@ -9,6 +9,8 @@ import type { EffectComponent, EnvironmentPreset } from "@/core/types";
 import { cached } from "../cache";
 import { useStage } from "../frame";
 
+const bufSize = new THREE.Vector2();
+
 /** Rain volume layers around the camera: near streaks, mid, far curtain. */
 const LAYERS = [
   { count: 2200, near: 1.5, far: 6, alpha: 0.32 },
@@ -119,7 +121,10 @@ void main() {
   float y = mod(aSeed.y * H - uTime * sp, H) - H * 0.45;
   float ph = aSeed.x * 40.0;
   float sway = sin(uTime * (0.6 + aSeed.w) + ph) * (0.25 + depth * 0.04) + sin(uTime * 1.7 + ph * 2.0) * 0.08;
-  float x = (aSeed.x - 0.5) * 2.0 * depth * 1.8 + uWind * (uTime * 0.35 + y * 0.4) + sway;
+  // The wind drift grows with scene time, so it wraps within the layer's width (3.6 x depth,
+  // wider than the view): a periodic field instead of flakes sliding out of the volume.
+  float W = depth * 3.6;
+  float x = mod(aSeed.x * W + uWind * uTime * 0.35, W) - W * 0.5 + uWind * y * 0.4 + sway;
   float size = uSize * (0.012 + 0.03 * aSeed.w) * (0.6 + depth * 0.06);
   vec3 p = vec3(x, y, -depth);
   p.x += aCorner.x * size;
@@ -148,7 +153,7 @@ void main() {
 `;
 
 export function Rain({ comp, preset }: { comp: EffectComponent; preset: EnvironmentPreset }) {
-  const { getRt, frame } = useStage();
+  const { getRt, frame, canvasH } = useStage();
   const snow = comp.effect === "snow";
   const layers = useMemo(
     () =>
@@ -196,7 +201,7 @@ export function Rain({ comp, preset }: { comp: EffectComponent; preset: Environm
     return { splash, splashMat };
   }, [preset]);
 
-  useFrame(({ camera }) => {
+  useFrame(({ camera, gl }) => {
     const rt = getRt();
     const e = rt?.effects[comp.id];
     const p = e?.params ?? comp.params;
@@ -227,6 +232,8 @@ export function Rain({ comp, preset }: { comp: EffectComponent; preset: Environm
     su.uFrac.value = intensity * lvl;
     su.uOpacity.value = num(p, "opacity", 0.75) * lvl * 0.7;
     su.uColor.value.setRGB(0.7 * lum, 0.74 * lum, 0.8 * lum);
+    // Splash rings keep the same size relative to the picture in every canvas (wall or monitor).
+    su.uScale.value = gl.getDrawingBufferSize(bufSize).y / Math.max(1, canvasH);
   });
 
 
@@ -261,6 +268,7 @@ const splashVert = /* glsl */ `
 attribute vec2 aSeed;
 uniform float uTime;
 uniform float uFrac;
+uniform float uScale;   // drawing-buffer height / logical canvas height (gl_PointSize is in framebuffer px)
 varying float vLife;
 varying float vOn;
 void main() {
@@ -269,7 +277,7 @@ void main() {
   vLife = life;
   vOn = aSeed.x < uFrac ? 1.0 : 0.0;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_PointSize = (6.0 + life * 26.0) * (30.0 / max(1.0, -mv.z));
+  gl_PointSize = (6.0 + life * 26.0) * (30.0 / max(1.0, -mv.z)) * uScale;
   gl_Position = projectionMatrix * mv;
 }
 `;

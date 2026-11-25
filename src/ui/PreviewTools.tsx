@@ -2,7 +2,7 @@
 // which is what TAKE LIVE starts from) and a scrubber for the videos in the scene.
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { ChevronRight, Clock, Crosshair, Eye, Film, Flag, Focus, MousePointer2, Pause, Play, Plus, Scan, Send, X, Zap, ZoomIn } from "lucide-react";
+import { ChevronRight, Clock, Crosshair, Eye, Film, Flag, Focus, Headphones, MousePointer2, Pause, Play, Plus, Scan, Send, X, Zap, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -16,22 +16,27 @@ import type { Asset, Framing, MediaMarker, Scene, SceneComponent, SceneRuntime }
 import { fitFrame } from "@/render/layers/MediaLayers";
 import { describeMessage } from "@/engine/io";
 import { previewAtStep } from "@/engine/operator";
-import { hold, knownDuration, mainSource, mediaAssetIds, probeDurations, seekSource, videoSources, type Source } from "@/engine/transport";
+import { hold, knownDuration, mainSource, mediaAssetIds, probeDurations, SCENE_SOURCE, seekSource, videoSources, type Source } from "@/engine/transport";
 import { useProject } from "@/store/project";
-import { useShow, type Target } from "@/store/show";
+import { soloParts, useShow, type Target } from "@/store/show";
 import { SelectBox } from "./fields";
 import { defaultMarkerMessage } from "./io/MessageFields";
 import { MarkersEditor } from "./io/MarkersEditor";
 import { useSceneCodes } from "./SceneList";
 import { assetAspect } from "./assetThumbs";
 
-function useTick(ms: number) {
+/** Re-render every `ms` while `on`: the render after it goes off shows the final state. */
+function useTick(ms: number, on = true) {
   const [, force] = useState(0);
   useEffect(() => {
+    if (!on) return;
     const h = setInterval(() => force((n) => n + 1), ms);
     return () => clearInterval(h);
-  }, [ms]);
+  }, [ms, on]);
 }
+
+/** A framing glide is still to come or under way (its read-out changes over time). */
+const framingMoving = (rt: SceneRuntime | null) => !!rt?.framing && rt.framing.dur > 0 && sceneNow(rt) < rt.framing.at + rt.framing.dur;
 
 // ---------------------------------------------------------------- framing
 
@@ -145,12 +150,15 @@ const ZOOMS = [1, 1.5, 2, 3];
 /** Zoom buttons + framing read-out + apply-to-live. */
 export function FramingBar() {
   const rt = useShow((s) => s.preview);
-  const program = useShow((s) => s.program);
-  useTick(300);
+  // The live run of the same scene, if the wall shows it (a stored reference, or null).
+  const liveRt = useShow((s) => {
+    const p = s.program;
+    return p.runtime && !p.standby && s.preview && p.runtime.scene.id === s.preview.scene.id ? p.runtime : null;
+  });
+  useTick(300, framingMoving(rt) || framingMoving(liveRt));
   if (!rt) return null;
   const f = evalFraming(rt.framing, sceneNow(rt));
-  const isLive = !!program.runtime && !program.standby && program.runtime.scene.id === rt.scene.id;
-  const liveF = isLive ? evalFraming(program.runtime!.framing, sceneNow(program.runtime!)) : null;
+  const liveF = liveRt ? evalFraming(liveRt.framing, sceneNow(liveRt)) : null;
   const zoomTo = (z: number) => commitFraming(z === 1 ? NO_FRAMING : { zoom: z, x: f.x, y: f.y });
   return (
     <div className="flex items-center gap-1" title="Framing: drag the preview to reposition, scroll to zoom, double-click to centre. TAKE LIVE starts from this framing.">
@@ -221,22 +229,25 @@ export function PreviewHeader() {
   const rt = useShow((s) => s.preview);
   const solo = useShow((s) => s.solo);
   const hidden = useShow((s) => s.hidden);
+  const assets = useShow((s) => s.assets);
   const codes = useSceneCodes();
   if (!rt) return null;
-  const comp = solo ? rt.scene.components.find((c) => c.id === solo) : null;
+  const parts = soloParts(solo);
+  const soloNames = [...rt.scene.components.filter((c) => parts.components.includes(c.id)).map((c) => c.name), ...parts.sounds.map((id) => assets.find((a) => a.id === id)?.name ?? "sound")];
   return (
     <div className="mb-1.5 flex items-center gap-2 text-[11.5px]">
       <span className="flex items-center gap-1.5 rounded-full bg-preview/15 px-2 py-0.5 font-key text-[12.5px] font-bold text-preview">
         <span className="size-2 rounded-full bg-preview" />
         Preview
       </span>
-      {comp ? (
+      {soloNames.length ? (
         <>
-          <span className="flex items-center gap-1 rounded-full bg-armed/15 px-2 py-0.5 font-medium text-armed">
-            <Focus className="size-3.5" /> Isolated: {comp.name}
+          <span className="flex min-w-0 items-center gap-1 rounded-full bg-armed/15 px-2 py-0.5 font-medium text-armed" title={soloNames.join("\n")}>
+            {parts.components.length ? <Focus className="size-3.5 shrink-0" /> : <Headphones className="size-3.5 shrink-0" />}
+            <span className="truncate">Solo: {soloNames.length === 1 ? soloNames[0] : `${soloNames.length} items`}</span>
           </span>
-          <Button size="xs" variant="ghost" className="h-6" onClick={() => useShow.getState().setSolo(null)}>
-            <X /> Show whole scene
+          <Button size="xs" variant="ghost" className="h-6" onClick={() => useShow.getState().setSolo([])}>
+            <X /> Whole scene
           </Button>
         </>
       ) : hidden.length ? (
@@ -331,7 +342,7 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
   const rt = useShow((s) => (live ? (s.program.standby ? null : s.program.runtime) : s.preview));
   const assets = useShow((s) => s.assets);
   const soloPreview = useShow((s) => s.solo);
-  const solo = live ? null : soloPreview;
+  const soloIds = live ? [] : soloParts(soloPreview).components;
   const pickedPreview = useScrubSelection((s) => s.key);
   const [pickedLive, setPickedLive] = useState<string | null>(null);
   const sel = live ? pickedLive : pickedPreview;
@@ -347,12 +358,15 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
   // A marker tick being dragged: where it would land (seconds), and whether it has moved yet.
   const [mDrag, setMDrag] = useState<{ id: string; at: number; x0: number; moved: boolean } | null>(null);
   const track = useRef<HTMLDivElement>(null);
-  useTick(120);
+  const all = rt ? videoSources(rt, assets) : [];
+  const soloed = all.filter((s) => soloIds.includes(s.key.split(":")[0]));
+  const sources = soloed.length ? soloed : all;
+  // Tick only while the scene clock runs and something is drawn (a held scene and a hidden bar never change).
+  const shown = !!rt && !!sceneDef && (sources.length > 0 || !!drag || live || editable);
+  useTick(120, shown && rt!.clock.pausedAt === null);
   const ids = rt ? mediaAssetIds(rt) : [];
   useAssetDurations(assets, ids);
   if (!rt || !sceneDef) return null;
-  const all = videoSources(rt, assets);
-  const sources = solo && all.some((s) => s.key.split(":")[0] === solo) ? all.filter((s) => s.key.split(":")[0] === solo) : all;
   const clock = sceneNow(rt) / 1000;
   const dispatch = useShow.getState().dispatch;
   const paused = rt.clock.pausedAt !== null;
@@ -472,9 +486,11 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
             <span className="ml-auto flex items-center gap-1 tabular text-muted-foreground" title="Time since the scene started in the preview">
               <Clock className="size-3" /> scene {fmt(Math.max(0, clock))}
             </span>
-            <Button size="xs" variant="outline" className="h-6 border-armed/50 text-armed hover:text-armed" onClick={addMarker} title="Add a marker at the playhead">
-              <Plus /> Marker at {pos.toFixed(1)} s
-            </Button>
+            {src.key !== SCENE_SOURCE && (
+              <Button size="xs" variant="outline" className="h-6 border-armed/50 text-armed hover:text-armed" onClick={addMarker} title="Add a marker at the playhead">
+                <Plus /> Marker at {pos.toFixed(1)} s
+              </Button>
+            )}
           </>
         )}
       </div>
@@ -516,7 +532,7 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
               onPointerUp={() => {
                 if (!dragging) return;
                 if (mDrag.moved) setMarkers(markers.map((x) => (x.id === m.id ? { ...x, at: mDrag.at } : x)));
-                else dispatch("preview", src.seek(m.at));
+                else seekSource("preview", src, m.at);
                 setMDrag(null);
               }}
               // Double-click: its settings.
@@ -550,7 +566,7 @@ export function Timeline({ editable = true, target = "preview" }: { editable?: b
             const d = startScrub();
             d.v = +e.target.value;
             setDrag({ ...d });
-            if (!live) dispatch("preview", d.src.seek(d.v));
+            if (!live) seekSource("preview", d.src, d.v);
           }}
           onPointerUp={() => endScrub()}
           onMouseUp={() => endScrub()}
@@ -682,7 +698,7 @@ export function SelectOverlay() {
   const W = Math.max(16, output.canvasWidth);
   const H = Math.max(16, output.canvasHeight);
   const f = evalFraming(rt.framing, sceneNow(rt));
-  const boxes = itemBoxes(scene, rt, W, H, (id) => hidden.includes(id) || (!!solo && id !== solo));
+  const boxes = itemBoxes(scene, rt, W, H, (id) => hidden.includes(id) || (soloParts(solo).components.length > 0 && !solo.includes(id)));
   // Picture coords of a pointer (undoing the preview's zoom).
   const pic = (e: { clientX: number; clientY: number }) => {
     const r = ref.current!.getBoundingClientRect();

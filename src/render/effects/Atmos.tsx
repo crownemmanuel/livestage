@@ -1,6 +1,6 @@
 // Atmospheric overlays drawn in the FX (ortho) layer: starfield, divine light, heat
 // shimmer and window/torch lights. All deterministic in scene time.
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { clamp } from "@/core/clock";
@@ -9,7 +9,9 @@ import { rng } from "@/core/noise";
 import { effectLevel } from "@/core/runtime";
 import type { EffectComponent } from "@/core/types";
 import { NOISE_GLSL, QUAD_VERT } from "../glsl";
-import { useStage } from "../frame";
+import { parsedColor, useStage } from "../frame";
+
+const bufSize = new THREE.Vector2();
 
 function useQuad(frag: string, uniforms: Record<string, THREE.IUniform>, opts: Partial<THREE.ShaderMaterialParameters> = {}) {
   const { canvasW, canvasH } = useStage();
@@ -101,6 +103,7 @@ export function StarsOverlay({ comp }: { comp: EffectComponent }) {
     const p = e?.params ?? comp.params;
     const lvl = e ? effectLevel("stars", e.active, e.changedAt, p, frame.t) : 0;
     mesh.visible = lvl > 0.001;
+    if (!mesh.visible) return;
     const u = mat.uniforms;
     u.uTime.value = frame.ts;
     u.uDensity.value = num(p, "density", 0.6);
@@ -112,7 +115,7 @@ export function StarsOverlay({ comp }: { comp: EffectComponent }) {
     u.uDrift.value = num(p, "drift", 0.02);
     u.uAspect.value = canvasW / canvasH;
     u.uLevel.value = lvl;
-    u.uTint.value.set(str(p, "tint", "#dfe6ff"));
+    u.uTint.value.copy(parsedColor(str(p, "tint", "#dfe6ff")));
   });
   mesh.renderOrder = 4;
   return <primitive object={mesh} />;
@@ -178,6 +181,7 @@ export function GlowOverlay({ comp }: { comp: EffectComponent }) {
     const p = e?.params ?? comp.params;
     const lvl = e ? effectLevel("glow", e.active, e.changedAt, p, frame.t) : 0;
     mesh.visible = lvl > 0.001;
+    if (!mesh.visible) return;
     const u = mat.uniforms;
     u.uTime.value = frame.ts;
     u.uCenter.value.set(num(p, "x", 0.5), 1 - num(p, "y", 0.35));
@@ -187,7 +191,7 @@ export function GlowOverlay({ comp }: { comp: EffectComponent }) {
     u.uRaySpeed.value = num(p, "raySpeed", 0.15);
     u.uPulse.value = num(p, "pulse", 0.15);
     u.uAspect.value = canvasW / canvasH;
-    u.uColor.value.set(str(p, "color", "#ffe9b8"));
+    u.uColor.value.copy(parsedColor(str(p, "color", "#ffe9b8")));
   });
   mesh.renderOrder = 12;
   return <primitive object={mesh} />;
@@ -226,13 +230,14 @@ export function HeatOverlay({ comp }: { comp: EffectComponent }) {
     const p = e?.params ?? comp.params;
     const lvl = e ? effectLevel("heat", e.active, e.changedAt, p, frame.t) : 0;
     mesh.visible = lvl > 0.001;
+    if (!mesh.visible) return;
     const u = mat.uniforms;
     u.uTime.value = frame.ts;
     u.uAmount.value = num(p, "amount", 0.6) * lvl;
     u.uHeight.value = num(p, "height", 0.5);
     u.uSpeed.value = num(p, "speed", 1);
     u.uAspect.value = canvasW / canvasH;
-    u.uTint.value.set(str(p, "tint", "#ffd9a0")).multiplyScalar(0.5 + frame.ambient * 0.5);
+    u.uTint.value.copy(parsedColor(str(p, "tint", "#ffd9a0"))).multiplyScalar(0.5 + frame.ambient * 0.5);
   });
   mesh.renderOrder = 9;
   return <primitive object={mesh} />;
@@ -247,7 +252,7 @@ uniform float uFadeFrac;
 uniform float uTime;
 uniform float uFlicker;
 uniform float uSize;
-uniform float uPx;      // canvas height in px
+uniform float uPx;      // drawing-buffer height in px (gl_PointSize is in framebuffer px)
 varying float vOn;
 varying float vWarm;
 void main() {
@@ -309,21 +314,30 @@ export function LightsOverlay({ comp }: { comp: EffectComponent }) {
     points.renderOrder = 11;
     return { points, mat, geo };
   }, [count, seed, order]);
-  useMemo(() => () => geo.dispose(), [geo]);
+  // Free the old points when count/seed/order change (and on unmount).
+  useEffect(
+    () => () => {
+      geo.dispose();
+      mat.dispose();
+    },
+    [geo, mat],
+  );
 
-  useFrame(() => {
+  useFrame(({ gl }) => {
     const e = getRt()?.effects[comp.id];
     const p = e?.params ?? comp.params;
     const lvl = e ? effectLevel("lights", e.active, e.changedAt, p, frame.t) : 0;
     points.visible = lvl > 0.001;
+    if (!points.visible) return;
     const u = mat.uniforms;
     u.uLevel.value = lvl * (1 + num(p, "fade", 1.5) / Math.max(0.5, num(p, "spread", 12)));
     u.uFadeFrac.value = num(p, "fade", 1.5) / Math.max(0.5, num(p, "spread", 12));
     u.uTime.value = frame.ts;
     u.uFlicker.value = num(p, "flicker", 0.5);
     u.uSize.value = num(p, "size", 1);
-    u.uPx.value = canvasH;
-    u.uColor.value.set(str(p, "color", "#ffb55c"));
+    // Sized to the drawing buffer, so every canvas (wall or small monitor) shows the same proportions.
+    u.uPx.value = gl.getDrawingBufferSize(bufSize).y;
+    u.uColor.value.copy(parsedColor(str(p, "color", "#ffb55c")));
     // Positions are 0..1 in the area box; map to canvas px.
     const w = num(p, "w", 0.9) * canvasW;
     const h = num(p, "h", 0.3) * canvasH;

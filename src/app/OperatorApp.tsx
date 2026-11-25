@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { startProgramAudio, unlockAudio } from "@/engine/audio";
 import { learnSoundLengths } from "@/engine/musicChase";
@@ -16,6 +16,9 @@ import { startAgentBridge } from "@/agent/bridge";
 import { startUpdateChecks } from "@/engine/updater";
 import { guardWindowDrops } from "@/ui/mediaDrop";
 
+// Room (see a scene in a photo of the room) loads only when opened: nothing of it runs during a show.
+const RoomMode = lazy(() => import("@/ui/room/RoomMode"));
+
 function syncPreview() {
   const { project, selectedSceneId } = useProject.getState();
   const scene = project.scenes.find((s) => s.id === selectedSceneId) ?? null;
@@ -24,10 +27,13 @@ function syncPreview() {
 
 function isTyping(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
-  // A scrub bar keeps focus after a drag: it owns only its arrow keys, so P and G still work.
-  if (el instanceof HTMLInputElement && el.type === "range") return /^(Arrow|Home|End|Page)/.test(e.key);
-  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable || el.getAttribute("role") === "slider");
+  // A scrub bar or fader keeps focus after a drag: it owns only its arrow keys, so G, P, ⌘↵ and Esc still work.
+  if ((el instanceof HTMLInputElement && el.type === "range") || el?.getAttribute?.("role") === "slider") return /^(Arrow|Home|End|Page)/.test(e.key);
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
 }
+
+/** An open dialog, popover, menu or select list: Esc is theirs. (A tooltip also takes Esc, but must not eat the cancel.) */
+const OPEN_LAYER = ['[role="dialog"]', '[role="alertdialog"]', '[role="menu"]', '[role="listbox"]'].map((s) => `${s}[data-state="open"]`).join(",");
 
 export function OperatorApp() {
   const loaded = useProject((s) => s.loaded);
@@ -77,12 +83,24 @@ export function OperatorApp() {
       }
     });
 
+    // Seen before any layer handles the key, since closing one may take it out of the page before onKey runs.
+    let escForLayer = false;
+    const onKeyCapture = (e: KeyboardEvent) => {
+      if (e.code === "Escape") escForLayer = !!document.querySelector(OPEN_LAYER);
+    };
     const onKey = (e: KeyboardEvent) => {
+      // A menu, select, tab strip or dialog already used this key: arrows moved in it (Radix prevents their
+      // default), Esc closed it (judged by what was open, as an open tooltip also prevents Esc). Not applied to
+      // ⌘↵, G, P, ⇧B: a focused Select trigger prevents Enter too (it opens), and TAKE must still go.
+      const arrow = e.code === "ArrowDown" || e.code === "ArrowUp";
+      if (e.code === "Escape" ? escForLayer : arrow && e.defaultPrevented) return;
       if (isTyping(e)) return;
       const proj = useProject.getState();
       const show = useShow.getState();
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
+        // A held key repeats: one press, one take.
+        if (e.repeat) return;
         const id = proj.selectedSceneId;
         if (id && !show.program.transition) void takeScene(id);
       } else if (e.code === "KeyG" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
@@ -98,12 +116,15 @@ export function OperatorApp() {
         cancelPending("program");
       } else if ((e.code === "ArrowDown" || e.code === "ArrowUp") && !e.ctrlKey && !e.metaKey && !e.altKey && proj.mode === "show") {
         e.preventDefault();
+        // One scene per press: each step mounts a new preview, so a held key would stack them up.
+        if (e.repeat) return;
         const scenes = proj.project.scenes;
         const i = scenes.findIndex((s) => s.id === proj.selectedSceneId);
         const n = scenes[Math.max(0, Math.min(scenes.length - 1, i + (e.code === "ArrowDown" ? 1 : -1)))];
         if (n) proj.selectScene(n.id);
       }
     };
+    window.addEventListener("keydown", onKeyCapture, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", unlockAudio, { once: true });
     const stopDropGuard = guardWindowDrops();
@@ -116,6 +137,7 @@ export function OperatorApp() {
       stopAudio();
       stopRouting();
       unsub();
+      window.removeEventListener("keydown", onKeyCapture, true);
       window.removeEventListener("keydown", onKey);
     };
   }, []);
@@ -132,6 +154,12 @@ export function OperatorApp() {
           ) : mode === "show" ? (
             <ErrorBoundary name="show mode">
               <ShowMode />
+            </ErrorBoundary>
+          ) : mode === "room" ? (
+            <ErrorBoundary name="room view">
+              <Suspense fallback={<div className="grid h-full place-items-center text-muted-foreground">Loading room…</div>}>
+                <RoomMode />
+              </Suspense>
             </ErrorBoundary>
           ) : (
             <ErrorBoundary name="scene builder">

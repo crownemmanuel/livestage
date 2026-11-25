@@ -28,7 +28,7 @@ export function rootValue(root: Root): unknown {
     case "ui": {
       const p = useProject.getState();
       const s = useShow.getState();
-      return { mode: p.mode, selectedSceneId: p.selectedSceneId, selectedComponentId: p.selectedComponentId, solo: s.solo, hidden: s.hidden, lionControl: s.lionControl, nextTransition: s.nextTransition };
+      return { mode: p.mode, selectedSceneId: p.selectedSceneId, selectedComponentId: p.selectedComponentId, solo: s.solo, muted: s.muted, hidden: s.hidden, lionControl: s.lionControl, nextTransition: s.nextTransition };
     }
   }
 }

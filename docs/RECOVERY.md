@@ -28,6 +28,12 @@ Each panel (top bar, show mode, builder, every preview/program canvas, the outpu
 
 Every edit is saved about a second later with an atomic write (temp file, then rename), and flushed on hide/unload. **Export show file** keeps a copy somewhere safe before the performance.
 
+Saves run one at a time, and each keeps the file it replaces as `project.json.bak` (the show as of the save before). If `project.json` cannot be read or migrated at start-up (a write torn by a power cut, a locked file), the app never treats that as "no show": it moves the unreadable file aside as `project.unreadable-<time>.json`, opens the backup, and says so in the top bar and the status bar ("Show file problem", `status` → `app.loadProblem`) until the next start. With no usable backup it opens the demo show and says, in the same place, that this is not your show; the unreadable file is still kept. (Before 2026-11-14 an unreadable show file opened the demo and the autosave wrote it over the real show a second later.)
+
+## If one layer breaks
+
+Every canvas in a window is drawn from one shared frame loop. A per-frame callback that throws (a layer meeting data it did not expect) used to end the frame there, every frame, so every canvas after it stopped drawing, and no error boundary saw it. Each canvas now runs its per-frame callbacks guarded (`makeFrameGuard` in `render/SceneCanvas.tsx`): the failing layer is reported in the error log, skipped for a second and tried again, and everything else keeps drawing.
+
 ## Timing
 
 Delayed cue actions are scheduled by absolute wall-clock time, so a slow frame never shifts them. Browsers slow a hidden or covered window's timers down (to once a second in Chromium), which would hold back marker cues, timed cues, follow cues and delayed actions while the operator looks at StageMics or StageLight for a moment; the 60 Hz service tick therefore runs from a Worker, which is not throttled, and fires anything overdue itself. The output's heartbeat runs the same way, so a covered output never looks lost. Program state is broadcast to the output at most 30 times a second (a live slider cannot flood the link), except TAKE, which goes immediately. The output never runs its own logic: everything on the wall is a pure function of a shared clock, so nothing can drift.

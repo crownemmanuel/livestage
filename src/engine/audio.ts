@@ -4,15 +4,17 @@
 import { now, sceneNow } from "@/core/clock";
 import { num, str } from "@/core/effects";
 import { lifeAudible, scheduleLevels, soundKey, soundLives, type SoundLife } from "@/core/music";
-import type { LightningStrike, SceneRuntime, SoundEvent, SoundLevel } from "@/core/types";
+import type { LightningStrike, SceneRuntime, SoundEvent, SoundLevel, SpeakerId } from "@/core/types";
 import { mixLevel, useShow } from "@/store/show";
 import { registerAudioContext } from "./audioOutput";
+import { attachSpeakers, isSpeakerId, refreshSpeakers, soundOut, startSpeakers } from "./speakers";
 
 let ctx: AudioContext | null = null;
 function audio(): AudioContext {
   if (!ctx) {
     ctx = new AudioContext();
     registerAudioContext(ctx);
+    attachSpeakers(ctx, () => isAudioHost());
   }
   if (ctx.state === "suspended") void ctx.resume();
   return ctx;
@@ -33,12 +35,52 @@ function noiseBuffer(ac: AudioContext, seconds: number) {
   return buf;
 }
 
+/**
+ * The rumble every synthesised thunder is cut from. Filling seconds of noise sample by sample takes
+ * 5-15 ms, and doing it at the strike (as it used to) is a dropped frame on the wall at the very moment
+ * the lightning flashes, because the audio host is the output window. So it is made once, a little at a
+ * time between frames, soon after the window starts.
+ */
+const NOISE_SECONDS = 9;
+let thunderNoise: AudioBuffer | null = null;
+let noiseStarted = false;
+function prepareThunderNoise() {
+  if (noiseStarted) return;
+  noiseStarted = true;
+  const ac = audio();
+  const len = Math.floor(ac.sampleRate * NOISE_SECONDS);
+  const buf = ac.createBuffer(2, len, ac.sampleRate);
+  const data = [buf.getChannelData(0), buf.getChannelData(1)];
+  const state = [0, 0];
+  let i = 0;
+  const CHUNK = 24000; // about a millisecond of work
+  const step = () => {
+    const end = Math.min(len, i + CHUNK);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = data[ch];
+      let b = state[ch];
+      for (let k = i; k < end; k++) {
+        b = (b + (Math.random() * 2 - 1) * 0.08) * 0.985;
+        d[k] = b * 3 + (Math.random() * 2 - 1) * 0.15;
+      }
+      state[ch] = b;
+    }
+    i = end;
+    if (i < len) setTimeout(step, 4);
+    else thunderNoise = buf;
+  };
+  setTimeout(step, 1500);
+}
+
 /** Synthesised thunder: a sharp crack (when close) followed by a rolling rumble. */
-function synthThunder(when: number, volume: number, close: boolean) {
+function synthThunder(when: number, volume: number, close: boolean, speakers?: SpeakerId[]) {
   const ac = audio();
   const dur = 4.5 + Math.random() * 2.5;
   const src = ac.createBufferSource();
-  src.buffer = noiseBuffer(ac, dur);
+  // A different stretch of the prepared rumble each time; made on the spot only if a strike comes before it is ready.
+  const ready = thunderNoise && thunderNoise.sampleRate === ac.sampleRate ? thunderNoise : null;
+  src.buffer = ready ?? noiseBuffer(ac, dur);
+  const offset = ready ? Math.random() * Math.max(0, NOISE_SECONDS - dur - 0.2) : 0;
   const lp = ac.createBiquadFilter();
   lp.type = "lowpass";
   lp.frequency.setValueAtTime(close ? 1800 : 600, when);
@@ -53,8 +95,8 @@ function synthThunder(when: number, volume: number, close: boolean) {
     t += 0.3 + Math.random() * 0.7;
   }
   g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-  src.connect(lp).connect(g).connect(ac.destination);
-  src.start(when);
+  src.connect(lp).connect(g).connect(soundOut(ac, speakers));
+  src.start(when, offset);
   src.stop(when + dur + 0.1);
 }
 
@@ -75,14 +117,54 @@ export function preloadAudio(url: string) {
   void loadBuffer(url).catch(() => {});
 }
 
-async function playFile(url: string, when: number, volume: number) {
+/**
+ * The sounds to keep decoded (asset ids): what the live scene plays, what the next scenes will, the
+ * announcements. The operator works the list out (it has the whole show) and sends it to the audio host.
+ *
+ * Without it a cue's sound was fetched and decoded when the cue fired: a four-minute song takes a good
+ * part of a second, so its first play started late (and was then moved later still, to keep its first
+ * words), out of step with the picture. And every file ever played stayed decoded: a four-minute stereo
+ * song is ~90 MB of samples, a whole show several gigabytes in the window that draws the wall. Now the
+ * files on the list are decoded ahead and the rest are let go (one still playing keeps its own samples
+ * until it ends).
+ */
+let warmIds: string[] | null = null;
+let isAudioHost: () => boolean = () => false;
+
+export function warmSounds(ids: string[]) {
+  warmIds = ids;
+  applyWarm();
+}
+
+function applyWarm() {
+  // Only the window that plays the sound holds the samples; until a list arrives nothing is dropped.
+  if (!warmIds || !isAudioHost()) return;
+  const assets = useShow.getState().assets;
+  // The media library not here yet (a window just opened): try again when it comes.
+  if (!assets.length) return;
+  const keep = new Set<string>();
+  for (const id of warmIds) {
+    const a = assets.find((x) => x.id === id);
+    if (a?.url) keep.add(a.url);
+  }
+  for (const url of [...fileCache.keys()]) if (!keep.has(url)) fileCache.delete(url);
+  for (const url of keep) preloadAudio(url);
+}
+
+/** Decoded files held now (diagnostics). */
+export function warmSoundCount(): number {
+  return fileCache.size;
+}
+
+async function playFile(url: string, when: number, volume: number, speakers?: SpeakerId[]) {
   const ac = audio();
   const buf = await loadBuffer(url);
+  if (!isAudioHost()) return;
   const src = ac.createBufferSource();
   src.buffer = buf;
   const g = ac.createGain();
   g.gain.value = volume;
-  src.connect(g).connect(ac.destination);
+  src.connect(g).connect(soundOut(ac, speakers));
   src.start(Math.max(ac.currentTime, when));
 }
 
@@ -107,6 +189,8 @@ interface CueSound {
   fadeOut: number;
   /** Its level changes as it plays (a duck), on a gain of their own ahead of `gain`. */
   levels?: SoundLevel[];
+  /** Surround speakers it plays on (none: the main output). */
+  speakers?: SpeakerId[];
   /** Scene time (ms) of its run when it started. */
   at: number;
   /** Seconds into the file at context time `ctx0` (less than `trim`: starts that much later). */
@@ -178,8 +262,8 @@ function startNode(key: string, s: CueSound, pos: number, fadeIn = 0) {
   if (s.levels?.length) {
     const env = ac.createGain();
     scheduleLevels(env.gain, s.levels, since, ac.currentTime);
-    src.connect(env).connect(gain).connect(ac.destination);
-  } else src.connect(gain).connect(ac.destination);
+    src.connect(env).connect(gain).connect(soundOut(ac, s.speakers));
+  } else src.connect(gain).connect(soundOut(ac, s.speakers));
   src.onended = () => {
     if (cueSounds.get(key)?.src === src) cueSounds.delete(key);
   };
@@ -281,6 +365,8 @@ const RESUME_FADE = 0.5;
  */
 async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: string, wallAt: number, resume?: SoundLife) {
   const buf = await loadBuffer(url);
+  // This window handed the sound over (the output window came up) while the file loaded: the new host plays it.
+  if (!isAudioHost()) return;
   const rt = useShow.getState().program.runtime;
   const own = rt?.key === runKey;
   // Its scene was replaced while the file loaded.
@@ -299,7 +385,7 @@ async function playCueSound(key: string, url: string, ev: SoundEvent, runKey: st
   if (old) stopNode(old, 0.15, Math.max(0, -since));
   cueSounds.delete(key);
   if (pos >= buf.duration && !ev.loop) return;
-  const s: CueSound = { buf, volume: ev.volume, runKey, keepPlaying: !!ev.keepPlaying, loop: !!ev.loop, trim, fadeOut: Math.max(0, ev.fadeOut ?? 0), levels: ev.levels, at, pos, ctx0: 0, src: null, gain: null };
+  const s: CueSound = { buf, volume: ev.volume, runKey, keepPlaying: !!ev.keepPlaying, loop: !!ev.loop, trim, fadeOut: Math.max(0, ev.fadeOut ?? 0), levels: ev.levels, speakers: ev.speakers, at, pos, ctx0: 0, src: null, gain: null };
   cueSounds.set(key, s);
   // A fade-in already under way when the file is ready picks up where it should be.
   let fadeIn = ev.fadeIn ? Math.max(0, ev.fadeIn - Math.max(0, since)) : 0;
@@ -343,15 +429,16 @@ function fadeOutAnnouncement(seconds = 0.8) {
   a.src.stop(ac.currentTime + seconds + 0.05);
 }
 
-async function startAnnouncement(key: string, url: string, volume: number) {
+async function startAnnouncement(key: string, url: string, volume: number, speakers?: SpeakerId[]) {
   fadeOutAnnouncement(0.3);
   const ac = audio();
   const buf = await loadBuffer(url);
+  if (!isAudioHost()) return;
   const src = ac.createBufferSource();
   src.buffer = buf;
   const gain = ac.createGain();
   gain.gain.value = volume;
-  src.connect(gain).connect(ac.destination);
+  src.connect(gain).connect(soundOut(ac, speakers));
   src.onended = () => {
     if (announcing?.src === src) announcing = null;
   };
@@ -360,6 +447,7 @@ async function startAnnouncement(key: string, url: string, volume: number) {
 }
 
 export function startProgramAudio(isHost: () => boolean): () => void {
+  isAudioHost = isHost;
   const heard = new Set<string>();
   // Thunder that struck before this window started is history.
   const rt0 = useShow.getState().program.runtime;
@@ -382,8 +470,9 @@ export function startProgramAudio(isHost: () => boolean): () => void {
       const vol = num(params, "thunderVolume", 0.9) * Math.min(1.2, st.brightness);
       const file = str(params, "thunderAssetId");
       const asset = file ? s.assets.find((a) => a.id === file) : undefined;
-      if (asset) void playFile(asset.url, when, vol);
-      else synthThunder(when, vol, st.thunderDelay < 0.6);
+      const speakers = parseSpeakers(str(params, "thunderSpeakers"));
+      if (asset) void playFile(asset.url, when, vol, speakers);
+      else synthThunder(when, vol, st.thunderDelay < 0.6, speakers);
     }
   };
 
@@ -422,21 +511,44 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     }
   };
 
+  /**
+   * A seek rebuilt the live run (seekScene): its sounds are now the ones of the moment it went to. Sounds this
+   * run started are let go and the rebuilt ones come back where the clock says (handleSounds, as after a
+   * restart); music carried in from earlier scenes moves with the clock (followClock), and comes back if a
+   * cue of this scene had faded it before the seek went back.
+   */
+  const resync = (rt: SceneRuntime) => {
+    if (!isHost()) return;
+    for (const [key, s] of [...cueSounds]) if (s.runKey === rt.key) fadeOutCueSound(key, 0.08);
+    for (const ev of rt.sounds ?? []) if (ev.assetId && !cueSounds.has(ev.assetId)) heard.delete(ev.id);
+  };
+
   /** Hand over: a window that stops being the audio host lets its sounds go, so they are never doubled. */
   let wasHost = isHost();
   const checkHost = () => {
     const host = isHost();
     if (host === wasHost) return;
     wasHost = host;
+    // Sound cards of other speakers are opened only in the window that plays the sound.
+    refreshSpeakers();
     const rt = useShow.getState().program.runtime;
     if (host) {
+      prepareThunderNoise();
+      applyWarm();
       if (rt?.sounds) handleSounds(rt.sounds);
       return;
     }
     for (const key of [...cueSounds.keys()]) fadeOutCueSound(key, 0.5);
     for (const ev of rt?.sounds ?? []) heard.delete(ev.id);
+    // No longer playing anything: let the decoded files go (the new host has its own).
+    fileCache.clear();
   };
+  if (wasHost) {
+    prepareThunderNoise();
+    applyWarm();
+  }
   const hostTick = setInterval(checkHost, 500);
+  const stopSpeakers = startSpeakers();
   // Whatever is already playing when this window starts comes back now.
   if (rt0?.sounds) handleSounds(rt0.sounds);
 
@@ -453,29 +565,42 @@ export function startProgramAudio(isHost: () => boolean): () => void {
     heard.add(a.key);
     if (!isHost() || now() - a.at > 2000) return;
     const asset = useShow.getState().assets.find((x) => x.id === a.assetId);
-    if (asset) void startAnnouncement(a.key, asset.url, a.volume).catch((e) => console.warn("announcement failed", e));
+    if (asset) void startAnnouncement(a.key, asset.url, a.volume, a.speakers).catch((e) => console.warn("announcement failed", e));
   };
 
   const unsub = useShow.subscribe((s, prev) => {
     checkHost();
+    if (s.assets !== prev.assets) applyWarm();
     const ann = s.program.announce;
     if (ann && ann !== prev.program.announce) handleAnnounce(ann);
     const runKey = s.program.runtime?.key ?? null;
     if (runKey !== (prev.program.runtime?.key ?? null)) {
       if (!s.program.continues) stopSoundsOfOtherRuns(runKey, true, 0.8, 0.8);
       else stopSoundsOfOtherRuns(runKey, !!s.program.runtime?.scene.stopCarriedSounds);
+      // Back from nothing live (the operator window reloaded and restored the wall): its sounds were faded out
+      // with the gap, so let handleSounds bring back the ones still sounding, where the clock says.
+      if (!prev.program.runtime && s.program.runtime) for (const ev of s.program.runtime.sounds ?? []) if (ev.assetId && !cueSounds.has(ev.assetId)) heard.delete(ev.id);
     }
     if (s.program.runtime !== prev.program.runtime) followClock(s.program.runtime);
+    const rebuilt = s.program.runtime?.rebuiltAt;
+    if (rebuilt && rebuilt !== prev.program.runtime?.rebuiltAt && runKey === (prev.program.runtime?.key ?? null)) resync(s.program.runtime!);
     if (s.program.mix !== prev.program.mix) applyMix();
     const a = s.program.runtime?.strikes;
     if (a && a !== prev.program.runtime?.strikes) handleStrikes(a);
     const b = s.program.runtime?.sounds;
-    if (b && (b !== prev.program.runtime?.sounds || s.assets !== prev.assets)) handleSounds(b);
+    if (b && (b !== prev.program.runtime?.sounds || s.assets !== prev.assets || rebuilt !== prev.program.runtime?.rebuiltAt)) handleSounds(b);
   });
   return () => {
     unsub();
     clearInterval(hostTick);
+    stopSpeakers();
   };
+}
+
+/** Thunder's speakers: an effect param holds them as "left,right" ("" = the main output). */
+export function parseSpeakers(v: string): SpeakerId[] | undefined {
+  const ids = v.split(",").map((x) => x.trim()).filter(isSpeakerId);
+  return ids.length ? ids : undefined;
 }
 
 /** Browsers need a user gesture before audio can start. */

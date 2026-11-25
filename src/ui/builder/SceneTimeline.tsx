@@ -7,7 +7,11 @@
 // flag to move a timed cue, or a GO line to plan the wait before it. Click a block to open its cue
 // in the run sheet; Delete removes it; ⌘Z / ⇧⌘Z undo and redo timeline edits.
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Clapperboard, Clock, CloudRain, Film, ChartGantt, FoldVertical, Hand, Lightbulb, Link2, Minus, Music, Pause, Play, Plus, Redo2, Square, Undo2, UnfoldVertical, Video, Volume2, VolumeX } from "lucide-react";
+import { Clapperboard, Clock, CloudRain, Film, ChartGantt, FoldVertical, Hand, Lightbulb, Link2, Minus, Music, Pause, Play, Plus, Redo2, Square, Undo2, UnfoldVertical, Video, Volume2, VolumeX, X, Headphones, Focus, Settings2 } from "lucide-react";
+import { VolumeOff } from "lucide-react";
+import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { sceneNow } from "@/core/clock";
@@ -163,6 +167,15 @@ export function SceneTimeline() {
     setSelected(null);
     setDialog(null);
   }, [scene?.id]);
+  // A solo of something the scene no longer has (a sound swapped or removed) would silently mute the rest: drop it.
+  useEffect(() => {
+    if (!base) return;
+    const { solo, setSolo } = useShow.getState();
+    const have = new Set(base.items.map(soloOf).filter(Boolean));
+    if (solo.some((k) => !have.has(k))) setSolo(solo.filter((k) => have.has(k)));
+    const { muted, setMuted } = useShow.getState();
+    if (muted.some((k) => !have.has(k))) setMuted(muted.filter((k) => have.has(k)));
+  }, [base]);
   useEffect(() => {
     if (!note) return;
     const h = setTimeout(() => setNote(null), 4000);
@@ -240,13 +253,16 @@ export function SceneTimeline() {
         Timeline
       </span>
       <InfoTip>
-        The scene as tracks: what plays when, cue by cue. Every block belongs to a cue: dragging it to another stretch moves it into the cue that starts that stretch (with the rest as its delay), so it stays with that cue however late its GO comes. Alt while dropping: copy. Drag a block's right edge to set where it stops (a sound fades out there; past the take it keeps playing into the next scene). Drag a cue's flag to move a timed cue; a GO cue has no time until it is pressed, so drag its dashed line to plan the wait before it (double-click: back to the guess). Snaps to cues, other blocks and the playhead (Shift: no snap). Click or drag in the ruler or an empty part of a track to see the preview at that moment. Click a block to select it, double-click it to change its settings; double-click an empty moment to add an action there (lights, StageLight, StageMics, sound…); Delete removes it; ⌘Z undoes. The speaker plays the scene's sounds on this computer's own speakers while you rehearse (never the show output). Space plays and holds. Striped blocks are loops that fill the wait.
+        The scene as tracks: what plays when, cue by cue. Every block belongs to a cue: dragging it to another stretch moves it into the cue that starts that stretch (with the rest as its delay), so it stays with that cue however late its GO comes. Alt while dropping: copy. Drag a block's right edge to set where it stops (a sound fades out there; past the take it keeps playing into the next scene). Drag a cue's flag to move a timed cue; a GO cue has no time until it is pressed, so drag its dashed line to plan the wait before it (double-click: back to the guess). Snaps to cues, other blocks and the playhead (Shift: no snap). Click or drag in the ruler or an empty part of a track to see the preview at that moment. Click a block to select it, double-click it to change its settings; double-click an empty moment to add an action there (lights, StageLight, StageMics, sound…); Delete removes it; ⌘Z undoes. S on a block (or right-click → Solo) solos it: only soloed sounds are heard, and only soloed videos or items are seen, with their own sound. Solo several to hear or see them together; click S again to unsolo one, or ✕ next to the speaker for everything. The speaker plays the scene's sounds on this computer's own speakers while you rehearse (never the show output). Space plays and holds. Striped blocks are loops that fill the wait.
       </InfoTip>
       <RunButton sceneId={scene.id} />
       <PlayButton sceneId={scene.id} />
       <Button size="icon-xs" variant="ghost" aria-label={sound ? "Mute the preview" : "Hear the preview"} title={sound ? "Preview sound on (this computer's own speakers, not the show output). Click to mute." : "Preview sound off. Click to hear the scene's sounds as it plays."} onClick={() => setSound(!sound)}>
         {sound ? <Volume2 /> : <VolumeX className="text-muted-foreground" />}
       </Button>
+      <SoloChip />
+      <MuteChip />
+      <BlockMenu />
       <TimeReadout sceneId={scene.id} end={tl.end} />
       <AddAtPlayhead sceneId={scene.id} end={tl.end} onAdd={(at) => editor.open({ at, where: "" })} />
       {draft ? (
@@ -377,6 +393,109 @@ function PlayButton({ sceneId }: { sceneId: string }) {
 }
 
 /** Add an action where the playhead is (the same as double-clicking that moment). */
+/** What a block solos: its sound, else the component it belongs to (null: nothing to solo). */
+function soloOf(it: TimelineItem): string | null {
+  if (it.key?.startsWith("sound:")) return it.key;
+  return it.componentId ?? null;
+}
+
+/** The preview is soloing something: what, and a way back to everything. */
+function SoloChip() {
+  const solo = useShow((s) => s.solo);
+  const names = useShow(
+    useShallow((s) => s.solo.map((id) => (id.startsWith("sound:") ? (s.assets.find((a) => a.id === id.slice(6))?.name ?? "sound") : (s.preview?.scene.components.find((c) => c.id === id)?.name ?? "item")))),
+  );
+  if (!solo.length) return null;
+  return (
+    <Button size="xs" variant="ghost" className="h-6 max-w-56 gap-1 bg-armed/15 px-1.5 text-[11px] text-armed hover:bg-armed/25 hover:text-armed" title={`Soloed in the preview:\n${names.join("\n")}\nClick to hear and see everything again.`} onClick={() => useShow.getState().setSolo([])}>
+      <span className="truncate">Solo: {names.length === 1 ? names[0] : `${names.length} items`}</span>
+      <X className="size-3 shrink-0" />
+    </Button>
+  );
+}
+
+/** Sounds muted in the preview: how many, and a way to hear them again. */
+function MuteChip() {
+  const names = useShow(useShallow((s) => s.muted.map((k) => s.assets.find((a) => a.id === k.slice(6))?.name ?? "sound")));
+  if (!names.length) return null;
+  return (
+    <Button size="xs" variant="ghost" className="h-6 max-w-56 gap-1 bg-white/10 px-1.5 text-[11px] text-foreground/80" title={`Muted in the preview:\n${names.join("\n")}\nClick to hear them again.`} onClick={() => useShow.getState().setMuted([])}>
+      <VolumeOff className="size-3 shrink-0" />
+      <span className="truncate">Muted: {names.length === 1 ? names[0] : `${names.length} sounds`}</span>
+      <X className="size-3 shrink-0" />
+    </Button>
+  );
+}
+
+/** The right-click menu of a block: one for the whole timeline, opened at the pointer. */
+interface BlockMenuState {
+  x: number;
+  y: number;
+  it: TimelineItem;
+  open: () => void;
+  settings: () => void;
+  seek: () => void;
+}
+const useBlockMenu = create<{ menu: BlockMenuState | null }>(() => ({ menu: null }));
+
+function BlockMenu() {
+  const menu = useBlockMenu((s) => s.menu);
+  const solo = useShow((s) => s.solo);
+  const muted = useShow((s) => s.muted);
+  const close = () => useBlockMenu.setState({ menu: null });
+  if (!menu) return null;
+  const key = soloOf(menu.it);
+  const soloed = !!key && solo.includes(key);
+  const what = key?.startsWith("sound:") ? "sound" : "item";
+  return (
+    <DropdownMenu open onOpenChange={(o) => !o && close()} modal={false}>
+      <DropdownMenuTrigger asChild>
+        <span className="pointer-events-none fixed size-0" style={{ left: menu.x, top: menu.y }} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-52 text-[12px]">
+        <DropdownMenuLabel className="max-w-72 truncate text-[11px] font-normal text-muted-foreground">{menu.it.label}</DropdownMenuLabel>
+        {key && (
+          <>
+            <DropdownMenuItem onSelect={() => useShow.getState().toggleSolo(key)}>
+              <Headphones /> {soloed ? `Unsolo this ${what}` : solo.length ? `Solo this ${what} too` : `Solo this ${what}`}
+            </DropdownMenuItem>
+            {(solo.length > 1 || (solo.length === 1 && !soloed)) && (
+              <DropdownMenuItem onSelect={() => useShow.getState().setSolo([key])}>
+                <Focus /> Solo only this {what}
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
+        {key?.startsWith("sound:") && (
+          <DropdownMenuItem onSelect={() => useShow.getState().toggleMute(key)}>
+            {muted.includes(key) ? <Volume2 /> : <VolumeOff />} {muted.includes(key) ? "Unmute this sound" : "Mute this sound (preview)"}
+          </DropdownMenuItem>
+        )}
+        {muted.length > 0 && !(muted.length === 1 && key && muted.includes(key)) && (
+          <DropdownMenuItem onSelect={() => useShow.getState().setMuted([])}>
+            <Volume2 /> Unmute all sounds
+          </DropdownMenuItem>
+        )}
+        {solo.length > 0 && (
+          <DropdownMenuItem onSelect={() => useShow.getState().setSolo([])}>
+            <X /> Clear solo (everything)
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={menu.seek}>
+          <Play /> Preview from here
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={menu.open}>
+          <Hand /> Select
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={menu.settings}>
+          <Settings2 /> {menu.it.action != null || menu.it.markerHost ? "Settings…" : menu.it.cue != null ? "Open its cue" : "Preview here"}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function AddAtPlayhead({ sceneId, end, onAdd }: { sceneId: string; end: number; onAdd: (at: number) => void }) {
   const rt = usePreviewOf(sceneId);
   const at = rt ? Math.min(end, Math.max(0, sceneNow(rt) / 1000)) : 0;
@@ -725,6 +844,10 @@ function Block({ it, pps, rowH, scene, onSeek }: { it: TimelineItem; pps: number
   };
   const movable = it.cue != null && it.action != null;
   const sel = isSelected(it, edit.selected);
+  const soloKey = soloOf(it);
+  const solo = useShow((s) => s.solo);
+  const soloed = !!soloKey && solo.includes(soloKey);
+  const isMuted = useShow((s) => !!it.key && s.muted.includes(it.key));
   const onPointerDown = (e: React.PointerEvent) => {
     if (!movable) {
       e.stopPropagation();
@@ -750,6 +873,11 @@ function Block({ it, pps, rowH, scene, onSeek }: { it: TimelineItem; pps: number
     onPointerDown,
     onClick: (e: React.MouseEvent) => e.detail === 0 && open(),
     onDoubleClick: openCue,
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      useBlockMenu.setState({ menu: { x: e.clientX, y: e.clientY, it, open, settings: openCue, seek: () => onSeek(it.start) } });
+    },
   };
   const top = 2 + it.lane * rowH;
   if (it.end <= it.start)
@@ -773,12 +901,30 @@ function Block({ it, pps, rowH, scene, onSeek }: { it: TimelineItem; pps: number
     <button
       type="button"
       {...common}
-      className={cn("group absolute overflow-hidden rounded-[3px] border px-1 text-left text-[10.5px] leading-[14px] hover:brightness-125", TONE[it.tone], it.carriedIn && "rounded-l-none border-l-2", it.carriesOut && "rounded-r-none", movable && "cursor-grab active:cursor-grabbing", sel && "ring-2 ring-white")}
+      className={cn("group absolute overflow-hidden rounded-[3px] border px-1 text-left text-[10.5px] leading-[14px] hover:brightness-125", TONE[it.tone], it.carriedIn && "rounded-l-none border-l-2", it.carriesOut && "rounded-r-none", movable && "cursor-grab active:cursor-grabbing", sel && "ring-2 ring-white", soloed && "ring-2 ring-armed", solo.length > 0 && !soloed && "opacity-35", isMuted && "opacity-40 grayscale")}
       style={{ left, width: w, top, height: rowH - 3, ...(it.carriedIn ? { borderLeftStyle: "dashed" } : {}), ...(it.loop ? STRIPES : {}), ...(it.open ? { maskImage: "linear-gradient(to right, black 60%, transparent)" } : {}) }}
     >
       {it.requested != null && <span className="pointer-events-none absolute inset-y-0 left-0 w-px bg-white/40" />}
+      {soloKey && w >= 28 && (
+        <span
+          role="button"
+          aria-label={soloed ? "Unsolo" : `Solo “${it.label}”`}
+          aria-pressed={soloed}
+          title={soloed ? "Soloed: click to unsolo it" : soloKey.startsWith("sound:") ? "Solo: hear only this sound in the preview (solo more to hear them together; right-click for more)" : "Solo: show only this in the preview, with only its own sound (solo more to see them together; right-click for more)"}
+          className={cn("absolute bottom-0.5 right-2 z-[4] grid h-3.5 min-w-3.5 place-items-center rounded-[2px] px-0.5 font-key text-[9px] font-bold leading-none", soloed ? "bg-armed text-black" : "bg-black/50 text-white/80 opacity-0 hover:bg-black/70 group-hover:opacity-100")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            useShow.getState().toggleSolo(soloKey);
+          }}
+        >
+          S
+        </span>
+      )}
       <span className="pointer-events-none relative z-[1] block truncate">
         {it.carriedIn && "◂ "}
+        {isMuted && <VolumeOff className="mr-1 inline size-3 align-[-2px]" />}
         {it.label}
         {it.carriesOut && " ▸ next scene"}
       </span>

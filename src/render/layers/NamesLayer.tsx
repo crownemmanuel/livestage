@@ -48,6 +48,11 @@ export function NamesLayer({ comp }: { comp: NamesComponent }) {
     return m;
   }, [mat]);
   const last = useRef<{ key: string; animating: boolean }>({ key: "", animating: true });
+  // The part of the redraw key that only changes with an edit, built once per edit.
+  const staticKey = useMemo(
+    () => `${comp.names.join("|")}|${comp.style}|${comp.color}|${comp.size}|${comp.x}|${comp.y}|${comp.height}|${comp.spread}|${comp.crown}`,
+    [comp.names, comp.style, comp.color, comp.size, comp.x, comp.y, comp.height, comp.spread, comp.crown],
+  );
   useEffect(() => () => {
     tex.texture.dispose();
     mat.dispose();
@@ -70,15 +75,18 @@ export function NamesLayer({ comp }: { comp: NamesComponent }) {
 
     const texW = overlayTexWidth(canvasW);
     const texH = Math.round((texW * canvasH) / canvasW);
-    resizeCanvasTex(tex, texW, texH);
+    // A resize clears the canvas, so it always redraws.
+    const resized = resizeCanvasTex(tex, texW, texH);
     const burn = evalTween(st.burn, t);
     const bloom = evalTween(st.bloom, t);
     const sinceShown = (t - st.shownAt) / 1000;
     const revealing = st.shown > 0 && sinceShown < comp.reveal + 0.8;
-    const tweening = (st.burn.dur > 0 && t < st.burn.at + st.burn.dur + 3000) || (st.bloom.dur > 0 && t < st.bloom.at + st.bloom.dur + 500);
+    // Once a tween has ended its value is fixed (evalTween returns `to`), so the picture is static
+    // from then on; only the embers move, and they are covered by the burn range below.
+    const tweening = (st.burn.dur > 0 && t < st.burn.at + st.burn.dur) || (st.bloom.dur > 0 && t < st.bloom.at + st.bloom.dur);
     const animating = revealing || tweening || (comp.style === "fly" && sinceShown < comp.reveal * 2.5) || (burn > 0.02 && burn < 0.999) || (bloom > 0.02 && bloom < 1);
-    const key = `${st.shown}|${texW}|${burn.toFixed(3)}|${bloom.toFixed(3)}|${comp.names.join("|")}|${comp.style}|${comp.color}|${comp.size}|${comp.x}|${comp.y}|${comp.height}|${comp.spread}|${comp.crown}`;
-    if (key === last.current.key && !animating && !last.current.animating) return;
+    const key = `${st.shown}|${texW}|${burn.toFixed(3)}|${bloom.toFixed(3)}|${staticKey}`;
+    if (key === last.current.key && !animating && !last.current.animating && !resized) return;
     last.current = { key, animating };
 
     const ctx = tex.ctx;
@@ -100,7 +108,8 @@ export function NamesLayer({ comp }: { comp: NamesComponent }) {
       const rootX = comp.x * W;
       const rootY = comp.y * H;
       // How much of the trunk is alive: burning eats it from the top down to a stump.
-      const shownTop = st.shown > 0 ? nodes[Math.min(total, st.shown) - 1].ty - H * 0.02 * progressOf(st.shown - 1) : rootY;
+      // (total > 0: names may be emptied while some are shown; nodes[-1] would throw in the frame loop.)
+      const shownTop = st.shown > 0 && total > 0 ? nodes[Math.min(total, st.shown) - 1].ty - H * 0.02 * progressOf(st.shown - 1) : rootY;
       const stumpY = rootY - comp.height * H * 0.1;
       const trunkTop = rootY - (rootY - shownTop) * (1 - burn) - (burn > 0 ? 0 : 0);
       const aliveTop = Math.max(trunkTop, burn > 0 ? stumpY - (stumpY - shownTop) * (1 - burn) : -1e9);
@@ -206,7 +215,7 @@ export function NamesLayer({ comp }: { comp: NamesComponent }) {
         ctx.fillText(comp.names[nd.i], tx, ty);
       }
       // Crown ornament (FOREVER / JESUS) above the finished tree.
-      if (comp.crown && st.shown >= total && burn < 1) {
+      if (comp.crown && total > 0 && st.shown >= total && burn < 1) {
         const k = clamp((sinceShown - comp.reveal) / 1.5, 0, 1) * (1 - clamp(burn * 1.5, 0, 1));
         if (k > 0) {
           const topNode = nodes[total - 1];
@@ -242,6 +251,7 @@ export function NamesLayer({ comp }: { comp: NamesComponent }) {
       const cx = comp.x * W;
       const cy = comp.y * H;
       for (let i = Math.max(0, st.shown - 4); i < st.shown; i++) {
+        if (i >= total) continue;
         const age = i === st.shown - 1 ? sinceShown : sinceShown + (st.shown - 1 - i) * comp.reveal;
         const life = clamp(age / Math.max(0.1, comp.reveal * 2.2), 0, 1);
         if (life >= 1) continue;

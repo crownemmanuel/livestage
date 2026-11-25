@@ -23,6 +23,7 @@ import {
   Settings as SettingsIcon,
   TvMinimalPlay,
   Timer,
+  Armchair,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -51,13 +52,12 @@ export function TopBar() {
   const name = useProject((s) => s.project.name);
   const dirty = useProject((s) => s.dirty);
   const savedAt = useProject((s) => s.savedAt);
-  const saveError = useProject((s) => s.saveError);
-  const output = useProject((s) => s.project.output);
-  const program = useShow((s) => s.program);
-  const status = useShow((s) => s.outputStatus);
-  const seenAt = useShow((s) => s.outputSeenAt);
-  const outputLostAt = useShow((s) => s.outputLostAt);
-  const restoredAt = useShow((s) => s.restoredAt);
+  const saveProblem = useProject((s) => s.saveError);
+  const loadProblem = useProject((s) => s.loadProblem);
+  const saveError = saveProblem ?? loadProblem;
+  const blackout = useShow((s) => !!s.program.blackout?.on);
+  const standby = useShow((s) => s.program.standby);
+  const outputLost = useShow((s) => !!s.outputLostAt);
   const midiStatus = useIo((s) => s.midiStatus);
   const oscStatus = useIo((s) => s.oscStatus);
   const ioErr = useIo((s) => s.midiStatus === "error" || s.oscStatus === "error");
@@ -67,14 +67,7 @@ export function TopBar() {
   const [confirmReset, setConfirmReset] = useState(false);
   const [errCount, setErrCount] = useState(() => getErrors().length);
   useEffect(() => onErrors(() => setErrCount(getErrors().length)), []);
-  const [clock, setClock] = useState(() => new Date());
-  useEffect(() => {
-    const h = setInterval(() => setClock(new Date()), 1000);
-    return () => clearInterval(h);
-  }, []);
-  const connected = !!status && Date.now() - seenAt < 3500;
   const ioOn = midiStatus === "open" || oscStatus === "listening";
-  const blackout = !!program.blackout?.on;
   const updateVersion = useUpdater((s) => s.available?.version ?? null);
 
   return (
@@ -90,6 +83,7 @@ export function TopBar() {
       <div className="flex items-center gap-0.5 border-l border-border pl-2">
         <ToolbarButton icon={<TvMinimalPlay />} label="Show" active={mode === "show"} onClick={() => useProject.getState().setMode("show")} tip="Run the show: preview, take live, fire cues" />
         <ToolbarButton icon={<PencilRuler />} label="Build" active={mode === "builder"} onClick={() => useProject.getState().setMode("builder")} tip="Build scenes: components, cues, camera. Edits only touch the preview." />
+        <ToolbarButton icon={<Armchair />} label="Room" active={mode === "room"} onClick={() => useProject.getState().setMode("room")} tip="See a scene or an image on the wall in a photo of the room (preview only)" />
       </div>
 
       {/* Wall warnings only (what is on air shows on the Program monitor). */}
@@ -101,14 +95,8 @@ export function TopBar() {
             </span>
           </Tip>
         )}
-        {restoredAt && Date.now() - restoredAt < 60000 && (
-          <Tip label="The app restarted and picked the show up where it was" side="bottom">
-            <span className="grid size-7 place-items-center rounded-full border border-preview/50 text-preview">
-              <History className="size-3.5" />
-            </span>
-          </Tip>
-        )}
-        {outputLostAt && (
+        <RestoredBadge />
+        {outputLost && (
           <span className="flex items-center gap-1.5 rounded-full bg-destructive px-2.5 py-1 text-[12px] font-semibold text-white">
             <AlertTriangle className="size-3.5" /> Output lost, reopening
           </span>
@@ -177,21 +165,9 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-1.5 border-l border-border pl-2.5">
-        <RoundToggle
-          on={connected}
-          tone="preview"
-          label="Output"
-          icon={<MonitorPlay />}
-          tip={connected ? `Audience output open: ${status!.width}×${status!.height}, ${status!.fps} fps. Click to close it.` : "Open the audience output on the LED wall's display"}
-          onClick={async () => {
-            if (connected) {
-              await closeOutputWindow();
-              useShow.setState({ outputStatus: null, outputSeenAt: 0 });
-            } else void openOutputWindow(output);
-          }}
-        />
+        <OutputToggle />
         <RoundToggle on={blackout} tone="armed" label="Blackout" icon={<Moon />} tip="Fade the whole wall to black, and back (Shift+B)" onClick={() => useShow.getState().setBlackout(!blackout)} />
-        <RoundToggle on={program.standby} tone="armed" label="Standby" icon={<Power />} tip="Fade the wall to the safe standby picture, and back" onClick={() => useShow.getState().setStandby(!program.standby)} />
+        <RoundToggle on={standby} tone="armed" label="Standby" icon={<Power />} tip="Fade the wall to the safe standby picture, and back" onClick={() => useShow.getState().setStandby(!standby)} />
         <QuickActionsButton />
       </div>
 
@@ -204,13 +180,13 @@ export function TopBar() {
           </Tip>
         )}
         <AgentBadge />
-        <Tip label={saveError ? `Save failed: ${saveError}` : dirty ? "Saving…" : savedAt ? `Saved ${new Date(savedAt).toLocaleTimeString()}` : "Saved"} side="bottom">
+        <Tip label={loadProblem ? loadProblem : saveProblem ? `Save failed: ${saveProblem}` : dirty ? "Saving…" : savedAt ? `Saved ${new Date(savedAt).toLocaleTimeString()}` : "Saved"} side="bottom">
           <span className={cn("grid size-6 place-items-center", saveError ? "text-destructive" : "text-muted-foreground")}>
             {saveError ? <AlertTriangle className="size-4" /> : dirty ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
           </span>
         </Tip>
         <RunningTimers />
-        <span className="font-key w-[70px] text-right text-[15px] font-semibold tabular text-foreground/80">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
+        <WallClock />
       </div>
 
       <OutputSettingsDialog open={settings} onOpenChange={setSettings} />
@@ -241,6 +217,81 @@ export function TopBar() {
         </DialogContent>
       </Dialog>
     </header>
+  );
+}
+
+/** Time of day. Its own component so only it re-renders every second. */
+function WallClock() {
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const h = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(h);
+  }, []);
+  return <span className="font-key w-[70px] text-right text-[15px] font-semibold tabular text-foreground/80">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>;
+}
+
+/** "The app restarted" badge, shown for a minute after a restore. */
+function RestoredBadge() {
+  const restoredAt = useShow((s) => s.restoredAt);
+  const [, force] = useState(0);
+  useEffect(() => {
+    const left = restoredAt ? restoredAt + 60000 - Date.now() : 0;
+    if (left <= 0) return;
+    const h = setTimeout(() => force((n) => n + 1), left + 50);
+    return () => clearTimeout(h);
+  }, [restoredAt]);
+  if (!restoredAt || Date.now() - restoredAt >= 60000) return null;
+  return (
+    <Tip label="The app restarted and picked the show up where it was" side="bottom">
+      <span className="grid size-7 place-items-center rounded-full border border-preview/50 text-preview">
+        <History className="size-3.5" />
+      </span>
+    </Tip>
+  );
+}
+
+const CLOSE_ARM_MS = 3000;
+
+/** Opens / closes the audience output. Closing it while a scene is live takes a second click. */
+function OutputToggle() {
+  const status = useShow((s) => s.outputStatus);
+  const connected = useShow((s) => !!s.outputStatus && Date.now() - s.outputSeenAt < 3500);
+  const live = useShow((s) => !s.program.standby && !!s.program.runtime);
+  const [armed, setArmed] = useState(false);
+  const mustConfirm = connected && live;
+  useEffect(() => {
+    if (!armed) return;
+    if (!mustConfirm) {
+      setArmed(false);
+      return;
+    }
+    const h = setTimeout(() => setArmed(false), CLOSE_ARM_MS);
+    return () => clearTimeout(h);
+  }, [armed, mustConfirm]);
+  const close = async () => {
+    setArmed(false);
+    await closeOutputWindow();
+    useShow.setState({ outputStatus: null, outputSeenAt: 0 });
+  };
+  return (
+    <RoundToggle
+      on={connected && !armed}
+      tone={armed ? "live" : "preview"}
+      label={armed ? "Close?" : "Output"}
+      icon={<MonitorPlay />}
+      tip={
+        armed
+          ? "A scene is live on the wall: click again to close the audience output"
+          : connected && status
+            ? `Audience output open: ${status.width}×${status.height}, ${status.fps} fps. Click to close it${mustConfirm ? " (asks again while a scene is live)" : ""}.`
+            : "Open the audience output on the LED wall's display"
+      }
+      onClick={() => {
+        if (!connected) return void openOutputWindow(useProject.getState().project.output);
+        if (mustConfirm && !armed) return setArmed(true);
+        void close();
+      }}
+    />
   );
 }
 

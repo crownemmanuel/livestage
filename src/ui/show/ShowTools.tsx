@@ -14,6 +14,8 @@ import { formatClock, timerLeft } from "@/core/timers";
 import type { Announcement, Asset, OverlayPosition, ShowTimer, TimerOverlayStyle } from "@/core/types";
 import { TimerOverlayView } from "@/render/TimerOverlay";
 import { playAnnouncement, probeDuration, runTimer, stopAnnouncement } from "@/engine/operator";
+import { speakerLabel } from "@/engine/speakers";
+import { SpeakerChooser } from "./SpeakerPicker";
 import { accountVoices, getElevenKey, setElevenKey, speak, TRAILER_VOICES, TTS_MODELS, type Voice } from "@/engine/elevenlabs";
 import { useProject, NO_ITEMS } from "@/store/project";
 import { useShow } from "@/store/show";
@@ -146,6 +148,10 @@ function AnnouncementCard({ a, editing, audio, upd }: { a: Announcement; editing
             <Trash2 />
           </Button>
         </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">Speakers</span>
+          <SpeakerChooser value={a.speakers} onChange={(v) => set((x) => (v ? (x.speakers = v) : delete x.speakers))} />
+        </div>
       </div>
     );
   }
@@ -171,6 +177,7 @@ function AnnouncementCard({ a, editing, audio, upd }: { a: Announcement; editing
           <div className="text-[11px] tabular text-muted-foreground">
             {!asset ? "no audio" : isOn ? `${formatClock(elapsed)} / ${formatClock(dur)}` : dur ? formatClock(dur) : "…"}
             {a.volume !== 1 && ` · vol ${Math.round(a.volume * 100)}%`}
+            {a.speakers?.length ? ` · ${a.speakers.map(speakerLabel).join(" + ")}` : ""}
           </div>
         </div>
         {isOn && (

@@ -39,3 +39,35 @@ export async function layoutScene(scene: Scene): Promise<SceneTimeline> {
   await probeDurations(assets, timelineAssetIds(scene));
   return sceneTimeline(scene, timelineEnv(assets, useProject.getState().project.scenes));
 }
+
+/**
+ * When each cue starts (scene seconds; null = it does not fire), laid out now with the media lengths known so
+ * far (the rest are probed for next time). `fixed` pins cues to where they really fired (see sceneTimeline).
+ */
+export function cueStarts(scene: Scene, fixed?: (number | null | undefined)[]): (number | null)[] {
+  const assets = useShow.getState().assets;
+  void probeDurations(assets, timelineAssetIds(scene));
+  return sceneTimeline(scene, timelineEnv(assets, useProject.getState().project.scenes), fixed).cues.map((c) => c.start);
+}
+
+const lengths = new WeakMap<Scene, number>();
+const measuring = new WeakSet<Scene>();
+
+/** How long a scene runs (s) as the Build timeline lays it out; a first guess until its media lengths are probed. */
+export function sceneLength(scene: Scene): number {
+  const known = lengths.get(scene);
+  if (known !== undefined) return known;
+  const assets = useShow.getState().assets;
+  const ids = timelineAssetIds(scene);
+  const end = () => sceneTimeline(scene, timelineEnv(assets, useProject.getState().project.scenes)).end;
+  if (ids.every((id) => knownDuration(id) !== undefined)) {
+    lengths.set(scene, end());
+    return lengths.get(scene)!;
+  }
+  // Media that cannot be measured (missing from the library) is left as the layout guesses it.
+  if (!measuring.has(scene)) {
+    measuring.add(scene);
+    void probeDurations(assets, ids).then(() => lengths.set(scene, end()));
+  }
+  return end();
+}

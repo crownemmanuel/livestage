@@ -3,7 +3,10 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import type { PlateLight } from "@/core/types";
 import { smoothstep } from "@/core/clock";
-import { useStage } from "../frame";
+import { parsedColor, useStage } from "../frame";
+
+/** Centre of the playing area: the shadow frustum and key lights aim here. */
+const FOCUS = new THREE.Vector3(0, 0, -14);
 
 /**
  * Sun, moon, sky fill and lightning illumination. Also drives scene fog so
@@ -54,7 +57,7 @@ export function Lights({ shadows = true, plate, skyFill = 1, fogScale = 1 }: { s
     // Keep the shadow frustum centred on the playing area. Shadow casters stay
     // fixed (toggling castShadow recompiles shaders mid-show); at night the sun
     // sits below the horizon at zero intensity, so its shadows simply vanish.
-    const focus = new THREE.Vector3(0, 0, -14);
+    const focus = FOCUS;
     sun.target.position.copy(focus);
     if (plate) {
       // Azimuth 0 = light from the audience, 90 = from stage right; elevation above the horizon.
@@ -63,11 +66,11 @@ export function Lights({ shadows = true, plate, skyFill = 1, fogScale = 1 }: { s
       plateDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).normalize();
       sun.position.copy(focus).addScaledVector(plateDir, 120);
       const night = smoothstep(0.25, 1, frame.tod);
-      sun.color.set(plate.color).lerp(nightKey, night);
+      sun.color.copy(parsedColor(plate.color)).lerp(nightKey, night);
       sun.intensity = plate.intensity * (1 - 0.96 * night) * (1 - 0.6 * frame.storm) + frame.flash * 2;
       moon.intensity = 0;
-      hemi.color.set(plate.ambient).lerp(nightKey, night * 0.65);
-      hemi.groundColor.set(plate.ambient).multiplyScalar(0.45);
+      hemi.color.copy(parsedColor(plate.ambient)).lerp(nightKey, night * 0.65);
+      hemi.groundColor.copy(parsedColor(plate.ambient)).multiplyScalar(0.45);
       hemi.intensity = plate.ambientIntensity * (1 - 0.72 * night) + frame.flash * 2;
       flash.intensity = frame.flash * 4;
       const fogP = scene.fog as THREE.FogExp2 | null;

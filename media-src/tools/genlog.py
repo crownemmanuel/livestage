@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """The generation log: every prompt we ran, with its model, settings and source files, findable by
-the LiveStage scene or asset it feeds. Each folder under media-src/ keeps its own prompts.jsonl
+the LiveStage scene or asset it feeds. Each folder under the show's edits/ folder (see workspace.py) keeps its own prompts.jsonl
 (one JSON object per line); this tool adds to them and searches all of them.
 
     # log a generation (write it when the job starts; the folder is where its output lands)
-    python3 media-src/tools/genlog.py add media-src/scene1/bg01-hd '{
+    EDITS="$(python3 media-src/tools/workspace.py)"   # <workspace>/<show>/edits
+    python3 media-src/tools/genlog.py add "$EDITS/scene1/bg01-hd" '{
         "output": "left-palm-kling.mp4", "status": "used",
         "scenes": ["2.1"], "assets": ["asset_1oydh0a14v1"],
         "tool": "runway generate_video", "model": "kling-4",
         "settings": {"resolution": "1080p", "ratio": "16:9", "duration": 10},
-        "sources": {"startFrame": "media-src/scene1/bg01-hd/left-palm-1080.jpg"},
+        "sources": {"startFrame": "edits/scene1/bg01-hd/left-palm-1080.jpg"},
         "taskId": "01bc95db-...", "credits": 177, "prompt": "Camera completely locked off ..."}'
 
     # find what made a scene / asset / file, to regenerate it the same way
@@ -30,8 +31,9 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-MEDIA = ROOT / "media-src"
+from workspace import edits_dir, short
+
+MEDIA = edits_dir()
 REQUIRED = ("output", "status", "scenes", "tool", "model", "prompt")
 STATUSES = ("used", "draft", "rejected", "superseded")
 
@@ -55,7 +57,7 @@ def add(folder, raw):
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / "prompts.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    print(f"logged {e['output']} in {(folder / 'prompts.jsonl').relative_to(ROOT)}")
+    print(f"logged {e['output']} in {short(folder / 'prompts.jsonl')}")
 
 
 def matches(e, q):
@@ -68,11 +70,11 @@ def matches(e, q):
 def find(q, full):
     hits = [(d, n, e) for d, n, e in entries() if matches(e, q)]
     for d, n, e in hits:
-        rel = d.relative_to(ROOT)
+        rel = short(d)
         print(f"── {rel}/{e['output']}  [{e.get('status')}]  {e.get('date', '')}")
         print(f"   scenes {', '.join(map(str, e.get('scenes', [])))}   assets {', '.join(e.get('assets', [])) or '-'}")
         print(f"   {e.get('tool')} · {e.get('model')} · {json.dumps(e.get('settings', {}))}")
-        for role, src in (e.get("sources") or {}).items():
+        for role, src in (lambda v: v.items() if isinstance(v, dict) else enumerate(v))(e.get("sources") or {}):
             print(f"   source {role}: {src}")
         if e.get("taskId"):
             print(f"   task {e['taskId']}" + (f" · {e['credits']} credits" if e.get("credits") else ""))

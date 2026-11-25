@@ -46,7 +46,7 @@ export function MediaBadge({ asset, detail = false }: { asset: Asset; detail?: b
     return detail && format ? <span className="truncate text-[10px] text-muted-foreground/70" title={format}>· {format}</span> : null;
   }
   const worst = problems[0];
-  const fixable = problems.some((p) => p.fixable) && !!asset.path && !asset.builtIn && !asset.hasAlpha;
+  const fixable = problems.some((p) => p.fixable) && !!asset.path && !asset.builtIn && (!asset.hasAlpha || !!asset.alphaPacked);
   const tip = [format, ...problems.map((p) => `${p.severity === "error" ? "✖" : "▲"} ${p.message}`)].filter(Boolean).join("\n");
   const run = (e: React.MouseEvent) => {
     e.stopPropagation();

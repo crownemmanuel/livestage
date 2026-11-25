@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { clamp } from "@/core/clock";
@@ -7,7 +7,7 @@ import { rng } from "@/core/noise";
 import { effectLevel } from "@/core/runtime";
 import type { EffectComponent, LightningStrike } from "@/core/types";
 import { NOISE_GLSL, QUAD_VERT } from "../glsl";
-import { flashCurve, useStage } from "../frame";
+import { flashCurve, parsedColor, useStage } from "../frame";
 import { syncVideo, useVideo } from "../layers/video";
 
 /** Full-canvas quad in the overlay (ortho, logical px) scenes. */
@@ -45,15 +45,20 @@ uniform vec3 uColor;
 varying vec2 vUv;
 ${NOISE_GLSL}
 void main() {
-  vec2 p = vec2(vUv.x * uAspect, vUv.y);
-  float t = uTime * uSpeed;
-  float n1 = fbm4(p * vec2(1.6, 4.5) + vec2(t * 0.05, 0.0));
-  float n2 = fbm4(p * vec2(3.4, 8.0) + vec2(-t * 0.09, t * 0.01) + n1 * 0.8);
-  float n3 = fbm4(p * vec2(0.7, 2.0) + vec2(t * 0.02, 3.0));
-  float n = n1 * 0.45 + n2 * 0.35 + n3 * 0.4;
-  float top = uHeight + (n3 - 0.5) * 0.12;
-  float mask = 1.0 - smoothstep(top * 0.25, top + 0.08, vUv.y);
-  float a = clamp(mask * (0.25 + n * 1.05) * uDensity * uLevel, 0.0, 0.96);
+  float a = 0.0;
+  // fbm4 < 0.94, so the fog top never passes uHeight + 0.053 and the mask is 0 from
+  // uHeight + 0.133 up: most of the wall skips the noise (same picture).
+  if (uHeight < 0.0 || vUv.y < uHeight + 0.14) {
+    vec2 p = vec2(vUv.x * uAspect, vUv.y);
+    float t = uTime * uSpeed;
+    float n1 = fbm4(p * vec2(1.6, 4.5) + vec2(t * 0.05, 0.0));
+    float n2 = fbm4(p * vec2(3.4, 8.0) + vec2(-t * 0.09, t * 0.01) + n1 * 0.8);
+    float n3 = fbm4(p * vec2(0.7, 2.0) + vec2(t * 0.02, 3.0));
+    float n = n1 * 0.45 + n2 * 0.35 + n3 * 0.4;
+    float top = uHeight + (n3 - 0.5) * 0.12;
+    float mask = 1.0 - smoothstep(top * 0.25, top + 0.08, vUv.y);
+    a = clamp(mask * (0.25 + n * 1.05) * uDensity * uLevel, 0.0, 0.96);
+  }
   gl_FragColor = vec4(uColor, a);
   #include <colorspace_fragment>
 }
@@ -75,14 +80,17 @@ export function FogOverlay({ comp }: { comp: EffectComponent }) {
     const p = e?.params ?? comp.params;
     const lvl = e ? effectLevel("fog", e.active, e.changedAt, p, frame.t) : 0;
     mesh.visible = lvl > 0.001;
+    if (!mesh.visible) return;
     const u = mat.uniforms;
     u.uTime.value = frame.ts;
     u.uDensity.value = num(p, "density", 0.6);
     u.uHeight.value = num(p, "height", 0.3);
-    u.uSpeed.value = num(p, "speed", 0.4) * (1 + frame.windNow);
+    // Drift = time x speed, so the speed must not carry the per-frame gust (windNow): that made the
+    // layers slosh by an amount growing with scene time. The steady wind strength sets the rate.
+    u.uSpeed.value = num(p, "speed", 0.4) * (1 + frame.windStrength);
     u.uLevel.value = lvl;
     u.uAspect.value = canvasW / canvasH;
-    u.uColor.value.set(str(p, "color", "#c9ccd2")).multiplyScalar(Math.min(1.2, 0.2 + frame.ambient * 0.85 + frame.flash * 0.6));
+    u.uColor.value.copy(parsedColor(str(p, "color", "#c9ccd2"))).multiplyScalar(Math.min(1.2, 0.2 + frame.ambient * 0.85 + frame.flash * 0.6));
   });
   mesh.renderOrder = 10;
   return <primitive object={mesh} />;
@@ -111,8 +119,9 @@ export function HazeOverlay({ comp }: { comp: EffectComponent }) {
     const p = e?.params ?? comp.params;
     const lvl = e ? effectLevel("haze", e.active, e.changedAt, p, frame.t) : 0;
     mesh.visible = lvl > 0.001;
+    if (!mesh.visible) return;
     mat.uniforms.uAmount.value = lvl * num(p, "density", 0.4) * num(p, "opacity", 0.5) * 0.6;
-    mat.uniforms.uColor.value.set(str(p, "tint", "#d8cdb8")).multiplyScalar(0.04 + frame.ambient * 0.9).lerp(frame.horizon, 0.3);
+    mat.uniforms.uColor.value.copy(parsedColor(str(p, "tint", "#d8cdb8"))).multiplyScalar(0.04 + frame.ambient * 0.9).lerp(frame.horizon, 0.3);
   });
   mesh.renderOrder = 5;
   return <primitive object={mesh} />;
@@ -133,52 +142,116 @@ void main() {
 }
 `;
 
-/** Branching bolt as triangle ribbons in logical canvas pixels. */
-function boltGeometry(st: LightningStrike, W: number, H: number) {
+// Bolt geometry is written into a fixed buffer per pool slot: no allocation on the flash frame.
+const TRUNK_SEGS = 26;
+const BRANCH_SEGS = 10;
+const MAX_BRANCHES = 6;
+/** Two ribbons each for the trunk and up to six branches, 6 vertices per segment quad. */
+const BOLT_MAX_VERTS = (TRUNK_SEGS * 2 + MAX_BRANCHES * BRANCH_SEGS * 2) * 6;
+const QUAD_ORDER = [0, 2, 1, 1, 2, 3];
+const trunkPts = new Float64Array((TRUNK_SEGS + 1) * 2);
+const branchPts = new Float64Array((BRANCH_SEGS + 1) * 2);
+const quadX = new Float64Array(4);
+const quadY = new Float64Array(4);
+
+function makeBoltGeometry() {
+  const g = new THREE.BufferGeometry();
+  const pos = new THREE.BufferAttribute(new Float32Array(BOLT_MAX_VERTS * 3), 3);
+  pos.setUsage(THREE.DynamicDrawUsage);
+  const uv = new Float32Array(BOLT_MAX_VERTS * 2);
+  for (let v = 0; v < BOLT_MAX_VERTS; v++) uv[v * 2] = QUAD_ORDER[v % 6] % 2;
+  g.setAttribute("position", pos);
+  g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  g.setDrawRange(0, 0);
+  return g;
+}
+
+/**
+ * Branching bolt as triangle ribbons in logical canvas pixels, written into `g` (from
+ * makeBoltGeometry). The shape is a pure function of the strike seed (every window draws the
+ * same bolt): same random sequence and arithmetic as the original Vector2 version.
+ */
+function writeBoltGeometry(g: THREE.BufferGeometry, st: LightningStrike, W: number, H: number) {
   const r = rng(st.seed);
-  const pos: number[] = [];
-  const uv: number[] = [];
+  const posAttr = g.getAttribute("position") as THREE.BufferAttribute;
+  const pos = posAttr.array as Float32Array;
+  let v = 0;
   const s = H / 1080;
-  const ribbon = (pts: THREE.Vector2[], width: number) => {
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      const d = new THREE.Vector2().subVectors(b, a).normalize();
-      const n = new THREE.Vector2(-d.y, d.x).multiplyScalar(width * (1 - (i / pts.length) * 0.5));
-      const quad = [a.clone().sub(n), a.clone().add(n), b.clone().sub(n), b.clone().add(n)];
-      for (const k of [0, 2, 1, 1, 2, 3]) {
-        pos.push(quad[k].x, quad[k].y, 0);
-        uv.push(k % 2, 0);
+  const ribbon = (pts: Float64Array, count: number, width: number) => {
+    for (let i = 0; i < count - 1; i++) {
+      const ax = pts[i * 2];
+      const ay = pts[i * 2 + 1];
+      const bx = pts[i * 2 + 2];
+      const by = pts[i * 2 + 3];
+      // d = normalize(b - a) (Vector2.normalize divides by the length, or 1 when zero)
+      let dx = bx - ax;
+      let dy = by - ay;
+      const inv = 1 / (Math.sqrt(dx * dx + dy * dy) || 1);
+      dx *= inv;
+      dy *= inv;
+      const w = width * (1 - (i / count) * 0.5);
+      const nx = -dy * w;
+      const ny = dx * w;
+      quadX[0] = ax - nx;
+      quadY[0] = ay - ny;
+      quadX[1] = ax + nx;
+      quadY[1] = ay + ny;
+      quadX[2] = bx - nx;
+      quadY[2] = by - ny;
+      quadX[3] = bx + nx;
+      quadY[3] = by + ny;
+      for (let q = 0; q < 6; q++) {
+        const k = QUAD_ORDER[q];
+        pos[v * 3] = quadX[k];
+        pos[v * 3 + 1] = quadY[k];
+        pos[v * 3 + 2] = 0;
+        v++;
       }
     }
   };
-  const walk = (start: THREE.Vector2, angle: number, len: number, segs: number) => {
-    const pts = [start.clone()];
-    const p = start.clone();
+  /** Random walk of `segs` steps from (sx, sy) into `out`; returns the point count. */
+  const walk = (out: Float64Array, sx: number, sy: number, angle: number, len: number, segs: number) => {
+    out[0] = sx;
+    out[1] = sy;
+    let px = sx;
+    let py = sy;
+    const step = len / segs;
     for (let i = 0; i < segs; i++) {
       const a = angle + (r() - 0.5) * 1.1;
-      p.add(new THREE.Vector2(Math.sin(a), -Math.cos(a)).multiplyScalar(len / segs));
-      pts.push(p.clone());
+      px += Math.sin(a) * step;
+      py += -Math.cos(a) * step;
+      out[(i + 1) * 2] = px;
+      out[(i + 1) * 2 + 1] = py;
     }
-    return pts;
+    return segs + 1;
   };
-  const top = new THREE.Vector2((st.x - 0.5) * W, H / 2 + 10);
+  const topX = (st.x - 0.5) * W;
+  const topY = H / 2 + 10;
   // End around the horizon/hills rather than in the foreground.
   const trunkLen = H * (0.38 + r() * 0.18);
-  const trunk = walk(top, (r() - 0.5) * 0.4, trunkLen, 26);
-  ribbon(trunk, 4.5 * s);
-  ribbon(trunk, 16 * s);
+  const trunkN = walk(trunkPts, topX, topY, (r() - 0.5) * 0.4, trunkLen, TRUNK_SEGS);
+  ribbon(trunkPts, trunkN, 4.5 * s);
+  ribbon(trunkPts, trunkN, 16 * s);
   const branches = 3 + Math.floor(r() * 4);
   for (let b = 0; b < branches; b++) {
-    const from = trunk[4 + Math.floor(r() * (trunk.length - 10))];
-    const br = walk(from, (r() < 0.5 ? -1 : 1) * (0.5 + r() * 0.6), trunkLen * (0.15 + r() * 0.25), 10);
-    ribbon(br, 2.2 * s);
-    ribbon(br, 8 * s);
+    const from = 4 + Math.floor(r() * (trunkN - 10));
+    const sign = r() < 0.5 ? -1 : 1;
+    const angle = sign * (0.5 + r() * 0.6);
+    const n = walk(branchPts, trunkPts[from * 2], trunkPts[from * 2 + 1], angle, trunkLen * (0.15 + r() * 0.25), BRANCH_SEGS);
+    ribbon(branchPts, n, 2.2 * s);
+    ribbon(branchPts, n, 8 * s);
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
-  return g;
+  posAttr.needsUpdate = true;
+  g.setDrawRange(0, v);
+}
+
+interface BoltSlot {
+  mesh: THREE.Mesh;
+  mat: THREE.ShaderMaterial;
+  /** Strike drawn by this slot, null when free. */
+  id: string | null;
+  /** Frame stamp of the last frame the strike was live. */
+  seen: number;
 }
 
 const flashFrag = /* glsl */ `
@@ -195,7 +268,6 @@ export function LightningOverlay({ comp, flat }: { comp: EffectComponent; flat: 
   const { getRt, frame, canvasW, canvasH, assets } = useStage();
   const flash = useQuad(flashFrag, { uFlash: { value: 0 } }, { blending: THREE.AdditiveBlending });
   const group = useMemo(() => new THREE.Group(), []);
-  const bolts = useMemo(() => new Map<string, THREE.Mesh>(), []);
   const boltMat = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -224,41 +296,69 @@ export function LightningOverlay({ comp, flat }: { comp: EffectComponent; flat: 
     (vidMesh.material as THREE.MeshBasicMaterial).needsUpdate = true;
   }, [video, vidMesh]);
 
-  useEffect(
-    () => () => {
-      for (const m of bolts.values()) m.geometry.dispose();
-      bolts.clear();
-    },
-    [bolts],
-  );
+  /*
+   * Bolt pool: meshes, materials and geometry buffers are kept until unmount, so a strike never
+   * builds or compiles anything on its flash frame. An idle slot stays in the scene drawing
+   * nothing (draw range 0), which keeps the bolt shader compiled from the first frame on.
+   */
+  const pool = useMemo(() => {
+    const slots: BoltSlot[] = [];
+    const add = () => {
+      const mat = boltMat.clone();
+      const mesh = new THREE.Mesh(makeBoltGeometry(), mat);
+      mesh.frustumCulled = false;
+      const slot: BoltSlot = { mesh, mat, id: null, seen: 0 };
+      slots.push(slot);
+      group.add(mesh);
+      return slot;
+    };
+    return { slots, add };
+  }, [group, boltMat]);
+  const tick = useRef(0);
+
+  useEffect(() => {
+    if (pool.slots.length === 0) pool.add();
+    return () => {
+      for (const sl of pool.slots) {
+        group.remove(sl.mesh);
+        sl.mesh.geometry.dispose();
+        sl.mat.dispose();
+      }
+      pool.slots.length = 0;
+    };
+  }, [pool, group]);
 
   useFrame(() => {
     const rt = getRt();
-    const strikes = rt?.strikes ?? [];
-    const live = new Set<string>();
+    const strikes = rt?.strikes;
+    const stamp = ++tick.current;
     let latest: LightningStrike | null = null;
-    for (const st of strikes) {
-      const dt = (frame.t - st.at) / 1000;
-      if (dt < 0 || dt > st.duration * 1.7) continue;
-      live.add(st.id);
-      latest = st;
-      if (video) continue;
-      let m = bolts.get(st.id);
-      if (!m) {
-        const mat = boltMat.clone();
-        m = new THREE.Mesh(boltGeometry(st, canvasW, canvasH), mat);
-        m.frustumCulled = false;
-        bolts.set(st.id, m);
-        group.add(m);
+    if (strikes) {
+      for (const st of strikes) {
+        const dt = (frame.t - st.at) / 1000;
+        if (dt < 0 || dt > st.duration * 1.7) continue;
+        latest = st;
+        if (video) continue;
+        let slot: BoltSlot | null = null;
+        let free: BoltSlot | null = null;
+        for (const sl of pool.slots) {
+          if (sl.id === st.id) slot = sl;
+          else if (sl.id === null && !free) free = sl;
+        }
+        if (!slot) {
+          slot = free ?? pool.add();
+          slot.id = st.id;
+          writeBoltGeometry(slot.mesh.geometry, st, canvasW, canvasH);
+        }
+        slot.seen = stamp;
+        slot.mat.uniforms.uIntensity.value = clamp(flashCurve(dt, st.duration) * st.brightness * 1.4, 0, 2);
       }
-      (m.material as THREE.ShaderMaterial).uniforms.uIntensity.value = clamp(flashCurve(dt, st.duration) * st.brightness * 1.4, 0, 2);
     }
-    for (const [id, m] of bolts) {
-      if (!live.has(id)) {
-        group.remove(m);
-        m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
-        bolts.delete(id);
+    // Release the slots whose strike ended (or that are taken by the bolt video).
+    for (const sl of pool.slots) {
+      if (sl.id !== null && sl.seen !== stamp) {
+        sl.id = null;
+        sl.mesh.geometry.setDrawRange(0, 0);
       }
     }
     // Flat media cannot be relit, so the flash overlay does more work there.
@@ -363,7 +463,7 @@ export function DissolveMask() {
     const p = clamp(tr!.p, 0, 1);
     mat.uniforms.uP.value = p;
     mat.uniforms.uKind.value = kind === "wipe" ? 1 : kind === "burn" ? 2 : 0;
-    const d = DIRS[tr!.spec.direction ?? "left"];
+    const d = DIRS[tr!.spec.direction ?? "left"] ?? DIRS.left; // an unknown direction must not throw in the frame loop
     mat.uniforms.uDir.value.set(d[0], d[1]);
     mat.uniforms.uSoft.value = tr!.spec.softness ?? 0.3;
     edge.mat.uniforms.uP.value = p;
@@ -391,6 +491,8 @@ void main() {
 }
 `;
 
+const WHITE = new THREE.Color(1, 1, 1);
+
 /** Atmospheric bloom while the virtual camera flies between locations. */
 export function TravelHaze() {
   const { getTransition, frame } = useStage();
@@ -402,7 +504,7 @@ export function TravelHaze() {
     if (!on) return;
     const p = clamp(tr!.p, 0, 1);
     mat.uniforms.uA.value = Math.pow(Math.sin(p * Math.PI), 1.6) * 0.7;
-    mat.uniforms.uColor.value.copy(frame.fogColor).lerp(new THREE.Color(1, 1, 1), 0.35).multiplyScalar(0.5 + frame.ambient * 0.5);
+    mat.uniforms.uColor.value.copy(frame.fogColor).lerp(WHITE, 0.35).multiplyScalar(0.5 + frame.ambient * 0.5);
   });
   mesh.renderOrder = 900;
   return <primitive object={mesh} />;

@@ -1,13 +1,14 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Activity, BookMarked, Cable, LampCeiling, Lightbulb, Network, Play, Plus, Radio, RefreshCw, SlidersVertical, Speaker, Square, Trash2, Wand2, Zap } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Activity, BookMarked, Cable, FolderOpen, LampCeiling, Lightbulb, Network, Play, Plus, Radio, RefreshCw, SlidersVertical, Speaker, Square, Trash2, Wand2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { uid } from "@/core/ids";
+import { isTauri, pickWorkspace, workspaceGet, workspaceSet, type WorkspaceInfo } from "@/core/platform";
 import { defaultIo, HOG_DEFAULT_HOST } from "@/core/factories";
 import { pingSoundApp, SOUND_ALIVE_MS, useSoundApp } from "@/engine/soundApp";
 import type { HogItem, HogKind, IoAction, IoMatch, IoSettings, IoTrigger } from "@/core/types";
-import { describeIncoming, describeMatch, HOG_KIND_LABEL, hogTarget, injectIncoming, matchFromIncoming, refreshMidiPorts, sendMessage, useIo } from "@/engine/io";
+import { describeIncoming, describeMatch, HOG_KIND_LABEL, hogTarget, injectIncoming, matchFromIncoming, refreshMidiPorts, sendMessage, useIo, type IoLogEntry } from "@/engine/io";
 import { describeIoAction } from "@/engine/operator";
 import { pingStageLight, requestStageLightCatalog, STAGELIGHT_ALIVE_MS, useStageLight } from "@/engine/stageLight";
 import { STAGELIGHT_DEFAULT_PORT } from "@/core/stageLight";
@@ -16,6 +17,8 @@ import { NumberInput, Section, SelectBox } from "../fields";
 import { InfoTip } from "../kit";
 import { MessageFields, defaultMessage } from "./MessageFields";
 import { AudioOutputPicker } from "../show/AudioOutputPicker";
+import { SpeakerSetupPanel } from "../show/SpeakerPicker";
+import { WallVideoPanel } from "./WallVideoPanel";
 import { SidebarDialog, type SidebarSection } from "../SidebarDialog";
 
 const NONE = "__none__";
@@ -39,7 +42,7 @@ function useIoSettings(): [IoSettings, (fn: (io: IoSettings) => void) => void] {
   return [io, set];
 }
 
-export type SettingsSection = "console" | "library" | "stagelight" | "receive" | "triggers" | "midi" | "osc" | "soundApp" | "audio" | "monitor";
+export type SettingsSection = "console" | "library" | "stagelight" | "receive" | "triggers" | "midi" | "osc" | "soundApp" | "audio" | "workspace" | "monitor";
 
 const SECTIONS: SidebarSection<SettingsSection>[] = [
   { id: "console", group: "Lighting", label: "Lighting console", icon: <Lightbulb />, blurb: "Where cues and clip markers send GO / release / halt: the Hog 4 on HogNet." },
@@ -51,20 +54,29 @@ const SECTIONS: SidebarSection<SettingsSection>[] = [
   { id: "osc", group: "Show control", label: "Other OSC devices", icon: <Network />, blurb: "More OSC targets (a logger, another app) and announcing every TAKE and GO." },
   { id: "soundApp", group: "Sound", label: "StageMics (dLive)", icon: <SlidersVertical />, blurb: "Mics, voice effects and the dLive: cues and clip markers tell StageMics what to do." },
   { id: "audio", group: "Sound", label: "Audio output", icon: <Speaker />, blurb: "The speakers all of the app's sound plays on, on this computer." },
+  { id: "workspace", group: "Sound", label: "Workspace folder", icon: <FolderOpen />, blurb: "Where this computer keeps each show's media: one folder per show, one per scene." },
   { id: "monitor", group: "Diagnostics", label: "Monitor", icon: <Activity />, blurb: "Every message in and out, with a test sender." },
 ];
+
+/** The newest log entry about the Hog (a stored entry, so the selector result is stable). */
+function lastHogEntry(log: IoLogEntry[]) {
+  for (let i = log.length - 1; i >= 0; i--) if (log[i].text.startsWith("Hog ") || log[i].text.includes("/hog/")) return log[i];
+  return undefined;
+}
 
 /** Settings: show control, MIDI, sound and diagnostics, one section at a time (list on the left). */
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const [section, setSection] = useState<SettingsSection>("console");
-  const st = useIo();
+  // Only what the status lights read, and nothing while closed: every MIDI / OSC message changes the I/O store.
+  const midiStatus = useIo((s) => (open ? s.midiStatus : null));
+  const oscStatus = useIo((s) => (open ? s.oscStatus : null));
+  const lastHog = useIo((s) => (open ? lastHogEntry(s.log) : undefined));
   const io = withDefaults(useProject((s) => s.project.io));
   useEffect(() => {
     if (open) void refreshMidiPorts();
   }, [open]);
-  const lastHog = [...st.log].reverse().find((e) => e.text.startsWith("Hog ") || e.text.includes("/hog/"));
-  const soundHello = useSoundApp((s) => s.hello?.at ?? 0);
-  const stageLightHello = useStageLight((s) => s.hello?.at ?? 0);
+  const soundHello = useSoundApp((s) => (open ? (s.hello?.at ?? 0) : 0));
+  const stageLightHello = useStageLight((s) => (open ? (s.hello?.at ?? 0) : 0));
   const [, tick] = useState(0);
   useEffect(() => {
     if (!open) return;
@@ -75,8 +87,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const status: Partial<Record<SettingsSection, ReactNode>> = {
     soundApp: io.sound.enabled && <StatusDot ok={Date.now() - soundHello < SOUND_ALIVE_MS} />,
     console: lastHog && <StatusDot ok={lastHog.dir === "out"} warn={lastHog.dir === "error"} />,
-    receive: io.osc.enabled && <StatusDot ok={st.oscStatus === "listening"} warn={st.oscStatus === "error"} />,
-    midi: io.midi.enabled && <StatusDot ok={st.midiStatus === "open"} warn={st.midiStatus === "error"} />,
+    receive: io.osc.enabled && <StatusDot ok={oscStatus === "listening"} warn={oscStatus === "error"} />,
+    midi: io.midi.enabled && <StatusDot ok={midiStatus === "open"} warn={midiStatus === "error"} />,
     stagelight: io.stagelight?.enabled && <StatusDot ok={Date.now() - stageLightHello < STAGELIGHT_ALIVE_MS} />,
   };
   return (
@@ -93,10 +105,40 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <div className="space-y-3">
           <AudioOutputPicker inCard />
           <p className="text-[12px] leading-relaxed text-muted-foreground">Cue sounds, thunder, announcements and video sound all play here. Dante Virtual Soundcard shows in the list, at the top, when it is running (on Windows the app asks Windows once to name its outputs; it never records). The choice belongs to this computer, not the show file.</p>
+          <SpeakerSetupPanel />
         </div>
       )}
+      {section === "workspace" && <WorkspaceSection />}
       {section === "monitor" && <LogTab />}
     </SidebarDialog>
+  );
+}
+
+function WorkspaceSection() {
+  const [ws, setWs] = useState<WorkspaceInfo | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const name = useProject((s) => s.project.name);
+  useEffect(() => {
+    void workspaceGet().then(setWs).catch((e) => setErr(String(e)));
+  }, []);
+  if (!isTauri) return <p className="text-[13px] text-muted-foreground">The workspace folder is a desktop app setting.</p>;
+  const pick = () => pickWorkspace().then((w) => w && setWs(w)).catch((e) => setErr(String(e)));
+  return (
+    <div className="space-y-3">
+      <Labeled label="Workspace folder (this computer)">
+        <div className="flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded-lg border border-input px-3 py-2 text-[13px]">{ws?.root ?? "…"}</code>
+          <Button size="sm" variant="outline" onClick={pick}>Choose…</Button>
+          {ws && !ws.isDefault && (
+            <Button size="sm" variant="ghost" onClick={() => void workspaceSet(null).then(setWs).catch((e) => setErr(String(e)))}>Use default</Button>
+          )}
+        </div>
+      </Labeled>
+      {err && <p className="text-[12px] text-destructive">{err}</p>}
+      <p className="text-[12px] leading-relaxed text-muted-foreground">
+        Each show gets a folder here (<span className="font-mono">{name}</span>) with one folder per scene and <span className="font-mono">images</span>, <span className="font-mono">audio</span>, <span className="font-mono">video</span> and <span className="font-mono">other</span> inside it: the finals the show plays. Editable work stays outside the show. The choice belongs to this computer, not the show file. Changing it moves nothing.
+      </p>
+    </div>
   );
 }
 
@@ -252,6 +294,7 @@ function StageLightSection() {
           </Button>
         </div>
       )}
+      <WallVideoPanel />
       <SwitchRow
         label="Mirror TAKE and GO as named triggers"
         hint={'Every live TAKE also sends trigger "scene.<code>" (scene.12, scene.1.2) and every GO "cue.<code>.<n>" (cue.12.3). Map the ones you need in StageLight; the rest are ignored.'}
@@ -420,7 +463,9 @@ const KIND_OPTIONS = (["cuelist", "scene", "macro"] as HogKind[]).map((k) => ({ 
 function LibraryTab() {
   const [io, set] = useIoSettings();
   const scenes = useProject((s) => s.project.scenes);
-  const uses = (id: string) => JSON.stringify(scenes).split(`"item":"${id}"`).length - 1;
+  // The show stringified once per edit, not once per row per render.
+  const json = useMemo(() => JSON.stringify(scenes), [scenes]);
+  const uses = (id: string) => json.split(`"item":"${id}"`).length - 1;
   const upd = (id: string, fn: (h: HogItem) => void) =>
     set((x) => {
       const h = x.hogItems.find((y) => y.id === id);

@@ -4,10 +4,10 @@ import { cloneComponent, cloneScene, defaultHogItems, defaultIo, defaultOutput, 
 import { autoGroup, normalizeGroups } from "@/core/groups";
 import { FOH_ASSETS, FOH_CALLS, FOH_PIN, fohAnnouncements } from "@/core/fohCalls";
 import { SFX_ASSETS } from "@/core/sfxLibrary";
-import { loadProjectFile, resolveAssetUrls, saveProjectFile } from "@/core/platform";
+import { loadProjectBackup, loadProjectFile, resolveAssetUrls, saveProjectFile, setAsideProjectFile } from "@/core/platform";
 import type { Asset, OutputSettings, Project, Scene, SceneComponent, SceneGroup } from "@/core/types";
 
-export type AppMode = "show" | "builder";
+export type AppMode = "show" | "builder" | "room";
 
 interface ProjectStore {
   project: Project;
@@ -15,6 +15,8 @@ interface ProjectStore {
   dirty: boolean;
   savedAt: number | null;
   saveError: string | null;
+  /** The show file could not be read at start-up: what was opened in its place (its backup, or the demo). Stays until the app restarts. */
+  loadProblem: string | null;
   mode: AppMode;
   selectedSceneId: string | null;
   selectedComponentId: string | null;
@@ -173,7 +175,7 @@ export function migrateProject(p: Project): Project {
   // Built-in assets ship with the app: keep their definitions in step with the code.
   const builtIn = new Map([...LION_PROOF_ASSETS, ...FOH_ASSETS, ...SFX_ASSETS].map((a) => [a.id, a]));
   // Keep the keys of local copies (from a show package or sync); resolveAssetUrls points at them when present.
-  merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)!, file: a.file, macFile: a.macFile } : a));
+  merged.assets = merged.assets.map((a) => (a.builtIn && builtIn.has(a.id) ? { ...builtIn.get(a.id)!, file: a.file, macFile: a.macFile, rel: a.rel, macRel: a.macRel } : a));
   return merged;
 }
 
@@ -183,21 +185,53 @@ export const useProject = create<ProjectStore>((set, get) => ({
   dirty: false,
   savedAt: null,
   saveError: null,
+  loadProblem: null,
   mode: "show",
   selectedSceneId: null,
   selectedComponentId: null,
 
   async load() {
-    const saved = await loadProjectFile();
-    const project = saved ? migrateProject(saved) : defaultProject();
-    project.assets = await resolveAssetUrls(project.assets);
-    set({ project, loaded: true, dirty: !saved, selectedSceneId: project.scenes[0]?.id ?? null });
+    // A show file that is there but cannot be read (or migrated) must never be taken for "no show yet":
+    // that opened the demo, marked it unsaved, and the autosave wrote it over the real show a second later.
+    let project: Project | null = null;
+    let problem: string | null = null;
+    // Unsaved from the start: a first start (the demo is written out), or a show recovered from its backup.
+    let dirty = false;
+    try {
+      const saved = await loadProjectFile();
+      if (saved) project = migrateProject(saved);
+      else dirty = true;
+    } catch (e) {
+      console.error("Failed to load the show file", e);
+      // Keep the unreadable file (under another name) before anything can be saved over it.
+      const aside = await setAsideProjectFile();
+      try {
+        const backup = await loadProjectBackup();
+        if (backup) project = migrateProject(backup);
+      } catch (e2) {
+        console.error("Failed to load the show file's backup", e2);
+      }
+      const kept = aside ? ` The unreadable file was kept as ${aside}.` : "";
+      problem = project
+        ? `The show file could not be read (${String(e)}): opened the copy from the save before it; the last edit may be missing.${kept}`
+        : `The show file could not be read (${String(e)}) and it has no backup: this is the demo show, NOT your show.${kept} Import a show package or restore the file before going on.`;
+      // With the unreadable file safely aside, what was opened is written out as the show file. If it could
+      // not be moved, nothing is saved over it until the operator edits on purpose.
+      dirty = !!aside;
+    }
+    project ??= defaultProject();
+    project.assets = await resolveAssetUrls(project.assets, { id: project.lineage?.showId, name: project.name });
+    // (Unsaved, it is written out by the autosave below, which follows this change.)
+    set({ project, loaded: true, dirty, loadProblem: problem, selectedSceneId: project.scenes[0]?.id ?? null });
+    if (problem) void import("@/ui/ErrorBoundary").then((m) => m.recordError(problem!));
   },
 
   async save() {
     try {
-      await saveProjectFile(get().project);
-      set({ dirty: false, savedAt: Date.now(), saveError: null });
+      const written = get().project;
+      await saveProjectFile(written);
+      // An edit made while the file was being written is still unsaved (its own autosave follows).
+      set({ dirty: get().project !== written, savedAt: Date.now(), saveError: null });
     } catch (e) {
       set({ saveError: String(e) });
     }
@@ -205,7 +239,7 @@ export const useProject = create<ProjectStore>((set, get) => ({
 
   async replaceProject(p) {
     const project = migrateProject(p);
-    project.assets = await resolveAssetUrls(project.assets);
+    project.assets = await resolveAssetUrls(project.assets, { id: project.lineage?.showId, name: project.name });
     set({ project, dirty: true, selectedSceneId: project.scenes[0]?.id ?? null, selectedComponentId: null });
   },
 

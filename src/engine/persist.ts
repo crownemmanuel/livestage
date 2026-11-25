@@ -14,6 +14,9 @@ export interface PendingRecord {
   action: CueAction;
   /** The cue that scheduled it: re-firing that cue cancels its leftovers. */
   cueId?: string;
+  /** The run it waits on and its scene time (ms): it fires when that run's clock gets there (a hold holds it). */
+  runKey?: string;
+  sceneAt?: number;
 }
 
 export interface LiveState {
@@ -58,7 +61,12 @@ export function flushLiveState(): Promise<void> {
   const key = JSON.stringify({ ...snap, savedAt: 0, poses: null });
   if (key === lastWritten) return Promise.resolve();
   lastWritten = key;
-  return saveStateFile(snap).catch((e) => console.warn("live state save failed", e));
+  return saveStateFile(snap).catch((e) => {
+    console.warn("live state save failed", e);
+    // Not on disk after all: forget it was written and try again shortly, or a restart restores the scene before.
+    if (lastWritten === key) lastWritten = "";
+    setTimeout(schedule, 2000);
+  });
 }
 
 function schedule() {

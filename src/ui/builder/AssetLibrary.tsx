@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Box, Check, ChevronDown, Film, FolderOpen, Image as ImageIcon, Maximize2, Pause, Play, Search, Trash2, Upload, X } from "lucide-react";
+import { Armchair, AudioLines, Box, Check, ChevronDown, Film, FolderOpen, Image as ImageIcon, Maximize2, Pause, Play, Search, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { fileManagerName, importAssets, isTauri, playableUrl, revealAsset } from "@/core/platform";
-import type { Asset, AssetType } from "@/core/types";
+import type { Asset, AssetType, RoomView, Scene } from "@/core/types";
 import { useProject } from "@/store/project";
 import { useAssetInfo } from "../assetThumbs";
 import { MediaBadge } from "./MediaBadge";
@@ -16,15 +16,23 @@ const TYPE_ICON: Record<AssetType, typeof Film> = { video: Film, image: ImageIco
 
 const fmtDur = (s?: number) => (s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "");
 
+// One scan per show edit, shared by every open browser (the scan stringifies the whole show).
+let usedMemo: { scenes: Scene[]; assets: Asset[]; rooms: RoomView[]; set: Set<string> } | null = null;
+function usedAssetIds(scenes: Scene[], assets: Asset[], rooms: RoomView[] = []): Set<string> {
+  if (usedMemo && usedMemo.scenes === scenes && usedMemo.assets === assets && usedMemo.rooms === rooms) return usedMemo.set;
+  // Ids come in more than one shape (imported vs built-in), so look each one up as a quoted value. Room photos count as used.
+  const json = JSON.stringify([scenes.map((s) => ({ ...s, thumbnail: null })), rooms]);
+  const set = new Set(assets.filter((a) => json.includes(`"${a.id}"`)).map((a) => a.id));
+  usedMemo = { scenes, assets, rooms, set };
+  return set;
+}
+
 /** Asset ids referenced anywhere in the show. */
 function useUsedAssets() {
   const scenes = useProject((s) => s.project.scenes);
   const assets = useProject((s) => s.project.assets);
-  return useMemo(() => {
-    // Ids come in more than one shape (imported vs built-in), so look each one up as a quoted value.
-    const json = JSON.stringify(scenes.map((s) => ({ ...s, thumbnail: null })));
-    return new Set(assets.filter((a) => json.includes(`"${a.id}"`)).map((a) => a.id));
-  }, [scenes, assets]);
+  const rooms = useProject((s) => s.project.roomViews);
+  return useMemo(() => usedAssetIds(scenes, assets, rooms), [scenes, assets, rooms]);
 }
 
 function useImport() {
@@ -42,6 +50,28 @@ function useImport() {
   return [busy, run] as const;
 }
 
+/** Open the Room view with this image or video on the wall (Room's own store loads with it, on demand). */
+function RoomButton({ asset, className }: { asset: Asset; className?: string }) {
+  if (asset.type !== "image" && (asset.type !== "video" || asset.alphaPacked)) return null;
+  return (
+    <button
+      type="button"
+      className={cn("text-muted-foreground hover:text-foreground", className)}
+      title="See it on the wall in the room"
+      aria-label="See it on the wall in the room"
+      onClick={(e) => {
+        e.stopPropagation();
+        void import("../room/roomStore").then(({ useRoom }) => {
+          useRoom.setState({ assetId: asset.id });
+          useProject.getState().setMode("room");
+        });
+      }}
+    >
+      <Armchair className="size-3.5" />
+    </button>
+  );
+}
+
 /** Small picture of an asset: its frame / image, or a type icon. Videos play while hovered (large only). */
 export function AssetThumb({ asset, className, playOnHover = false }: { asset: Asset; className?: string; playOnHover?: boolean }) {
   const info = useAssetInfo(asset);
@@ -49,7 +79,7 @@ export function AssetThumb({ asset, className, playOnHover = false }: { asset: A
   const Icon = TYPE_ICON[asset.type];
   return (
     <div className={cn("relative grid shrink-0 place-items-center overflow-hidden rounded bg-black/60 text-muted-foreground", className)} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-      {playOnHover && hover && asset.type === "video" ? (
+      {playOnHover && hover && asset.type === "video" && !asset.alphaPacked ? (
         <video src={playableUrl(asset) ?? undefined} className="h-full w-full object-contain" autoPlay muted loop playsInline />
       ) : info?.src ? (
         <img src={info.src} alt="" className="h-full w-full object-contain" draggable={false} />
@@ -154,6 +184,7 @@ export function AssetLibrary() {
               </span>
               {a.ephemeral && <span className="text-[9.5px] text-armed" title="Imported in the browser: available until reload">session</span>}
               <MediaBadge asset={a} />
+              <RoomButton asset={a} className="hidden group-hover:block" />
               {!used.has(a.id) && !a.builtIn && (
                 <button className="hidden text-muted-foreground hover:text-destructive group-hover:block" onClick={() => useProject.getState().removeAsset(a.id)} aria-label="Remove asset">
                   <Trash2 className="size-3.5" />
@@ -168,7 +199,7 @@ export function AssetLibrary() {
           )}
         </ul>
       </ScrollArea>
-      <AssetBrowser open={big} onOpenChange={setBig} />
+      {big && <AssetBrowser open={big} onOpenChange={setBig} />}
     </div>
   );
 }
@@ -304,6 +335,7 @@ export function AssetBrowser({ open, onOpenChange, pick }: { open: boolean; onOp
                       </div>
                     </div>
                     {pick?.value === a.id && <Check className="mt-0.5 size-4 shrink-0 text-preview" />}
+                    {!pick && <RoomButton asset={a} className="mt-0.5 opacity-0 group-hover:opacity-100" />}
                     {!pick && <RevealButton asset={a} className="opacity-0 group-hover:opacity-100" />}
                     {!pick && !isUsed && !a.builtIn && (
                       <Button size="icon-xs" variant="ghost" className="opacity-0 hover:text-destructive group-hover:opacity-100" aria-label="Remove asset" title="Remove from the library" onClick={() => useProject.getState().removeAsset(a.id)}>
@@ -340,7 +372,8 @@ export function AssetPickerButton({ types, value, onChange, placeholder = "Choos
         </button>
         {asset && <RevealButton asset={asset} className="mr-0.5" />}
       </div>
-      <AssetBrowser open={open} onOpenChange={setOpen} pick={{ types, value, onPick: onChange, title }} />
+      {/* Mounted only while open: a closed browser still subscribed to the show and scanned it on every edit. */}
+      {open && <AssetBrowser open={open} onOpenChange={setOpen} pick={{ types, value, onPick: onChange, title }} />}
     </>
   );
 }

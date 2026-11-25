@@ -14,7 +14,7 @@ import type { Cue, CueAction, IoAction, MediaMarker, MediaSettings, Scene, Scene
 import { flowNext, sceneCodes } from "@/core/groups";
 import { carriedSounds } from "@/core/music";
 import { create } from "zustand";
-import { layoutScene } from "./timeline";
+import { cueStarts, layoutScene } from "./timeline";
 import { useProject } from "@/store/project";
 import { useShow, type Target } from "@/store/show";
 import { ioLog, sendMessage, setIoActionHandler, startIo } from "./io";
@@ -22,15 +22,22 @@ import { isSoundMicMessage, micMoveVerdict, type MicMove } from "@/core/soundCon
 // transport.ts imports this module too; only functions cross, at run time, so the cycle is safe.
 import { knownDuration, probeDurations } from "./transport";
 import { mirrorToStageLight } from "./stageLight";
+import { previewLightsAllowed } from "./wallVideoLink";
 import { chaseForCue, chaseForTake, chaseMusicOn, learnSoundLengths } from "./musicChase";
 import { armLiveState, flushLiveState, loadLiveState, setPendingSource, startLiveStatePersistence, type PendingRecord } from "./persist";
+import { warmSounds } from "./audio";
 
 // ---------------------------------------------------------------- take
 
 export function probeDuration(url: string): Promise<number | null> {
   return new Promise((resolve) => {
     const v = document.createElement("video");
+    let settled = false;
     const done = (d: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      v.onloadedmetadata = v.onerror = null;
       v.removeAttribute("src");
       v.load();
       resolve(d);
@@ -39,7 +46,7 @@ export function probeDuration(url: string): Promise<number | null> {
     v.muted = true;
     v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
     v.onerror = () => done(null);
-    setTimeout(() => done(null), 4000);
+    const timer = setTimeout(() => done(null), 4000);
     v.src = url;
   });
 }
@@ -49,9 +56,35 @@ export async function resolveTransition(spec: TransitionSpec): Promise<Transitio
   if (spec.kind !== "video") return spec;
   const asset = useProject.getState().project.assets.find((a) => a.id === spec.videoAssetId);
   if (!asset) return { ...spec, kind: "crossfade", duration: Math.max(spec.duration, 1) };
-  const d = await probeDuration(asset.url);
+  // The length is known from the import probe or from the warm-up (warmShowMedia): the TAKE does not wait
+  // for the file to be opened. Only a file never seen before is probed here, and then not for long.
+  let d: number | null = asset.probe?.duration_s || knownDuration(asset.id) || null;
+  if (!d) {
+    await Promise.race([probeDurations(useProject.getState().project.assets, [asset.id]), new Promise<void>((r) => setTimeout(r, TAKE_WAIT_MS))]);
+    d = knownDuration(asset.id) ?? null;
+  }
   return { ...spec, duration: d ?? spec.duration };
 }
+
+/** The longest a TAKE waits for a file's length it does not know yet (a transition video, the music chase's sounds). */
+const TAKE_WAIT_MS = 150;
+
+/**
+ * Learn, ahead of the show, the lengths a TAKE needs: the transition videos and the cue sounds (for the
+ * music chase), again whenever the show changes. A TAKE used to open its transition video first, every
+ * time, and a TAKE out of running order waited up to 1.5 s for any sound whose length was still unknown
+ * (one added since start-up, or one whose file is missing: that one cost 1.5 s at every such TAKE).
+ */
+function warmShowMedia() {
+  const { project } = useProject.getState();
+  const ids = new Set<string>();
+  for (const s of project.scenes) if (s.transition?.kind === "video" && s.transition.videoAssetId) ids.add(s.transition.videoAssetId);
+  const known = (id: string) => !!project.assets.find((a) => a.id === id)?.probe?.duration_s || knownDuration(id) !== undefined;
+  const missing = [...ids].filter((id) => !known(id));
+  if (missing.length) void probeDurations(project.assets, missing);
+  if (chaseMusicOn()) void learnSoundLengths(Infinity);
+}
+
 
 let taking = false;
 
@@ -77,7 +110,8 @@ export async function takeScene(sceneId: string, override?: TransitionSpec | nul
     // A run that went in sequence teaches when its scene hands over (for scenes that end on a GO or a TAKE).
     if (continues && rt && !jumpedRuns.has(rt.key)) useProject.getState().setCueTiming(rt.scene.id, "@end", sceneNow(rt) / 1000);
     // Out of running order: the music the story would have reached by now comes in where it would be.
-    if (!continues && chaseMusicOn()) await learnSoundLengths();
+    // (Lengths are learned ahead by warmShowMedia; this only waits for ones that are still missing.)
+    if (!continues && chaseMusicOn()) await learnSoundLengths(TAKE_WAIT_MS);
     useShow.getState().take(scene, spec, continues, continues ? [] : chaseForTake(scene.id));
     // The operator was following the live scene (its cues on screen): follow it to the new one, so a cue
     // that takes the next scene brings that scene's cues up. A scene picked for rehearsal stays put.
@@ -103,45 +137,58 @@ export function nextSceneId(): string | null {
 
 // ---------------------------------------------------------------- cues
 
-interface Pending extends PendingRecord {
-  handle: ReturnType<typeof setTimeout>;
-}
-const pending: Record<Target, Pending[]> = { program: [], preview: [] };
+/**
+ * Delayed actions waiting for their moment. They wait on the scene clock of the run that scheduled
+ * them (`runKey`, `sceneAt`), so a hold holds them too and a seek moves them with the picture; a
+ * record from an older live state has only its wall-clock `fireAt`.
+ */
+const pending: Record<Target, PendingRecord[]> = { program: [], preview: [] };
 
-/** Follow cues waiting for their previous cue's delay: wall-clock ms to fire, and what to run. */
+/** Follow cues waiting on the scene clock for their previous cue's delay. */
 interface Follow {
-  fireAt: number;
+  runKey: string;
+  sceneAt: number;
+  /** The cue that set it going: re-firing that cue replaces it. */
+  cueId: string;
   run: () => void;
-  handle: ReturnType<typeof setTimeout>;
 }
 const follows: Record<Target, Follow[]> = { program: [], preview: [] };
 
 export function cancelPending(target: Target) {
-  pending[target].forEach((p) => clearTimeout(p.handle));
   pending[target] = [];
-  follows[target].forEach((f) => clearTimeout(f.handle));
   follows[target] = [];
-  if (target === "preview") sceneWaits = null;
+}
+
+/** Whether a wait is due at wall time `wall`; null when the run it waits on is gone (drop it). */
+function isDue(rt: SceneRuntime | null, w: { runKey?: string; sceneAt?: number; fireAt?: number }, wall: number): boolean | null {
+  if (w.runKey == null || w.sceneAt == null) return (w.fireAt ?? 0) <= wall;
+  if (!rt || rt.key !== w.runKey) return null;
+  return sceneNow(rt, wall) >= w.sceneAt;
 }
 
 /**
- * Delayed actions and follow cues are setTimeouts, which a hidden or covered window throttles
- * (Chromium: to once a second). The 60 Hz service tick runs from a worker and is not throttled,
- * so it fires anything overdue itself instead of leaving it to the slowed timer.
+ * Run the delayed actions and follow cues whose moment has come. Called by the 60 Hz service tick,
+ * which runs from a worker, so a hidden or covered window cannot slow it down.
  */
 function fireOverdue(target: Target, wall: number) {
-  const due = pending[target].filter((p) => p.fireAt <= wall);
-  if (due.length) {
-    for (const p of due) clearTimeout(p.handle);
-    pending[target] = pending[target].filter((p) => p.fireAt > wall);
-    for (const p of due) execAction(target, p.action);
-  }
-  const dueFollows = follows[target].filter((f) => f.fireAt <= wall);
-  if (dueFollows.length) {
-    for (const f of dueFollows) clearTimeout(f.handle);
-    follows[target] = follows[target].filter((f) => f.fireAt > wall);
-    for (const f of dueFollows) f.run();
-  }
+  if (!pending[target].length && !follows[target].length) return;
+  const rt = rtFor(target);
+  const ready: PendingRecord[] = [];
+  pending[target] = pending[target].filter((p) => {
+    const d = isDue(rt, p, wall);
+    if (d) ready.push(p);
+    return d === false;
+  });
+  const readyFollows: Follow[] = [];
+  follows[target] = follows[target].filter((f) => {
+    const d = isDue(rt, f, wall);
+    if (d) readyFollows.push(f);
+    return d === false;
+  });
+  // An action that swaps the run (a take) ends the rest of this batch.
+  const same = () => rtFor(target)?.key === rt?.key;
+  for (const p of ready) if (same()) execAction(target, p.action);
+  for (const f of readyFollows) if (same()) f.run();
 }
 
 export function pendingCount(target: Target) {
@@ -160,8 +207,10 @@ function execAction(target: Target, a: CueAction) {
     return;
   }
   if (a.type === "send") {
-    // Messages leave the building only from the live show.
+    // Messages leave the building only from the live show. While rehearsing with the wall video link on,
+    // a preview cue's StageLight message goes too, to an unarmed StageLight only (docs/WALL_VIDEO_LINK.md).
     if (target === "program") void sendMessage(a.message, { sceneId: useShow.getState().program.runtime?.scene.id ?? null });
+    else if (a.message.type === "stagelight" && previewLightsAllowed()) void sendMessage(a.message, { sceneId: useShow.getState().preview?.scene.id ?? null });
     return;
   }
   if (a.type === "timer") {
@@ -176,32 +225,18 @@ function execAction(target: Target, a: CueAction) {
   useShow.getState().dispatch(target, a);
 }
 
-function scheduleAction(target: Target, a: CueAction, fireAt: number, cueId?: string) {
-  const delay = Math.max(0, fireAt - now());
-  const rec: Pending = {
-    target,
-    fireAt,
-    action: a,
-    cueId,
-    handle: setTimeout(() => {
-      pending[target] = pending[target].filter((x) => x !== rec);
-      execAction(target, a);
-    }, delay),
-  };
-  pending[target].push(rec);
+function scheduleAction(target: Target, a: CueAction, rt: SceneRuntime, sceneAt: number, cueId?: string) {
+  pending[target].push({ target, fireAt: rt.clock.base + sceneAt, action: a, cueId, runKey: rt.key, sceneAt });
 }
 
 export function runCue(target: Target, cue: Cue) {
-  const t0 = now();
-  // Re-firing a cue replaces its earlier run: the delayed actions still waiting from it are dropped.
-  const stale = pending[target].filter((p) => p.cueId === cue.id);
-  if (stale.length) {
-    stale.forEach((p) => clearTimeout(p.handle));
-    pending[target] = pending[target].filter((p) => p.cueId !== cue.id);
-  }
-  if (target === "preview" && sceneWaits) sceneWaits.items = sceneWaits.items.filter((w) => w.cueId !== cue.id);
+  // Re-firing a cue replaces its earlier run: what it still had waiting is dropped.
+  pending[target] = pending[target].filter((p) => p.cueId !== cue.id);
+  follows[target] = follows[target].filter((f) => f.cueId !== cue.id);
+  const rt = rtFor(target);
+  const t0 = rt ? sceneNow(rt) : 0;
   for (const a of cue.actions) {
-    if (a.delay > 0) scheduleAction(target, a, t0 + a.delay * 1000, cue.id);
+    if (a.delay > 0 && rt) scheduleAction(target, a, rt, t0 + a.delay * 1000, cue.id);
     else execAction(target, a);
   }
 }
@@ -209,6 +244,24 @@ export function runCue(target: Target, cue: Cue) {
 function rtFor(target: Target) {
   const s = useShow.getState();
   return target === "program" ? s.program.runtime : s.preview;
+}
+
+/** Follow cue `index + 1` once `after` seconds of scene time have played from `sceneAt` (ms). */
+function armFollow(target: Target, rt: SceneRuntime, index: number, sceneAt: number) {
+  const cue = rt.scene.cues[index];
+  const next = rt.scene.cues[index + 1];
+  if (!cue || next?.fire?.mode !== "follow") return;
+  const key = rt.key;
+  follows[target].push({
+    runKey: key,
+    sceneAt: sceneAt + Math.max(0, next.fire.after) * 1000,
+    cueId: cue.id,
+    run: () => {
+      // Only if the same run of the scene is still up and the follow hasn't fired some other way.
+      const cur = rtFor(target);
+      if (cur?.key === key && !cur.fired?.includes(next.id)) fireCue(target, index + 1, true);
+    },
+  });
 }
 
 /**
@@ -244,25 +297,8 @@ export function fireCue(target: Target, index: number, auto = false, rewind = fa
   // (A rehearsal run follows the show's takes on purpose.)
   runCue(target, auto && target === "preview" && !useRun.getState().on ? { ...cue, actions: cue.actions.filter((a) => a.type !== "takeScene") } : cue);
   if (target === "program") notifyCue(rt, index, cue);
-  const next = rt.scene.cues[index + 1];
-  if (next?.fire?.mode === "follow") {
-    const key = rt.key;
-    const run = () => {
-      // Only if the same run of the scene is still up and the follow hasn't fired some other way.
-      const cur = rtFor(target);
-      if (cur?.key === key && !cur.fired?.includes(next.id)) fireCue(target, index + 1, true);
-    };
-    const delay = Math.max(0, next.fire.after) * 1000;
-    const rec: Follow = {
-      fireAt: now() + delay,
-      run,
-      handle: setTimeout(() => {
-        follows[target] = follows[target].filter((x) => x !== rec);
-        run();
-      }, delay),
-    };
-    follows[target].push(rec);
-  }
+  const cur = rtFor(target);
+  if (cur?.key === rt.key) armFollow(target, cur, index, sceneNow(cur));
 }
 
 /** Live runs where the operator jumped: their cue timings are not learned (see Project.cueTimings). */
@@ -270,10 +306,7 @@ const jumpedRuns = new Set<string>();
 
 /** A music chase replaces the sounds other cues of the live scene still had waiting to start. */
 function dropPendingSounds(exceptCueId: string) {
-  const drop = pending.program.filter((p) => p.action.type === "sound" && p.cueId !== exceptCueId);
-  if (!drop.length) return;
-  drop.forEach((p) => clearTimeout(p.handle));
-  pending.program = pending.program.filter((p) => !drop.includes(p));
+  pending.program = pending.program.filter((p) => p.action.type !== "sound" || p.cueId === exceptCueId);
 }
 
 /** Scene-time cues whose moment has come. Called from the 60 Hz loop. */
@@ -316,73 +349,141 @@ export function previewAtStep(step: number) {
   useShow.getState().dispatch("preview", { type: "cuePointer", index: step });
 }
 
-// ---------------------------------------------------------------- timeline scrub (preview)
+// ---------------------------------------------------------------- seek: a run at any moment
+
+/** Replayed by a seek: what changes the scene's own state (not lights / MIDI / OSC, timers, announcements, blackout, takes, holds). */
+type Replayed = Exclude<CueAction, { type: "takeScene" | "send" | "timer" | "announce" | "blackout" | "clock" }>;
+const replayed = (a: CueAction): a is Replayed => !["takeScene", "send", "timer", "announce", "blackout", "clock"].includes(a.type);
+
+/** The scene a seek rebuilds: the preview rehearses the scene as edited; the live wall keeps its copy until update_live_scene or the next take. */
+function seekSceneOf(target: Target, rt: SceneRuntime): Scene {
+  return target === "preview" ? (useProject.getState().project.scenes.find((s) => s.id === rt.scene.id) ?? rt.scene) : rt.scene;
+}
 
 /**
- * What the cues fired by a timeline scrub still had to do, and follow cues due later. They wait on
- * the preview's scene clock (not the wall clock), so they hold while the preview is held and run
- * when it plays on. Polled with the timed cues; dropped when the preview starts another run.
+ * Where each cue of this run starts (scene seconds; null = it does not fire): a GO where it was pressed in
+ * this run (remembered across seeks, so scrubbing back and forth replays the run as it happened) and not at
+ * all if it never was; a cue that fires by itself where it fired, else where it will (the Build timeline's
+ * layout from those GO times).
  */
-let sceneWaits: { key: string; items: { at: number; cueId: string; run: () => void }[] } | null = null;
-
-/** Not rehearsed in the preview (execAction leaves them alone there too, or they would swap the scene). */
-type Rehearsed = Exclude<CueAction, { type: "takeScene" | "send" | "timer" | "announce" | "blackout" }>;
-const rehearsed = (a: CueAction): a is Rehearsed => !["takeScene", "send", "timer", "announce", "blackout"].includes(a.type);
+function runStarts(rt: SceneRuntime, scene: Scene, planGo = false): (number | null)[] {
+  const isGo = (c: Cue) => (c.fire?.mode ?? "go") === "go";
+  const starts = cueStarts(
+    scene,
+    scene.cues.map((c) => {
+      const at = rt.firedAt?.[c.id];
+      if (at != null && (isGo(c) || rt.fired?.includes(c.id))) return at / 1000;
+      return isGo(c) && !planGo ? null : undefined;
+    }),
+  );
+  if (planGo) return starts;
+  // A GO pressed after cues that now come later (one fired early by hand, then laid out at its marker),
+  // or after a GO not pressed, has not happened yet: it waits for GO again.
+  let latest = -Infinity;
+  let gap = false;
+  return starts.map((s, i) => {
+    const v = isGo(scene.cues[i]) && s != null && (gap || s < latest) ? null : s;
+    if (v == null) gap = true;
+    else latest = Math.max(latest, v);
+    return v;
+  });
+}
 
 /**
- * Show the preview as the scene looks `seconds` in, with cue i fired at `starts[i]` scene seconds
- * (the Build timeline's plan: GO cues at their planned holds; null = not fired). The preview is
- * rebuilt from the top with every action up to that moment applied at its own scene time, then
- * held there; Play carries on from that frame. Nothing is sent out.
+ * Put the run on `target` at `seconds` of scene time as if it had played to there, like scrubbing a
+ * video: rebuilt from the top with every cue action up to that moment applied at its own scene time
+ * (the reducer is pure and takes the time), cue i starting at `starts[i]` (null = not fired). What
+ * those cues still have to do, and follow cues due later, wait on the scene clock. Every cue after the
+ * moment is up again: GO points at the first, and markers and time cues fire again when playback gets
+ * there. Lights / MIDI / OSC, timers, announcements, blackout and takes are never replayed for the
+ * past; on the live wall the ones still ahead go out at their moment (never in the preview). The run
+ * keeps its key, so canvases and video decoders stay mounted. `hold`: held on that frame (default: as
+ * it was). `fire`: the cue the operator fired at this moment, whose own outward actions go out now.
  */
-export function previewAtTime(seconds: number, starts: (number | null)[]) {
-  const cur = useShow.getState().preview;
-  if (!cur) return;
-  cancelPending("preview");
-  const scene = useProject.getState().project.scenes.find((s) => s.id === cur.scene.id) ?? cur.scene;
+export function seekScene(target: Target, seconds: number, starts: (number | null)[], opts: { hold?: boolean; fire?: number } = {}) {
+  const cur = rtFor(target);
+  if (!cur || (target === "program" && useShow.getState().program.standby)) return;
+  cancelPending(target);
+  const scene = seekSceneOf(target, cur);
+  const live = target === "program";
   const T = Math.max(0, seconds);
   const wall = now();
   const base = wall - T * 1000;
-  // Same run key: the preview canvas (and its video decoders) stays mounted while scrubbing.
-  let rt = { ...createRuntime(scene, base), key: cur.key };
+  let rt: SceneRuntime = { ...createRuntime(scene, base), key: cur.key };
+  // Music carried in from earlier scenes (or chased in at the take) began before this run: it stays.
+  rt.sounds = (cur.sounds ?? []).filter((ev) => ev.chase && ev.at <= 0);
   let poses = createPoses(scene);
   const steps: { t: number; i: number; j: number; cmd: Command }[] = [];
-  const waits: NonNullable<typeof sceneWaits>["items"] = [];
+  const later: PendingRecord[] = [];
+  const nowOut: CueAction[] = [];
+  const laterFollows: { i: number; at: number }[] = [];
   scene.cues.forEach((cue, i) => {
     const s = starts[i];
     if (s == null || s > T) return;
     steps.push({ t: s, i, j: -1, cmd: { type: "cueFired", index: i } });
     cue.actions.forEach((a, j) => {
-      if (!rehearsed(a)) return;
       const at = s + Math.max(0, a.delay || 0);
-      if (at <= T) steps.push({ t: at, i, j, cmd: a });
-      else waits.push({ at: at * 1000, cueId: cue.id, run: () => execAction("preview", a) });
+      if (at <= T) {
+        if (replayed(a)) steps.push({ t: at, i, j, cmd: a });
+        else if (live && i === opts.fire && !(a.delay > 0)) nowOut.push(a);
+      } else if (live || (replayed(a) || a.type === "clock")) {
+        later.push({ target, fireAt: base + at * 1000, action: a, cueId: cue.id, runKey: cur.key, sceneAt: at * 1000 });
+      }
     });
     const next = scene.cues[i + 1];
-    if (next?.fire?.mode === "follow" && s + next.fire.after > T) waits.push({ at: (s + next.fire.after) * 1000, cueId: cue.id, run: () => fireCue("preview", i + 1, true) });
+    const ns = starts[i + 1];
+    if (next?.fire?.mode === "follow" && !(ns != null && ns <= T)) laterFollows.push({ i, at: s * 1000 });
   });
   steps.sort((a, b) => a.t - b.t || a.i - b.i || a.j - b.j);
   for (const st of steps) ({ rt, poses } = applyCommand(rt, poses, st.cmd, base + st.t * 1000));
-  // Held on that frame; everything up to it counts as played, so it does not fire again.
-  rt = { ...rt, clock: { base, pausedAt: wall, reached: T * 1000 } };
-  useShow.setState({ preview: rt, previewPoses: poses, previewPosesAt: wall });
-  lastPoll.preview = null;
-  sceneWaits = waits.length ? { key: rt.key, items: waits.sort((a, b) => a.at - b.at) } : null;
+  const held = opts.hold ?? cur.clock.pausedAt !== null;
+  // Everything up to this moment counts as played; everything after it plays again.
+  rt = { ...rt, firedAt: { ...cur.firedAt, ...rt.firedAt }, clock: { base, pausedAt: held ? wall : null, reached: T * 1000 }, rebuiltAt: wall };
+  useShow.getState().replaceRun(target, rt, poses);
+  lastPoll[target] = null;
+  pending[target] = later;
+  for (const f of laterFollows) armFollow(target, rt, f.i, f.at);
+  if (live) {
+    jumpedRuns.add(rt.key);
+    const fired = opts.fire != null ? scene.cues[opts.fire] : undefined;
+    if (fired) {
+      const prog = useShow.getState().program;
+      if (prog.transition?.spec.kind === "video") useShow.getState().finishTransition(prog.takeCount);
+      for (const a of nowOut) execAction(target, a);
+      notifyCue(rt, opts.fire!, fired);
+    }
+  }
 }
 
-function pollSceneWaits(rt: SceneRuntime, wall: number) {
-  const w = sceneWaits;
-  if (!w) return;
-  if (w.key !== rt.key) {
-    sceneWaits = null;
-    return;
-  }
-  const t = sceneNow(rt, wall);
-  const due = w.items.filter((x) => x.at <= t);
-  if (!due.length) return;
-  w.items = w.items.filter((x) => x.at > t);
-  if (!w.items.length) sceneWaits = null;
-  due.forEach((x) => x.run());
+/** Scrub the run on `target` to `seconds` of scene time, replaying it as it happened (seekScene). */
+export function seekRun(target: Target, seconds: number, hold?: boolean) {
+  const rt = rtFor(target);
+  if (rt) seekScene(target, seconds, runStarts(rt, seekSceneOf(target, rt)), { hold });
+}
+
+/**
+ * Fire now on a cue already passed (or skipped): the scene goes back to that cue's moment as the run
+ * had it (cues before it applied, skipped GO cues at their planned holds) and plays on from there, with
+ * this cue firing again. What later cues put on the wall is gone, and they are up again.
+ */
+function rewindTo(target: Target, index: number) {
+  const rt = rtFor(target);
+  if (!rt?.scene.cues[index]) return;
+  const scene = seekSceneOf(target, rt);
+  const starts = runStarts(rt, scene);
+  const plan = runStarts(rt, scene, true);
+  const at = starts[index] ?? plan[index] ?? sceneNow(rt) / 1000;
+  const s = scene.cues.map((_, j) => (j < index ? Math.min(starts[j] ?? plan[j] ?? at, at) : j === index ? at : null));
+  seekScene(target, at, s, { hold: false, fire: index });
+}
+
+/**
+ * Show the preview as the scene looks `seconds` in, with cue i fired at `starts[i]` scene seconds
+ * (the Build timeline's plan: GO cues at their planned holds; null = not fired), held there; Play
+ * carries on from that frame. Nothing is sent out.
+ */
+export function previewAtTime(seconds: number, starts: (number | null)[]) {
+  seekScene("preview", seconds, starts, { hold: true });
 }
 
 // ---------------------------------------------------------------- rehearsal run (Build)
@@ -481,9 +582,16 @@ export const cueControl = {
     }
     fireCue(target, rt.cuePointer);
   },
-  /** Fire now: fire cue `index` and rewind the list to it, so the cues after it are up again. */
+  /**
+   * Fire now: fire cue `index` and rewind the list to it, so the cues after it are up again. A cue already
+   * passed takes the scene back to its moment (rewindTo); the next cue, or one ahead, fires on what is there.
+   */
   fire(target: Target, index: number) {
-    fireCue(target, index, false, true);
+    const rt = rtFor(target);
+    const cue = rt?.scene.cues[index];
+    if (!rt || !cue) return;
+    if (index < rt.cuePointer || rt.fired?.includes(cue.id)) rewindTo(target, index);
+    else fireCue(target, index, false, true);
   },
   repeat(target: Target) {
     const rt = rtFor(target);
@@ -515,7 +623,7 @@ export function runTimer(id: string, op: TimerOp | "add", seconds?: number) {
 export function playAnnouncement(id: string) {
   const a = useProject.getState().project.announcements?.find((x) => x.id === id);
   if (!a?.assetId) return ioLog("error", `Announcement ${a ? `"${a.name}" has no audio` : "no longer exists"}`);
-  useShow.getState().announce({ id: a.id, assetId: a.assetId, volume: a.volume });
+  useShow.getState().announce({ id: a.id, assetId: a.assetId, volume: a.volume, speakers: a.speakers });
 }
 
 export function stopAnnouncement() {
@@ -649,10 +757,10 @@ export function describeIoAction(a: IoAction): string {
 
 // ---------------------------------------------------------------- media markers
 //
-// Markers fire only during normal playback, for media time actually played past for the first
-// time in this run of the scene. Scrubbing (seek, clip.seek) is a jump: markers in the stretch
-// jumped across do not fire, and after scrubbing back, markers already passed do not fire again
-// on the replay. Holding (freeze) fires nothing. The "already passed" point is stored in the
+// Markers fire only during normal playback, for media time played past since the last scrub.
+// Scrubbing is a jump: markers in the stretch jumped across do not fire. A seekScene scrub back
+// re-arms what comes after the new moment, so markers fire again as playback reaches them (a
+// clip.seek still counts its clip's stretch as passed). Holding (freeze) fires nothing. The "already passed" point is stored in the
 // runtime (clock.reached, a clip segment's skip), so a reload of the operator window agrees.
 // Natural loops and fresh starts (new clip, layer restart, background change) fire again.
 
@@ -726,7 +834,7 @@ function pollMarkers(target: Target, rt: SceneRuntime, wall: number) {
       if (target === "program") {
         if (isSoundMicMessage(m.message)) noteMicMoved(rt, c, b, t, wall);
         void sendMessage(m.message, { sceneId: rt.scene.id });
-      }
+      } else if (m.message.type === "stagelight" && previewLightsAllowed()) void sendMessage(m.message, { sceneId: rt.scene.id });
       return;
     }
     const i = rt.scene.cues.findIndex((c) => c.id === m.cueId);
@@ -794,7 +902,9 @@ function typingInField(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
   if (!el) return false;
   const tag = el.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable || el.getAttribute("role") === "slider";
+  // A slider keeps the focus after a drag (a mixer fader): it only takes its own keys, the rest stay shortcuts.
+  if (el.getAttribute("role") === "slider") return /^(Arrow|Home|End|Page)/.test(e.key);
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
 function currentInput(): ActorInput {
@@ -852,12 +962,18 @@ export async function restoreLiveState(): Promise<boolean> {
   // The show file's sound levels win over the copy in the live state (a show taken in since, say).
   useShow.getState().restoreProgram({ ...p, mix: { ...(useProject.getState().project.mix ?? {}) } }, st!.poses ?? {});
   const t = now();
+  const rt = useShow.getState().program.runtime;
   let rearmed = 0;
   for (const rec of st!.pending ?? []) {
     if (rec.target !== "program") continue;
     // Late by less than two seconds: still fire it (the audience is waiting for it); later than that it is stale.
-    if (rec.fireAt < t - 2000) continue;
-    scheduleAction("program", rec.action, Math.max(t + 50, rec.fireAt), rec.cueId);
+    if (rec.runKey != null && rec.sceneAt != null) {
+      if (!rt || rt.key !== rec.runKey || sceneNow(rt, t) - rec.sceneAt > 2000) continue;
+      pending.program.push(rec);
+    } else {
+      if (rec.fireAt < t - 2000) continue;
+      pending.program.push({ ...rec, fireAt: Math.max(t + 50, rec.fireAt) });
+    }
     rearmed++;
   }
   ioLog("info", `Resumed live state: ${p.runtime ? `${p.runtime.scene.name}, next cue ${p.runtime.cuePointer + 1}` : "standby"}${rearmed ? `, ${rearmed} delayed action(s) re-armed` : ""}`);
@@ -893,6 +1009,37 @@ function startSoundLevels(): () => void {
     toProject();
     offProject();
   };
+}
+
+// ---------------------------------------------------------------- sounds kept ready
+//
+// The audio host decodes a sound file before it can play it. The files the show is about to need (the
+// live scene's, the next scene's, the previewed scene's, the announcements) are named to it ahead, so a
+// cue's sound starts on the beat, and it lets go of the rest (engine/audio.ts warmSounds).
+
+function soundsToWarm(): string[] {
+  const { project, selectedSceneId } = useProject.getState();
+  const live = useShow.getState().program.runtime;
+  const scenes = project.scenes;
+  const ids = new Set<string>();
+  const addScene = (s: Scene | null | undefined) => {
+    if (!s) return;
+    for (const c of s.cues) for (const a of c.actions) if (a.type === "sound" && a.assetId) ids.add(a.assetId);
+    for (const c of s.components) {
+      const thunder = c.kind === "effect" && c.effect === "lightning" ? c.params?.thunderAssetId : null;
+      if (typeof thunder === "string" && thunder) ids.add(thunder);
+    }
+  };
+  if (live) {
+    addScene(live.scene);
+    // What is sounding now, music carried in from earlier scenes included.
+    for (const ev of live.sounds ?? []) if (ev.assetId) ids.add(ev.assetId);
+    addScene(scenes[scenes.findIndex((s) => s.id === live.scene.id) + 1]);
+    for (const c of live.scene.cues) for (const a of c.actions) if (a.type === "takeScene") addScene(scenes.find((s) => s.id === a.sceneId));
+  } else addScene(scenes[0]);
+  addScene(scenes.find((s) => s.id === selectedSceneId));
+  for (const a of project.announcements ?? []) if (a.assetId) ids.add(a.assetId);
+  return [...ids].sort();
 }
 
 // ---------------------------------------------------------------- services
@@ -948,6 +1095,10 @@ export function startOperatorServices(): () => void {
     fireOverdue("program", t);
     fireOverdue("preview", t);
     const s = useShow.getState();
+    // A transition that is over is ended here too: the timer that normally ends it (store/show.ts take) is a
+    // plain page timer, which a covered window may run late, and until it runs a TAKE from the console is refused.
+    const tr = s.program.transition;
+    if (tr && t > tr.startedAt + tr.spec.duration * 1000 + 100) s.finishTransition(s.program.takeCount);
     pollTimers(t);
     const input = currentInput();
     const lc = s.lionControl;
@@ -968,7 +1119,6 @@ export function startOperatorServices(): () => void {
       if (pv) {
         pollMarkers("preview", pv, t);
         pollTimedCues("preview", pv, t);
-        pollSceneWaits(pv, t);
         pollRun(pv, t);
       }
     }
@@ -985,10 +1135,36 @@ export function startOperatorServices(): () => void {
   });
 
   // Mirror project assets/output settings into the show store (shared with output).
+  // Every edit hands out a fresh copy of the whole show (store/project.ts update), so the library and the
+  // output settings change identity on each one, a slider drag included, though they hardly ever change.
+  // Passing that on rebuilt the stage context of every canvas here and sent the whole library (over 100 KB
+  // for a full show) to the output on every edit, unthrottled, where it re-rendered the live scene. So the
+  // views keep the objects they have until the contents really differ.
+  let seenAssets: unknown = null;
+  let seenOutput: unknown = null;
+  let assetsJson = "";
+  let outputJson = "";
   const syncProject = () => {
     const { project } = useProject.getState();
-    const s = useShow.getState();
-    if (s.assets !== project.assets || s.output !== project.output) useShow.setState({ assets: project.assets, output: project.output });
+    if (project.assets === seenAssets && project.output === seenOutput) return;
+    const patch: { assets?: typeof project.assets; output?: typeof project.output } = {};
+    if (project.assets !== seenAssets) {
+      seenAssets = project.assets;
+      const json = JSON.stringify(project.assets);
+      if (json !== assetsJson) {
+        assetsJson = json;
+        patch.assets = project.assets;
+      }
+    }
+    if (project.output !== seenOutput) {
+      seenOutput = project.output;
+      const json = JSON.stringify(project.output);
+      if (json !== outputJson) {
+        outputJson = json;
+        patch.output = project.output;
+      }
+    }
+    if (patch.assets || patch.output) useShow.setState(patch);
   };
   syncProject();
   cleanups.push(useProject.subscribe(syncProject));
@@ -998,10 +1174,12 @@ export function startOperatorServices(): () => void {
   cleanups.push(useProject.subscribe((p, prev) => p.project.timers !== prev.project.timers && syncTimers()));
 
   // Broadcast program state on change (coalesced to ~30 Hz so a live slider cannot flood IPC), poses at ≤30 Hz.
-  const sendProject = () => {
+  const sendProjectNow = () => {
     const s = useShow.getState();
     void send({ type: "project", assets: s.assets, output: s.output });
   };
+  // An output setting dragged in Settings must not send the library thirty times a second.
+  const sendProject = throttle(sendProjectNow, 200);
   // Live state goes on every change; the scene definition inside each runtime goes once per run
   // (and whenever the output asks for a full resync), see packProgram.
   const sentScenes = new Map<string, Scene>();
@@ -1027,12 +1205,51 @@ export function startOperatorServices(): () => void {
     }),
   );
 
+  // The sounds to keep decoded, to this window (the audio host when the output is down) and to the output.
+  let warmSent = "";
+  const sendWarm = (force = false) => {
+    // Before the show file is in, the list would be empty and the audio host would drop what it holds.
+    if (!useProject.getState().loaded) return;
+    const ids = soundsToWarm();
+    const key = ids.join(",");
+    if (!force && key === warmSent) return;
+    warmSent = key;
+    warmSounds(ids);
+    void send({ type: "warm", sounds: ids });
+  };
+  // Edits arrive in bursts while building, and the operator may step through several scenes to reach
+  // one: wait until it settles, so the audio host does not decode a scene's songs only to drop them again.
+  let warmTimer: ReturnType<typeof setTimeout> | null = null;
+  const warmSoon = () => {
+    if (warmTimer) clearTimeout(warmTimer);
+    warmTimer = setTimeout(() => {
+      warmTimer = null;
+      sendWarm();
+      warmShowMedia();
+    }, 700);
+  };
+  cleanups.push(() => warmTimer && clearTimeout(warmTimer));
+  cleanups.push(
+    useProject.subscribe((p, prev) => {
+      if (p.project.scenes !== prev.project.scenes || p.project.assets !== prev.project.assets || p.project.announcements !== prev.project.announcements || p.selectedSceneId !== prev.selectedSceneId || p.loaded !== prev.loaded) warmSoon();
+    }),
+  );
+  cleanups.push(
+    useShow.subscribe((s, prev) => {
+      // A TAKE: the scene after the new one is wanted at once (its first cue may be seconds away).
+      if (s.program.runtime?.key !== prev.program.runtime?.key) sendWarm();
+      else if (s.program.runtime?.sounds !== prev.program.runtime?.sounds) warmSoon();
+    }),
+  );
+  warmSoon();
+
   cleanups.push(
     onBus((msg) => {
       if (msg.type === "hello") {
-        sendProject();
+        sendProjectNow();
         sendProgramNow(true);
         sendPoses();
+        sendWarm(true);
         useShow.setState({ outputSeenAt: Date.now(), outputLostAt: null });
       } else if (msg.type === "output-status") {
         useShow.setState({ outputStatus: msg.status, outputSeenAt: Date.now(), outputLostAt: null });
@@ -1061,6 +1278,8 @@ export function startOperatorServices(): () => void {
       const open = await isOutputOpen();
       // Alive but slow (a cold TAKE compiles shaders for a second or two): give it a moment longer.
       if (open && silentMs < OUTPUT_HUNG_MS) return;
+      // A heartbeat that came in while we were asking: it was this window that was held up, not the output.
+      if (open && Date.now() - useShow.getState().outputSeenAt < 4000) return;
       if (open) {
         ioLog("error", `Output window is not responding (no heartbeat for ${Math.round(silentMs / 1000)} s): recreating it`);
         await destroyOutputWindow();
@@ -1074,8 +1293,17 @@ export function startOperatorServices(): () => void {
       recreating = false;
     }
   };
+  let watchdogAt = Date.now();
+  let graceUntil = 0;
   const watchdog = setInterval(() => {
     const s = useShow.getState();
+    // This check itself ran late (this window was stalled, the computer slept) or the computer's clock was
+    // stepped: the silence measured is ours, not the output's. Its heartbeats are queued behind us; let
+    // them land before judging, or a healthy output is torn down and the wall goes to the desktop.
+    const tickGap = Date.now() - watchdogAt;
+    watchdogAt = Date.now();
+    if (tickGap > 3000 || tickGap < 0) graceUntil = Date.now() + 4000;
+    if (Date.now() < graceUntil) return;
     const silentMs = Date.now() - s.outputSeenAt;
     if (s.outputStatus && silentMs < 4000) return; // healthy
     if (outputClosedByUs) {
@@ -1095,7 +1323,7 @@ export function startOperatorServices(): () => void {
   cleanups.push(() => clearInterval(watchdog));
 
   // Live-state persistence (crash / reload recovery) and show-control I/O.
-  setPendingSource(() => pending.program.map(({ target, fireAt, action, cueId }) => ({ target, fireAt, action, cueId })));
+  setPendingSource(() => pending.program.map((p) => ({ ...p })));
   cleanups.push(startLiveStatePersistence());
   setIoActionHandler(runIoAction);
   cleanups.push(startIo());

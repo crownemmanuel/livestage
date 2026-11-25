@@ -11,12 +11,35 @@ import { playableUrl } from "@/core/platform";
 import { mediaElapsed, type Command } from "@/core/runtime";
 import type { Asset, SceneRuntime } from "@/core/types";
 import { useShow, type Target } from "@/store/show";
-import { probeDuration } from "./operator";
+import { probeDuration, seekRun } from "./operator";
+import { sceneLength } from "./timeline";
 
 // ---------------------------------------------------------------- durations
 
 const durationCache = new Map<string, number>();
 const probing = new Map<string, Promise<number | null>>();
+/** When a probe last failed (a missing or unreadable file): it is not tried again for a while. */
+const failedAt = new Map<string, number>();
+const RETRY_FAILED_MS = 30000;
+/** At most this many files are opened at once: each probe is a media element with a decoder of its own. */
+const MAX_PROBES = 3;
+let probesRunning = 0;
+const probeQueue: (() => void)[] = [];
+
+function probeSlot<T>(job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const run = () => {
+      probesRunning++;
+      void job().then((v) => {
+        probesRunning--;
+        probeQueue.shift()?.();
+        resolve(v);
+      });
+    };
+    if (probesRunning < MAX_PROBES) run();
+    else probeQueue.push(run);
+  });
+}
 
 /** Length (s) of a video asset, if it has been probed. */
 export function knownDuration(assetId: string | null | undefined): number | undefined {
@@ -29,11 +52,17 @@ export function probeDurations(assets: Asset[], ids: string[]): Promise<void> {
     if (durationCache.has(id)) return Promise.resolve();
     let job = probing.get(id);
     if (!job) {
+      // A file that would not open a moment ago: whoever waits on this (a TAKE, the music chase) must not
+      // wait out the probe's timeout again each time.
+      if (Date.now() - (failedAt.get(id) ?? -Infinity) < RETRY_FAILED_MS) return Promise.resolve();
       const url = playableUrl(assets.find((x) => x.id === id));
       if (!url) return Promise.resolve();
-      job = probeDuration(url).then((d) => {
+      job = probeSlot(() => probeDuration(url)).then((d) => {
         probing.delete(id);
-        if (d) durationCache.set(id, d);
+        if (d) {
+          durationCache.set(id, d);
+          failedAt.delete(id);
+        } else failedAt.set(id, Date.now());
         return d;
       });
       probing.set(id, job);
@@ -62,14 +91,18 @@ export interface Source {
   seek: (v: number) => Command;
 }
 
-/** Every video of the running scene that can be scrubbed, with where it is now. */
+/** Key of the whole-scene source: scrubs the scene clock itself, whatever is on screen. */
+export const SCENE_SOURCE = "scene";
+
+/** Every video of the running scene that can be scrubbed, with where it is now, and the whole scene last. */
 export function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
   const t = sceneNow(rt);
   const out: Source[] = [];
   const isVideo = (id: string | null) => !!id && assets.find((a) => a.id === id)?.type === "video";
   for (const c of rt.scene.components) {
     if (c.kind === "clipActor") {
-      // Every clip can be scrubbed, playing or not: scrubbing puts the actor on that clip.
+      // Every clip can be scrubbed. The playing one moves the whole scene by as much (like a
+      // background); one not playing puts the actor on that clip alone.
       const st = clipStateAt(c, rt.clipActors?.[c.id], t);
       for (const k of c.clips) {
         if (!k.assetId && !k.cutoutAssetId) continue;
@@ -80,7 +113,9 @@ export function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
           playing: active,
           duration: Math.max(0.05, k.duration),
           pos: active ? st.localT : 0,
-          seek: (v) => ({ type: "clip.seek", actorId: c.id, clipId: k.id, offset: v }),
+          seek: active
+            ? (v) => ({ type: "seek", t: Math.max(0, t + (v - st.localT) * 1000) })
+            : (v) => ({ type: "clip.seek", actorId: c.id, clipId: k.id, offset: v }),
         });
       }
     } else if (c.kind === "background" && c.source === "media" && rt.background.current === c.id && isVideo(c.media.assetId)) {
@@ -101,13 +136,16 @@ export function videoSources(rt: SceneRuntime, assets: Asset[]): Source[] {
       out.push({ key: c.id, label: c.name, playing: true, duration: D, pos: c.media.loop ? el % D : Math.min(el, D), seek: (v) => ({ type: "seek", t: Math.max(0, l.startAt + ((iter * D + v) / rate) * 1000) }) });
     }
   }
+  // The whole scene: back to a moment whose video is no longer on screen, or a scene with no video at all.
+  const pos = Math.max(0, t / 1000);
+  out.push({ key: SCENE_SOURCE, label: "Whole scene", playing: true, duration: Math.max(0.05, sceneLength(rt.scene), pos), pos, seek: (v) => ({ type: "seek", t: v * 1000 }) });
   return out;
 }
 
 /** The video the transport follows by default: the one picked, else the first playing one that is not a loop. */
 export function mainSource(sources: Source[], picked?: string | null): Source | undefined {
   const playing = sources.filter((s) => s.playing);
-  return sources.find((s) => s.key === picked) ?? playing.find((s) => !s.label.includes("(loop)")) ?? playing[0] ?? sources[0];
+  return sources.find((s) => s.key === picked) ?? playing.find((s) => !s.label.includes("(loop)")) ?? playing[0] ?? sources.find((s) => s.key === SCENE_SOURCE) ?? sources[0];
 }
 
 // ---------------------------------------------------------------- operations
@@ -125,12 +163,17 @@ export function hold(target: Target, op: "pause" | "resume" | "toggle") {
 }
 
 /**
- * Put a video at `seconds`. The live wall only scrubs while it is held: an accidental drag
- * must never jump what the audience sees. Returns false when refused.
+ * Put a video at `seconds`. A background or video layer moves the whole scene to that moment, replaying
+ * the run as it happened (seekRun): cues after it are up again. So does a video actor's playing clip; a clip
+ * not playing puts the actor on it alone. The live
+ * wall only scrubs while it is held: an accidental drag must never jump what the audience sees. Returns
+ * false when refused.
  */
 export function seekSource(target: Target, src: Source, seconds: number): boolean {
   if (target === "program" && !isHeld("program")) return false;
-  useShow.getState().dispatch(target, src.seek(Math.max(0, Math.min(src.duration, seconds))));
+  const cmd = src.seek(Math.max(0, Math.min(src.duration, seconds)));
+  if (cmd.type === "seek") seekRun(target, cmd.t / 1000);
+  else useShow.getState().dispatch(target, cmd);
   return true;
 }
 

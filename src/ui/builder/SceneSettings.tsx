@@ -43,7 +43,18 @@ export function SceneSettings({ scene }: { scene: Scene }) {
             <SliderField label="Duration" value={scene.transition.duration} min={0.1} max={20} step={0.1} unit="s" onChange={(v) => up((s) => (s.transition.duration = v))} />
           )}
           {scene.transition.kind === "video" && (
-            <AssetField label="Travel video" type="video" value={scene.transition.videoAssetId} onChange={(v) => up((s) => (s.transition.videoAssetId = v))} />
+            <>
+              <AssetField label="Travel video" type="video" value={scene.transition.videoAssetId} onChange={(v) => up((s) => (s.transition.videoAssetId = v))} />
+              <SliderField
+                label="Fade into the scene (0 = cut)"
+                value={scene.transition.fadeOut ?? Math.round(scene.transition.duration * 10) / 100}
+                min={0}
+                max={5}
+                step={0.1}
+                unit="s"
+                onChange={(v) => up((s) => (s.transition.fadeOut = v))}
+              />
+            </>
           )}
           {scene.transition.kind === "travel" && (
             <SliderField label="Flight distance" value={scene.transition.travelDistance} min={10} max={300} step={5} unit="m" onChange={(v) => up((s) => (s.transition.travelDistance = v))} />
@@ -66,7 +77,7 @@ export function SceneSettings({ scene }: { scene: Scene }) {
           )}
           <AssetField label="Transition audio" type="audio" value={scene.transition.audioAssetId} onChange={(v) => up((s) => (s.transition.audioAssetId = v))} />
           <p className="text-[10.5px] leading-snug text-muted-foreground">
-            Video transitions play full-frame; the destination scene loads underneath and is revealed as the video ends, so there is no black frame.
+            Video transitions play full-frame; the destination scene loads underneath and is revealed as the video ends (a fade, or a cut at 0), so there is no black frame.
           </p>
           <SwitchField
             label="Stop music from earlier scenes"

@@ -4,7 +4,9 @@ export type ParamSpec =
   | { key: string; label: string; type: "range"; min: number; max: number; step: number; unit?: string; live?: boolean }
   | { key: string; label: string; type: "color"; live?: boolean }
   | { key: string; label: string; type: "bool"; live?: boolean }
-  | { key: string; label: string; type: "asset"; assetType: "video" | "audio" | "image" };
+  | { key: string; label: string; type: "asset"; assetType: "video" | "audio" | "image" }
+  /** Surround speakers as "left,right" ("" = the main output); see SpeakerId. */
+  | { key: string; label: string; type: "speakers" };
 
 export interface EffectDef {
   type: EffectType;
@@ -65,6 +67,7 @@ export const EFFECT_DEFS: Record<EffectType, EffectDef> = {
       thunderVolume: 0.9,
       boltVideoAssetId: "",
       thunderAssetId: "",
+      thunderSpeakers: "",
     },
     params: [
       { key: "brightness", label: "Brightness", type: "range", min: 0.1, max: 2, step: 0.05 },
@@ -74,6 +77,7 @@ export const EFFECT_DEFS: Record<EffectType, EffectDef> = {
       { key: "thunderVolume", label: "Thunder volume", type: "range", min: 0, max: 1, step: 0.01 },
       { key: "boltVideoAssetId", label: "Bolt video (optional)", type: "asset", assetType: "video" },
       { key: "thunderAssetId", label: "Thunder audio (optional)", type: "asset", assetType: "audio" },
+      { key: "thunderSpeakers", label: "Thunder speakers", type: "speakers" },
     ],
   },
   fog: {

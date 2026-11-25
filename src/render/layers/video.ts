@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { clamp } from "@/core/clock";
 import { isWebKit } from "@/core/platform";
-import type { MediaSettings } from "@/core/types";
+import type { Asset, MediaSettings } from "@/core/types";
+import { addUploadTime } from "../uploadStats";
 
 export interface VideoHandle {
   video: HTMLVideoElement;
@@ -20,6 +21,24 @@ export interface VideoHandle {
   parked: boolean;
   /** The element has shown a frame of its current file (see useVideo): only then may it be uploaded outside three's own frame callback. */
   framed: boolean;
+  /** The file is alpha-packed (colour over matte, twice the picture's height): see `Asset.alphaPacked`. */
+  packed: boolean;
+}
+
+/** How `useVideo` should treat an asset's transparency. */
+export function videoAlpha(a: Asset | undefined | null): { alpha: boolean; packed: boolean } {
+  return { alpha: !!a?.hasAlpha && !a.alphaPacked, packed: !!a?.alphaPacked };
+}
+
+/** Is this texture an alpha-packed video (set by `useVideo`)? */
+export function isPackedTexture(tex: THREE.Texture | null | undefined): boolean {
+  return !!tex && tex.userData.alphaPacked === true;
+}
+
+/** Width / height of the picture a video shows: an alpha-packed file is twice as tall as its picture. */
+export function videoAspect(h: VideoHandle): number {
+  const v = h.video;
+  return (v.videoWidth / Math.max(1, v.videoHeight)) * (h.packed ? 2 : 1);
 }
 
 // ---------------------------------------------------------------- sync diagnostics
@@ -35,6 +54,8 @@ export interface VideoSyncStat {
   driftMaxMs: number;
   dropped: number;
   frames: number;
+  /** Paused (parked or held) but seeked in this interval. */
+  paused?: boolean;
 }
 
 interface SyncCounters {
@@ -76,8 +97,11 @@ export function takeVideoSyncStats(): VideoSyncStat[] {
   for (const [h, c] of counters) {
     const v = h.video;
     const q = typeof v.getVideoPlaybackQuality === "function" ? v.getVideoPlaybackQuality() : null;
-    if (!v.paused) {
+    // A paused video belongs in the report only when it was seeked: parked on a frame it costs nothing,
+    // and one seeked again and again while hidden is a fault that used to be invisible here.
+    if (!v.paused || c.seeks > 0) {
       out.push({
+        paused: v.paused || undefined,
         file: decodeURIComponent((v.currentSrc || v.src).split("/").pop() ?? ""),
         time: Math.round(v.currentTime * 100) / 100,
         rate: Math.round(v.playbackRate * 1000) / 1000,
@@ -150,7 +174,9 @@ function uploadAsVideoFrame(v: HTMLVideoElement, texture: THREE.VideoTexture): (
     set(value: boolean) {
       if (value && v.readyState >= 2) {
         try {
+          const t0 = performance.now();
           const next = new VideoFrame(v);
+          addUploadTime(performance.now() - t0);
           frame?.close();
           frame = next;
           texture.source.data = next as unknown as HTMLVideoElement; // three uploads a VideoFrame like an element
@@ -173,15 +199,18 @@ function uploadAsVideoFrame(v: HTMLVideoElement, texture: THREE.VideoTexture): (
  * One <video> per use; playback is slaved to the shared scene clock.
  * `lazy`: create the element cold; the owner decides each frame whether it should be warm (`setWarm`).
  * `alpha`: the file has an alpha channel (see uploadAsVideoFrame).
+ * `packed`: the file is alpha-packed (opaque H.264, colour over matte): uploaded like any opaque video,
+ * never as a VideoFrame, and the media shader reads the matte from the bottom half.
  */
-export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean } = {}): VideoHandle | null {
+export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean; packed?: boolean } = {}): VideoHandle | null {
   // Created in an effect, never in render: React (StrictMode, concurrent rendering) may run a
   // render twice and keep one result, and a <video> made in the discarded render would stay in
   // the page, buffering and holding a decoder, with nothing left to remove it (seen: two decoders
   // per layer, 26 elements alive for a two-scene show).
   const [h, setH] = useState<VideoHandle | null>(null);
   const lazy = !!opts.lazy;
-  const alpha = !!opts.alpha && isWebKit && typeof VideoFrame !== "undefined";
+  const packed = !!opts.packed;
+  const alpha = !!opts.alpha && !packed && isWebKit && typeof VideoFrame !== "undefined";
   useEffect(() => {
     if (!url) {
       setH(null);
@@ -199,6 +228,7 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
+    texture.userData.alphaPacked = packed;
     const releaseFrame = alpha ? uploadAsVideoFrame(v, texture) : null;
     // Uploading an element that has no frame yet hangs WebKit: texImage2D asks the GPU process for the
     // picture over a sync IPC, and a player with none waits up to a second for it in a nested run loop that
@@ -223,7 +253,7 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
     // A new file (a cold clip warmed) has no frame until it shows one.
     v.addEventListener("loadstart", arm);
     hostVideo(v);
-    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true, framed: false };
+    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true, framed: false, packed };
     arm();
     setH(handle);
     return () => {
@@ -236,7 +266,7 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
       counters.delete(handle);
       setH((cur) => (cur === handle ? null : cur));
     };
-  }, [url, lazy, alpha]);
+  }, [url, lazy, alpha, packed]);
   return h;
 }
 
@@ -316,9 +346,12 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
     v.dataset.localSound = "1";
     void (v as { setSinkId?: (id: string) => Promise<void> }).setSinkId?.("").catch(() => {});
   }
-  v.muted = want.muted;
-  v.volume = clamp(want.volume, 0, 1);
-  if (want.once !== undefined) v.loop = !want.once;
+  // Written only when they change: this runs for every video of every canvas on every frame, and each
+  // write is a call into the platform player.
+  if (v.muted !== want.muted) v.muted = want.muted;
+  const volume = clamp(want.volume, 0, 1);
+  if (v.volume !== volume) v.volume = volume;
+  if (want.once !== undefined && v.loop === want.once) v.loop = !want.once;
   if (v.readyState < 1) return;
   let drift = v.currentTime - want.time;
   // Played to the end once: park on the last frame (play() on an ended element restarts it).

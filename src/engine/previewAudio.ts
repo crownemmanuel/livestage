@@ -8,7 +8,7 @@
 import { sceneNow } from "@/core/clock";
 import { filePos, scheduleLevels, soundLives, type SoundLife } from "@/core/music";
 import { useSyncExternalStore } from "react";
-import { useShow } from "@/store/show";
+import { soloParts, useShow } from "@/store/show";
 
 let ctx: AudioContext | null = null;
 function audio(): AudioContext {
@@ -109,6 +109,11 @@ function sync() {
   // Each file's latest start (a later copy replaces it); a fade already over is nothing to play.
   const want = new Map<string, SoundLife>();
   for (const l of soundLives(rt.sounds ?? [])) want.set(l.ev.assetId, l);
+  // Solo: only soloed sounds are heard (soloed components bring only their own video sound).
+  const { solo } = useShow.getState();
+  const sounds = soloParts(solo).sounds;
+  if (solo.length) for (const key of [...want.keys()]) if (!sounds.includes(key)) want.delete(key);
+  for (const key of useShow.getState().muted) want.delete(key.slice(6));
   for (const [key, l] of [...want]) if (l.fadeFrom !== null && t >= l.fadeFrom + l.fadeSecs * 1000) want.delete(key);
   for (const [key, v] of [...voices]) if (want.get(key)?.ev.id !== v.evId) silence(key, 0.15);
   for (const [key, l] of want) {
@@ -186,8 +191,8 @@ export function startPreviewAudio(): () => void {
   const off = useShow.subscribe((s, prev) => {
     const a = s.preview;
     const b = prev.preview;
-    if (a === b || queued) return;
-    if (!a || !b || a.key !== b.key || a.clock !== b.clock || a.sounds !== b.sounds) {
+    if ((a === b && s.solo === prev.solo && s.muted === prev.muted) || queued) return;
+    if (!a || !b || a.key !== b.key || a.clock !== b.clock || a.sounds !== b.sounds || s.solo !== prev.solo || s.muted !== prev.muted) {
       queued = true;
       queueMicrotask(() => {
         queued = false;

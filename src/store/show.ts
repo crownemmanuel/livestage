@@ -12,6 +12,7 @@ import type {
   Scene,
   SceneRuntime,
   SoundEvent,
+  SpeakerId,
   TimerOp,
   TimerRun,
   TransitionSpec,
@@ -32,8 +33,14 @@ interface ShowStore {
   preview: SceneRuntime | null;
   previewPoses: ActorPoses;
   previewPosesAt: number;
-  /** Component shown on its own in the preview (Build's isolate); null = the whole scene. */
-  solo: string | null;
+  /**
+   * What the preview plays on its own (Build's isolate / the timeline's solo), any number of them: component
+   * ids (only they are seen, and only their own sound heard) and sounds, `sound:<assetId>` (only they are
+   * heard; with no component soloed the picture stays whole). Empty = the whole scene.
+   */
+  solo: string[];
+  /** Cue sounds silenced in the preview while building (`sound:<assetId>`); the show itself is unchanged. */
+  muted: string[];
   /** Components hidden from the preview while building (the show itself is unchanged). */
   hidden: string[];
 
@@ -51,7 +58,12 @@ interface ShowStore {
   lionControl: { armed: boolean; actorId: string | null; target: Target };
 
   setPreview(scene: Scene | null, opts?: { keepState?: boolean }): void;
-  setSolo(id: string | null): void;
+  setSolo(ids: string[]): void;
+  /** Mute this sound in the preview, or unmute it. */
+  toggleMute(key: string): void;
+  setMuted(keys: string[]): void;
+  /** Solo this too, or stop soloing it. */
+  toggleSolo(id: string): void;
   toggleHidden(id: string): void;
   restartPreview(): void;
   /**
@@ -63,6 +75,8 @@ interface ShowStore {
   setStandby(on: boolean): void;
   setBlackout(on: boolean, fade?: number): void;
   dispatch(target: Target, cmd: Command): void;
+  /** Replace the run on `target` with a rebuilt state of the same run (a seek, engine/operator.ts seekScene). */
+  replaceRun(target: Target, rt: SceneRuntime, poses: ActorPoses): void;
   setPoses(target: Target, poses: ActorPoses, at: number): void;
   setNextTransition(t: TransitionSpec | null): void;
   setLionControl(p: Partial<ShowStore["lionControl"]>): void;
@@ -70,7 +84,7 @@ interface ShowStore {
   timer(id: string, op: TimerOp | "add", opts: { duration: number; seconds?: number }): void;
   /** Make sure every defined timer has a live state, and drop ones that were deleted. */
   syncTimers(defs: { id: string; duration: number }[]): void;
-  announce(a: { id: string; assetId: string; volume: number } | null): void;
+  announce(a: { id: string; assetId: string; volume: number; speakers?: SpeakerId[] } | null): void;
   /** Put a show timer on screen over everything (null takes it off). */
   setTimerOverlay(o: { timerId: string; label: string } | null): void;
   /** Live mixer: set one source's volume trim (0..1; null = back to as designed). See ProgramState.mix. */
@@ -97,7 +111,8 @@ export const useShow = create<ShowStore>((set, get) => ({
   preview: null,
   previewPoses: {},
   previewPosesAt: 0,
-  solo: null,
+  solo: [],
+  muted: [],
   hidden: [],
   assets: [],
   output: defaultOutput(),
@@ -108,13 +123,16 @@ export const useShow = create<ShowStore>((set, get) => ({
   nextTransition: null,
   lionControl: { armed: false, actorId: null, target: "program" },
 
-  setSolo: (id) => set({ solo: id }),
+  setSolo: (ids) => set({ solo: ids }),
+  setMuted: (keys) => set({ muted: keys }),
+  toggleMute: (key) => set({ muted: get().muted.includes(key) ? get().muted.filter((x) => x !== key) : [...get().muted, key] }),
+  toggleSolo: (id) => set({ solo: get().solo.includes(id) ? get().solo.filter((x) => x !== id) : [...get().solo, id] }),
   toggleHidden: (id) => set({ hidden: get().hidden.includes(id) ? get().hidden.filter((x) => x !== id) : [...get().hidden, id] }),
 
   setPreview(scene, opts) {
     const cur = get().preview;
     // Isolating and hiding are per scene: another scene comes up whole.
-    if ((get().solo || get().hidden.length) && cur?.scene.id !== scene?.id) set({ solo: null, hidden: [] });
+    if ((get().solo.length || get().muted.length || get().hidden.length) && cur?.scene.id !== scene?.id) set({ solo: [], muted: [], hidden: [] });
     if (!scene) return set({ preview: null, previewPoses: {} });
     if (opts?.keepState && cur && cur.scene.id === scene.id) {
       const rt = reconcileRuntime(cur, scene);
@@ -206,6 +224,17 @@ export const useShow = create<ShowStore>((set, get) => ({
     }
   },
 
+  replaceRun(target, rt, poses) {
+    const s = get();
+    if (target === "program") {
+      if (s.program.runtime?.key !== rt.key) return;
+      set({ program: { ...s.program, runtime: rt }, programPoses: poses, posesAt: now() });
+    } else {
+      if (s.preview?.key !== rt.key) return;
+      set({ preview: rt, previewPoses: poses, previewPosesAt: now() });
+    }
+  },
+
   setPoses(target, poses, at) {
     if (target === "program") set({ programPoses: poses, posesAt: at });
     else set({ previewPoses: poses, previewPosesAt: at });
@@ -260,7 +289,7 @@ export const useShow = create<ShowStore>((set, get) => ({
       if (program.announce && !program.announce.stoppedAt) set({ program: { ...program, announce: { ...program.announce, stoppedAt: now() } } });
       return;
     }
-    set({ program: { ...program, announce: { key: `${a.id}:${now()}`, id: a.id, assetId: a.assetId, volume: a.volume, at: now() } } });
+    set({ program: { ...program, announce: { key: `${a.id}:${now()}`, id: a.id, assetId: a.assetId, volume: a.volume, at: now(), ...(a.speakers?.length ? { speakers: a.speakers } : {}) } } });
   },
 
   setTimerOverlay(o) {
@@ -294,3 +323,8 @@ export const runtimeFor = (target: Target) => {
   const s = useShow.getState();
   return target === "program" ? s.program.runtime : s.preview;
 };
+
+/** What the preview solos, split: the components shown alone and the sound files heard alone. */
+export function soloParts(solo: string[]): { components: string[]; sounds: string[] } {
+  return { components: solo.filter((x) => !x.startsWith("sound:")), sounds: solo.filter((x) => x.startsWith("sound:")).map((x) => x.slice(6)) };
+}

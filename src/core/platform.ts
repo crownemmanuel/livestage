@@ -13,7 +13,8 @@ export const isWebKit =
 /** The URL this webview should play for an asset (its HEVC-alpha twin on WebKit, when there is one). */
 export function playableUrl(a: Asset | undefined | null): string | null {
   if (!a) return null;
-  return isWebKit && a.macUrl ? a.macUrl : a.url;
+  // An alpha-packed file is plain H.264: the same file plays everywhere.
+  return isWebKit && a.macUrl && !a.alphaPacked ? a.macUrl : a.url;
 }
 
 export const windowRole: "operator" | "output" =
@@ -114,6 +115,9 @@ export async function openOutputWindow(settings: OutputSettings): Promise<void> 
   if (!settings.fullscreen) await win.setSize(new LogicalSize(settings.windowWidth, settings.windowHeight));
   await win.show();
   if (settings.fullscreen) await win.setFullscreen(true);
+  // Showing the output makes it the key window: give the keyboard back to the operator, or after the
+  // watchdog reopens the output mid-show G and the other shortcuts go to a window that ignores them.
+  await (await WebviewWindow.getByLabel("main"))?.setFocus().catch(() => {});
 }
 
 /** Set while the operator closes the output on purpose, so the watchdog does not reopen it. */
@@ -157,28 +161,85 @@ export async function destroyOutputWindow(): Promise<void> {
 const LS_KEY = "sls.project.v1";
 const PROJECT_FILE = "project.json";
 
+/** The show file as it was before the last save: what is opened if the show file itself cannot be read. */
+const PROJECT_BACKUP = "project.json.bak";
+
+/**
+ * The show file: null when there is none yet (a first start). Throws when there is one and it cannot be
+ * read or parsed (a write torn by a power cut, a locked file): the caller must not treat that as "no show"
+ * and save a new one over it.
+ */
 export async function loadProjectFile(): Promise<Project | null> {
+  if (isTauri) {
+    const fs = await import("@tauri-apps/plugin-fs");
+    if (!(await fs.exists(PROJECT_FILE, { baseDir: fs.BaseDirectory.AppData }))) return null;
+    return JSON.parse(await fs.readTextFile(PROJECT_FILE, { baseDir: fs.BaseDirectory.AppData }));
+  }
+  const raw = localStorage.getItem(LS_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+
+/** The previous generation of the show file, or null when there is none or it cannot be read either. */
+export async function loadProjectBackup(): Promise<Project | null> {
+  if (!isTauri) return null;
   try {
-    if (isTauri) {
-      const fs = await import("@tauri-apps/plugin-fs");
-      if (!(await fs.exists(PROJECT_FILE, { baseDir: fs.BaseDirectory.AppData }))) return null;
-      return JSON.parse(await fs.readTextFile(PROJECT_FILE, { baseDir: fs.BaseDirectory.AppData }));
-    }
-    const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const fs = await import("@tauri-apps/plugin-fs");
+    if (!(await fs.exists(PROJECT_BACKUP, { baseDir: fs.BaseDirectory.AppData }))) return null;
+    return JSON.parse(await fs.readTextFile(PROJECT_BACKUP, { baseDir: fs.BaseDirectory.AppData }));
   } catch (e) {
-    console.error("Failed to load project", e);
+    console.error("Failed to load the show file's backup", e);
     return null;
   }
 }
 
-export async function saveProjectFile(p: Project): Promise<void> {
+/**
+ * Move a show file that cannot be read out of the way (kept, under another name, for recovery by hand),
+ * so the next save cannot destroy it. Returns the name it now has, or null if it could not be moved.
+ */
+export async function setAsideProjectFile(): Promise<string | null> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  if (!isTauri) {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw != null) localStorage.setItem(`${LS_KEY}.unreadable-${stamp}`, raw);
+      return `${LS_KEY}.unreadable-${stamp}`;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const fs = await import("@tauri-apps/plugin-fs");
+    const name = `project.unreadable-${stamp}.json`;
+    await fs.rename(PROJECT_FILE, name, { oldPathBaseDir: fs.BaseDirectory.AppData, newPathBaseDir: fs.BaseDirectory.AppData });
+    return name;
+  } catch (e) {
+    console.error("Could not move the unreadable show file aside", e);
+    return null;
+  }
+}
+
+/** Saves run one after another: they share one temp file, and two at once could publish a torn one. */
+let saving: Promise<void> = Promise.resolve();
+
+export function saveProjectFile(p: Project): Promise<void> {
   const data = JSON.stringify(p);
+  const job = saving.then(() => writeProjectFile(data));
+  saving = job.catch(() => {});
+  return job;
+}
+
+async function writeProjectFile(data: string): Promise<void> {
   if (isTauri) {
     const fs = await import("@tauri-apps/plugin-fs");
-    await fs.mkdir("", { baseDir: fs.BaseDirectory.AppData, recursive: true }).catch(() => {});
+    const dir = { baseDir: fs.BaseDirectory.AppData };
+    await fs.mkdir("", { ...dir, recursive: true }).catch(() => {});
     // Write to a temp file then rename so a crash mid-save never corrupts the show file.
-    await fs.writeTextFile(`${PROJECT_FILE}.tmp`, data, { baseDir: fs.BaseDirectory.AppData });
+    await fs.writeTextFile(`${PROJECT_FILE}.tmp`, data, dir);
+    // Keep the file being replaced as the backup: if the new one is ever unreadable (the rename is atomic,
+    // but nothing forces the data to disk before a power cut), the show opens from this instead of the demo.
+    if (await fs.exists(PROJECT_FILE, dir).catch(() => false)) {
+      await fs.copyFile(PROJECT_FILE, PROJECT_BACKUP, { fromPathBaseDir: fs.BaseDirectory.AppData, toPathBaseDir: fs.BaseDirectory.AppData }).catch((e) => console.warn("show file backup failed", e));
+    }
     await fs.rename(`${PROJECT_FILE}.tmp`, PROJECT_FILE, {
       oldPathBaseDir: fs.BaseDirectory.AppData,
       newPathBaseDir: fs.BaseDirectory.AppData,
@@ -212,8 +273,17 @@ export async function loadStateFile<T>(): Promise<T | null> {
   }
 }
 
-export async function saveStateFile(state: unknown): Promise<void> {
+/** One write at a time: they share a temp file (the change flush, the pose tick and the unload flush can overlap). */
+let savingState: Promise<void> = Promise.resolve();
+
+export function saveStateFile(state: unknown): Promise<void> {
   const data = JSON.stringify(state);
+  const job = savingState.then(() => writeStateFile(data));
+  savingState = job.catch(() => {});
+  return job;
+}
+
+async function writeStateFile(data: string): Promise<void> {
   if (isTauri) {
     const fs = await import("@tauri-apps/plugin-fs");
     await fs.writeTextFile(`${STATE_FILE}.tmp`, data, { baseDir: fs.BaseDirectory.AppData });
@@ -417,7 +487,7 @@ function legacyKey(path: string, root: string): string {
  * with a portable `file` key plays its local copy when there is one; media that ships with the app
  * (`/media/…`) falls back to the bundled file.
  */
-export async function resolveAssetUrls(assets: Asset[]): Promise<Asset[]> {
+export async function resolveAssetUrls(assets: Asset[], show?: { id?: string; name: string }): Promise<Asset[]> {
   if (!isTauri) return assets;
   const { convertFileSrc } = await import("@tauri-apps/api/core");
   // On the build computer (development build) media in the repo's public/ folder wins over local copies.
@@ -430,8 +500,31 @@ export async function resolveAssetUrls(assets: Asset[]): Promise<Asset[]> {
     const ok = await fs.exists(key, { baseDir: fs.BaseDirectory.AppData }).catch(() => false);
     return ok ? join(root, ...key.split("/")) : null;
   };
+  // Files in the workspace (`rel`): looked up only when some asset has one, so a show without them touches no folder.
+  const wsAssets = show ? assets.filter((a) => a.rel || a.macRel) : [];
+  let wsDir: string | null = null;
+  let wsFound = new Map<string, string>();
+  if (wsAssets.length && show) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      wsDir = await invoke<string>("workspace_show_dir", { showId: show.id ?? `name:${show.name}`, name: show.name });
+      const rels = [...new Set(wsAssets.flatMap((a) => [a.rel, a.macRel]).filter((r): r is string => !!r))];
+      const found = await invoke<(string | null)[]>("workspace_resolve", { showDir: wsDir, rels });
+      wsFound = new Map(rels.flatMap((r, i) => (found[i] ? [[r, found[i]!] as [string, string]] : [])));
+    } catch (e) {
+      console.warn("workspace lookup failed; using the library copies", e);
+    }
+  }
   return Promise.all(
     assets.map(async (a) => {
+      const wsPath = a.rel ? wsFound.get(a.rel) : undefined;
+      const wsMac = a.macRel ? wsFound.get(a.macRel) : undefined;
+      if (wsPath) {
+        // The workspace file wins over every older copy.
+        const out: Asset = { ...a, path: wsPath, url: convertFileSrc(wsPath) };
+        if (wsMac) out.macUrl = convertFileSrc(wsMac);
+        return out;
+      }
       const file = a.file ?? (a.path ? legacyKey(a.path, root) : undefined);
       const [p, mp] = await Promise.all([onDisk.has(a.url) ? null : local(file), a.macUrl && onDisk.has(a.macUrl) ? null : local(a.macFile)]);
       const out: Asset = { ...a };
@@ -444,4 +537,57 @@ export async function resolveAssetUrls(assets: Asset[]): Promise<Asset[]> {
       return out;
     }),
   );
+}
+
+
+// ---------------------------------------------------------------- workspace
+
+/** The assets' workspace files that exist on this computer: `rel` / `macRel` → absolute path (packages and cloud sync send these). */
+export async function workspaceFiles(assets: Asset[], show: { id?: string; name: string }): Promise<Map<string, string>> {
+  const rels = [...new Set(assets.flatMap((a) => [a.rel, a.macRel]).filter((r): r is string => !!r))];
+  if (!isTauri || !rels.length) return new Map();
+  const { invoke } = await import("@tauri-apps/api/core");
+  const dir = await invoke<string>("workspace_show_dir", { showId: show.id ?? `name:${show.name}`, name: show.name });
+  const found = await invoke<(string | null)[]>("workspace_resolve", { showDir: dir, rels });
+  return new Map(rels.flatMap((r, i) => (found[i] ? [[r, found[i]!] as [string, string]] : [])));
+}
+
+/** This computer's workspace folder (see docs/SHOW_PACKAGE.md): where each show's media finals live. */
+export interface WorkspaceInfo {
+  root: string;
+  defaultRoot: string;
+  isDefault: boolean;
+  exists: boolean;
+  /** The current show's folder inside it (set when the show has media there; not created by reading). */
+  showDir?: string;
+}
+
+export async function workspaceGet(): Promise<WorkspaceInfo | null> {
+  if (!isTauri) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WorkspaceInfo>("workspace_dir");
+}
+
+/** Set the workspace folder on this computer (null = back to the default). Moves no files. */
+export async function workspaceSet(path: string | null): Promise<WorkspaceInfo> {
+  if (!isTauri) throw new Error("The workspace folder is a desktop app setting.");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WorkspaceInfo>("workspace_set", { path });
+}
+
+/** Ask the operator for the workspace folder; resolves with the new setting, or null when cancelled. */
+export async function pickWorkspace(): Promise<WorkspaceInfo | null> {
+  if (!isTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const cur = await workspaceGet();
+  const dir = await open({ directory: true, multiple: false, defaultPath: cur?.root, title: "Workspace folder" });
+  if (!dir || Array.isArray(dir)) return null;
+  return workspaceSet(dir);
+}
+
+/** The folder of the show named `name` inside the workspace (created with its marker on first use). */
+export async function workspaceShowDir(showId: string | undefined, name: string): Promise<string | null> {
+  if (!isTauri) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("workspace_show_dir", { showId: showId ?? `name:${name}`, name });
 }

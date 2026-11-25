@@ -23,7 +23,8 @@ const LOOKS: Record<string, { icon: typeof Music; color: string; label: string }
   background: { icon: Mountain, color: "text-armed", label: "Background video sound" },
   videoActor: { icon: Clapperboard, color: "text-armed", label: "Video actor sound" },
 };
-const lookOf = (src: MixSource) => LOOKS[src.kind === "sound" ? (src.role ?? "sound") : src.kind];
+// A role or kind this build does not know (a newer show file, a hand edit) shows as a plain cue sound.
+const lookOf = (src: MixSource) => LOOKS[src.kind === "sound" ? (src.role ?? "sound") : src.kind] ?? LOOKS.sound;
 
 export function MixerPanel() {
   const [open, setOpen] = useState(true);

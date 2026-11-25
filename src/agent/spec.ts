@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 24;
+export const AGENT_SPEC_VERSION = 33;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -51,7 +51,7 @@ const sceneRef = str('A scene: its id, running-order code ("1.2"), number ("7") 
 const componentRef = str("A component of the scene: its id or exact name.");
 const cueRef = str('A cue of the scene: its id, exact name, or 1-based position like "#3".');
 const transition = obj(
-  'A TransitionSpec: {kind: "cut"|"crossfade"|"fadeblack"|"dissolve"|"video"|"travel"|"wipe"|"burn", duration (s), videoAssetId, audioAssetId, travelDistance, direction?, softness?}. Missing fields take defaults.',
+  'A TransitionSpec: {kind: "cut"|"crossfade"|"fadeblack"|"dissolve"|"video"|"travel"|"wipe"|"burn", duration (s), videoAssetId, audioAssetId, travelDistance, direction?, softness?, fadeOut? (video: seconds it fades into the scene at its end, 0 = cut; unset = the last tenth)}. Missing fields take defaults.',
 );
 const path = str(
   'Slash path into app state. Roots: project (the show file), show (live/preview runtime), io (MIDI/OSC status and log), ui (mode, selection). Array elements are addressed by id, then by index; "-" appends. E.g. "project/scenes/scene_ab12/components/rain_x9/params/intensity", "project/output/canvasWidth", "show/program/runtime/cuePointer".',
@@ -91,7 +91,7 @@ export const AGENT_COMMANDS = {
   },
   list_assets: {
     readOnly: true,
-    description: "The media library (images, videos, 3D models, audio) with ids to use in components and cues. Videos carry a one-line `format` and `problems` when the wall may not play them well (see asset_check). Audio carries `audioRole` (music, voice, ambience, sfx: its icon and colour on the live mixer), set with patch project/assets/<id>/audioRole or guessed from the name.",
+    description: "The media library (images, videos, 3D models, audio) with ids to use in components and cues. Videos carry a one-line `format` and `problems` when the wall may not play them well (see asset_check). `alphaPacked` marks a transparent video stored as one H.264 file, colour over matte (see schema, topic assets). `rel` is the asset's place in this computer's workspace (`<scene folder>/<images|audio|video|other>/<file>`), `playsFrom` where it plays from now (workspace, library, bundled or url). Audio carries `audioRole` (music, voice, ambience, sfx: its icon and colour on the live mixer), set with patch project/assets/<id>/audioRole or guessed from the name.",
     params: args({ type: oneOf(["image", "video", "model", "audio"], "Only this type."), query: str("Name contains (case-insensitive).") }),
   },
   get: {
@@ -103,7 +103,7 @@ export const AGENT_COMMANDS = {
     readOnly: true,
     description:
       "Reference for building show content, generated from the running app so it is always current: component kinds with their default fields, cue action types with defaults, effect types with parameter ranges, transition kinds, I/O message shapes, path syntax.",
-    params: args({ topic: oneOf(["components", "cueActions", "effects", "transitions", "io", "all"], "What to describe (default all).") }),
+    params: args({ topic: oneOf(["components", "cueActions", "effects", "transitions", "io", "assets", "room", "all"], "What to describe (default all).") }),
   },
   screenshot: {
     readOnly: true,
@@ -145,7 +145,7 @@ export const AGENT_COMMANDS = {
   },
   cue: {
     description:
-      "Cue list control. go = fire the next cue (past the last cue a flowing group takes its next scene), including one that would fire by itself (nextCueAuto: true), which then fires early; fire = fire cue `index` and rewind the list to it (the cues after it are un-fired, GO points at the next one, the cues before it count as passed; time cues already behind the clock wait for GO; on program, a fire out of order chases the music, see music_at); back/skip = move the GO pointer; set = put the pointer on `index`; repeat = re-run the last fired cue. On program, go/fire during a video transition end the transition at once so the cue is seen.",
+      "Cue list control. go = fire the next cue (past the last cue a flowing group takes its next scene), including one that would fire by itself (nextCueAuto: true), which then fires early; fire = fire cue `index` and rewind the list to it (the cues after it are un-fired, GO points at the next one). A cue already passed (index before the GO pointer, or already fired) takes the scene back to that cue's moment as the run had it and plays on from there: what later cues put up is gone, they are up again, and markers and time cues ahead fire again as playback reaches them. The next cue or one ahead fires on what is there (cues before it count as passed; time cues already behind the clock wait for GO; on program, a fire ahead chases the music, see music_at); back/skip = move the GO pointer; set = put the pointer on `index`; repeat = re-run the last fired cue. On program, go/fire during a video transition end the transition at once so the cue is seen.",
     params: args({ target, op: oneOf(["go", "fire", "back", "skip", "set", "repeat"], "What to do."), index: int("0-based cue index for fire/set.") }, ["target", "op"]),
   },
   preview_step: {
@@ -170,7 +170,7 @@ export const AGENT_COMMANDS = {
   seek: {
     live: true,
     description:
-      "Jump the scene clock to `seconds` after the TAKE (scrub). Video, effects and tweens follow. On program it only works while the scene is held (freeze/transport hold). Markers and time cues in the stretch jumped over or replayed do not fire. To scrub in a video's own time, use transport.",
+      "Put the scene at `seconds` after the TAKE, like scrubbing a video: the run is rebuilt as it played to there (GO cues where they were pressed in this run, cues that fire by themselves where they fire), so layers, videos, sounds, effects and the GO pointer are what they were at that moment. Cues after it are up again and markers and time cues ahead fire again as playback reaches them; lights / MIDI / OSC are never resent for the stretch jumped over. Held stays held. On program it only works while the scene is held (freeze/transport hold). To scrub in a video's own time, use transport.",
     params: args({ target, seconds: num("Scene time in seconds.") }, ["target", "seconds"]),
   },
   freeze: {
@@ -181,7 +181,7 @@ export const AGENT_COMMANDS = {
   transport: {
     live: true,
     description:
-      "Video transport for the scene on `target`: status, hold (freeze on this frame: video, its sound and effects), resume, toggle, seek to `seconds` into a video, or nudge by `seconds` (negative = back). Times are the video's own seconds, not scene time. On program, seek/nudge only work while held, so the live wall never jumps by accident. Markers and time cues fire only on normal playback past a point for the first time: never for the stretch jumped over, never again on a replay after scrubbing back. Returns held, the video's position and length, and every scrubbable video.",
+      "Video transport for the scene on `target`: status, hold (freeze on this frame: video, its sound and effects), resume, toggle, seek to `seconds` into a video, or nudge by `seconds` (negative = back). Times are the video's own seconds, not scene time; source `scene` (Whole scene) scrubs scene time itself. Seeking a background, a video layer, a video actor's playing clip or the scene moves the whole scene to that moment as `seek` does (cues after it are up again and fire again on playback); a clip not playing moves the actor alone onto it. On program, seek/nudge only work while held, so the live wall never jumps by accident. Returns held, the video's position and length, and every scrubbable video.",
     params: args(
       {
         target,
@@ -248,6 +248,15 @@ export const AGENT_COMMANDS = {
       engine: oneOf(["native", "web"], "Which engine's device to pick when a name exists in both (default: native)."),
     }),
   },
+  speakers: {
+    live: true,
+    description:
+      "The surround speakers of this computer (Settings → Audio): left, right, back1, back2, each one channel of a sound card. A sound action, an announcement (speakers: [...]) or the lightning effect's thunder (param thunderSpeakers: \"back1,back2\") can be sent to any of them instead of the main output; left + right (or back1 + back2) together play it in stereo, one alone in mono. device: \"main\" = a channel of the main output (see audio_output; on the Mac the only choice, so pick a device with enough channels there), or on Windows any web output's deviceId or exact name (e.g. \"DVS Transmit 3-4\"). channel is 1-based. A speaker not set up (null) or whose card is missing plays on the main output. Without arguments it only reads (setup + the web outputs that can be chosen). set replaces the named speakers only. test plays a short noise burst on one speaker alone, out loud in the room.",
+    params: args({
+      set: obj("Speakers to change: {left: {device: \"main\", channel: 1}, back1: {device: \"DVS Transmit 3-4\", channel: 1}, back2: null}. null = not set up."),
+      test: oneOf(["left", "right", "back1", "back2"], "Play a short burst on this speaker alone."),
+    }),
+  },
   timer_overlay: {
     live: true,
     description: "Put a show timer's clock on the LIVE wall over everything, or take it off (timer = null).",
@@ -279,6 +288,18 @@ export const AGENT_COMMANDS = {
       mirror: bool("Mirror live TAKE / GO as named triggers."),
     }),
   },
+  wall_video: {
+    description:
+      "The wall video link (docs/WALL_VIDEO_LINK.md): streams what the LED wall shows (the operator window's PROGRAM monitor, composited with transitions, standby and blackout; or the PREVIEW monitor) to StageLight's virtual LED wall, as small JPEG frames over a WebSocket to ws://<StageLight host>:<port>/wall/in; StageLight delays its visualizer's lights by the measured latency so light cues land with their frame. Off at every app start; while off none of it runs. With source preview, a PREVIEW cue's StageLight messages are sent too, but only while StageLight says its output is not armed (so rehearsal never moves real lights). Only the fields given change; returns the status: state (off / starting / connecting / connected / error), StageLight's hello, waiting (why nothing is captured, e.g. the program monitor is not on screen), viewers (StageLight windows showing it; information only, nothing but the switch stops the stream), frames sent / dropped, fps, kbps, frame size, main-thread capture ms (mean, max), worker encode ms, StageLight's measured latency / jitter / light delay / clock offset, and preview light cues sent / held back.",
+    params: args({
+      on: bool("Switch the link on or off."),
+      source: oneOf(["program", "preview"], "Which operator monitor to stream: program (default: the same picture the LED wall shows, taken from the operator window's PROGRAM monitor, never from the output window) or preview (the rehearsal monitor)."),
+      width: int("Stream width in pixels (768, 1024 or 1536 suit the 4:1 wall; the height follows the wall's aspect). Default 1024."),
+      fps: int("Frames per second, 5-30. Default 25."),
+      quality: num("JPEG quality 0.3-0.95. Default 0.7."),
+      port: int("StageLight's wall video ingest port (its LIGHTS_WALL_PORT). Default 1455. The host is the StageLight link's (stagelight_link)."),
+    }),
+  },
   stagelight_send: {
     live: true,
     description:
@@ -306,11 +327,14 @@ export const AGENT_COMMANDS = {
   },
   ui: {
     description:
-      "Operator UI state: switch between Show and Build mode, select a component in the builder, isolate (solo) one component in the preview, or hide components from the preview while building.",
+      "Operator UI state: switch between Show, Build and Room mode (Room: a scene or an image drawn onto the LED wall in a photo of the room; preview only), choose what Room shows, select a component in the builder, solo components or sounds in the preview, mute sounds in the preview, or hide components from the preview while building.",
     params: args({
-      mode: oneOf(["show", "builder"], "App mode."),
+      mode: oneOf(["show", "builder", "room"], "App mode."),
+      roomView: { type: "string", description: "Room mode: the room photo to show (a project.roomViews id or name; one per lighting state). Room photos are show data: add them with upsert/patch on project/roomViews (schema topic room)." },
+      roomShow: { type: ["string", "null"], description: "Room mode: what is on the wall, an image or video asset (id or name), or null / \"preview\" for the preview monitor (the selected scene as it plays)." },
       component: { type: ["string", "null"], description: "Select this component of the selected scene (id or name; null = none)." },
-      solo: { type: ["string", "null"], description: "Show only this component in the preview (null = whole scene)." },
+      solo: { type: ["array", "string", "null"], items: { type: "string" }, description: "Solo these in the preview (replaces the list): components (id or name) are the only ones seen, with only their own sound; `sound:<assetId or name>` entries are the only cue sounds heard (with no component soloed the picture stays whole). [] or null = everything." },
+      muted: { type: ["array", "null"], items: { type: "string" }, description: "Cue sounds silenced in the preview while building (replaces the list): `sound:<assetId>`, an asset id or its name. The show is unchanged." },
       hidden: { type: "array", items: { type: "string" }, description: "Components hidden from the preview (replaces the list)." },
     }),
   },
@@ -419,7 +443,7 @@ export const AGENT_COMMANDS = {
   },
   markers: {
     description:
-      "Time markers on a scene's videos (a video layer, a video background, or a clip of a video actor): when the LIVE video reaches `at` seconds, the marker sends its message (Hog, StageLight, MIDI, OSC) or runs one of the scene's cues. Markers fire from PROGRAM only, once per pass, never while scrubbing. list = every video with its markers; upsert = add, or change by id (message replaced as a whole); remove = by id or name.",
+      "Time markers on a scene's videos (a video layer, a video background, or a clip of a video actor): when the LIVE video reaches `at` seconds, the marker sends its message (Hog, StageLight, MIDI, OSC) or runs one of the scene's cues. Markers fire from PROGRAM only, once per pass, never for a stretch scrubbed over (they fire again when playback passes them after a scrub back). list = every video with its markers; upsert = add, or change by id (message replaced as a whole); remove = by id or name.",
     params: args(
       {
         scene: sceneRef,
@@ -451,7 +475,7 @@ export const AGENT_COMMANDS = {
   },
   patch: {
     description:
-      "Edit anything in the show file with path operations, applied together as one change: set (replace value), merge (deep merge object), insert (into a list at the index in the path, or \"-\" to append), remove. Returns the previous values so a change can be undone.",
+      "Edit anything in the show file with path operations, applied together as one change: set (replace value), merge (deep merge object), insert (into a list at the index in the path, or \"-\" to append), remove. Returns the previous values so a change can be undone. Setting an asset's `rel` or `macRel` points it at that workspace file at once (its url and Mac twin are resolved again, as on load).",
     params: args(
       {
         ops: {
@@ -476,24 +500,36 @@ export const AGENT_COMMANDS = {
       name: str("Display name (default: the file name)."),
       type: oneOf(["image", "video", "model", "audio"], "Default: from the extension."),
       hasAlpha: bool("Video/image has transparency (never re-encoded)."),
+      alphaPacked: bool("The video is already alpha-packed: opaque H.264 at twice the picture's height, colour (premultiplied) in the top half, matte in the bottom half. Played as a transparent video."),
       optimise: bool("Re-encode a video that the wall would not play well (default true). false: only probe and report."),
     }),
   },
   asset_check: {
     readOnly: true,
     description:
-      "What a video file is (codec, profile/level, size, frame rate, keyframe gap, bit rate, audio, fast start) and whether the wall will play it well: problems with severity error (will not play or will not look right) or warn (plays, but costs or stalls), each saying whether optimising fixes it. One asset, or every video in the library. Also reports the encoder tools on this machine (ffmpeg, hardware encoder). Desktop app only.",
+      "What a video file is (codec, profile/level, size, frame rate, keyframe gap, bit rate, audio, fast start) and whether the wall will play it well: problems with severity error (will not play or will not look right) or warn (plays, but costs or stalls), each saying whether optimising fixes it. For a transparent video it also says whether it could be alpha-packed (`canPack`, `pack`: one H.264 file on the GPU path instead of HEVC-alpha / VP9 twins). One asset, or every video in the library. Also reports the encoder tools on this machine (ffmpeg, hardware encoder). Desktop app only.",
     params: args({ asset: str("Asset id or exact name; omit for all videos."), reprobe: bool("Read the file again even when a probe is stored.") }),
   },
   asset_optimise: {
     description:
-      "Re-encode a library video into the wall format: H.264 High, scaled to fit the wall canvas (never upscaled), a keyframe every half second, stereo AAC, fast start. The asset then points at the new file and the old library copy is deleted. Skipped when the file already plays well unless force. Refuses alpha video and media that ships with the app. Reports progress to the operator; takes seconds to minutes.",
-    params: args({ asset: str("Asset id or exact name."), force: bool("Re-encode even when no problem was found.") }, ["asset"]),
+      "Re-encode a library video into the wall format: H.264 High, scaled to fit the wall canvas (never upscaled), a keyframe every half second, stereo AAC, fast start. The asset then points at the new file and the old library copy is deleted. Skipped when the file already plays well unless force. Refuses media that ships with the app, and alpha video unless `pack`. With `pack`, a transparent video (VP9 / VP8 alpha WebM, ProRes 4444) becomes an alpha-packed one: the same wall rules, the frame twice the picture's height with the colour on top and the matte below, written beside the source as <name>.packed.mp4; the asset then plays that one file on Mac and Windows (alphaPacked: true, its HEVC-alpha twin dropped) and the transparent sources stay where they are, listed in `kept` for archiving. A file in the workspace is never deleted either: `rel` moves to the new file and the old one is listed in `kept`. Reports progress to the operator; takes seconds to minutes.",
+    params: args({ asset: str("Asset id or exact name."), force: bool("Re-encode even when no problem was found."), pack: bool("Alpha-pack a transparent video (colour over matte in one H.264 file).") }, ["asset"]),
   },
   asset_reveal: {
     description:
       "Open the operator's file manager (Finder, Explorer) with an asset's file selected, the same as the folder button on a media field in Scene Builder. Useful when the operator asks where a file lives. Desktop app only; media embedded in a release build has no file to show.",
     params: args({ asset: str("Asset id or exact name.") }, ["asset"]),
+  },
+  workspace_get: {
+    readOnly: true,
+    description:
+      "This computer's workspace: the folder that holds each show's media finals as <root>/<show>/<scene folder>/<images|audio|video|other>/<file>, plus the current show's folder and how many assets point into it (`rel`). The root is a per-computer setting (never in the show file); default ~/Documents/LiveStage. Desktop app only.",
+    params: args({}),
+  },
+  workspace_set: {
+    description:
+      "Set this computer's workspace root (an absolute folder path; omit `path` or pass null for the default ~/Documents/LiveStage). The folder is created if missing. Moves and copies nothing: media already in another workspace stays there, and assets resolve against the new root. Desktop app only.",
+    params: args({ path: { type: ["string", "null"], description: "Absolute folder path; null/omitted = the default." } }),
   },
   asset_remove: {
     destructive: true,
@@ -548,7 +584,7 @@ export const AGENT_COMMANDS = {
   cloud_push: {
     live: true,
     description:
-      "Send this show to the cloud as the next version (uploads only media the cloud does not have, by SHA-256). Refuses if the cloud has a version this computer has not taken in (pull first, or force), and while a scene is live unless allowLive. Desktop app only.",
+      "Send this show to the cloud as the next version (uploads only media the cloud does not have, by SHA-256; an asset whose workspace file exists here is sent from that file). Refuses if the cloud has a version this computer has not taken in (pull first, or force), and while a scene is live unless allowLive. Desktop app only.",
     params: args({
       force: bool("Push even though the cloud has a newer version this computer has not taken in (the other computer will merge it)."),
       allowLive: bool("Push even though a scene is live (the operator confirmed)."),

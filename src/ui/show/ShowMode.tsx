@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { speakerLabel } from "@/engine/speakers";
 import {
   ArrowRightLeft,
   ChevronRight,
@@ -33,7 +34,6 @@ import {
   X,
   Megaphone,
   Timer,
-  Zap,
   Cable,
   Check,
   MonitorPlay,
@@ -60,6 +60,7 @@ import { InfoTip, Splitter, Tip, usePaneWidths } from "../kit";
 import { ControlPanel, useControlTarget } from "./ControlPanel";
 import { MediaPanel, useSceneMediaDrop } from "./MediaPanel";
 import { MixerPanel } from "./MixerPanel";
+import { ErrorBoundary } from "../ErrorBoundary";
 
 export const TRANSITIONS: { value: TransitionKind; label: string }[] = [
   { value: "cut", label: "Cut" },
@@ -81,29 +82,90 @@ export function ShowMode() {
     <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[1fr_auto]">
       <div className="flex min-h-0 min-w-0">
         <aside className="min-h-0 shrink-0 border-r border-border" style={{ width: w[0] }}>
-          <SceneList />
+          <Panel name="scene list">
+            <SceneList />
+          </Panel>
         </aside>
         <Splitter value={w[0]} onChange={(v) => setW(0, v)} min={200} max={480} onReset={reset} />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-clip">
-          <Monitors />
-          <CueList />
+          <Panel name="monitors">
+            <Monitors />
+          </Panel>
+          <Panel name="cue list">
+            <CueList />
+          </Panel>
         </main>
         <Splitter value={w[1]} onChange={(v) => setW(1, v)} min={280} max={560} dir={-1} onReset={reset} />
         <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: w[1] }}>
-          <MixerPanel />
+          <Panel name="live audio">
+            <MixerPanel />
+          </Panel>
           <div className="min-h-0 flex-1">
-            <ControlPanel />
+            <Panel name="control panel">
+              <ControlPanel />
+            </Panel>
           </div>
         </aside>
       </div>
-      <StatusBar />
+      <Panel name="status bar">
+        <StatusBar />
+      </Panel>
     </div>
   );
 }
 
-export function useCaptureThumb() {
-  return (sceneId: string, d: string) => useProject.getState().setThumbnail(sceneId, d);
+const captureThumb = (sceneId: string, d: string) => useProject.getState().setThumbnail(sceneId, d);
+
+/** The same function every render, so the memoised preview canvas does not re-render for it. */
+/**
+ * One panel's render error stays in that panel: the rest of Show mode (and the keyboard GO / TAKE) keeps working,
+ * and the panel comes back by itself. The ErrorBoundary wrapper is display: contents, so the layout is unchanged.
+ */
+function Panel({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary
+      name={name}
+      retryAfter={2000}
+      fallback={(error, retry) => (
+        <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground">
+          <AlertTriangle className="size-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 truncate" title={error.message}>
+            The {name} hit an error; reloading it.
+          </span>
+          <button type="button" className="ml-auto shrink-0 rounded border border-border px-2 py-0.5 text-[11px] hover:bg-accent" onClick={retry}>
+            Reload
+          </button>
+        </div>
+      )}
+    >
+      {children}
+    </ErrorBoundary>
+  );
 }
+
+export function useCaptureThumb() {
+  return captureThumb;
+}
+
+/**
+ * A double-click on a live control lands twice: the second click on a cue's button (by then a "go back" button)
+ * would rewind and fire the cue again, and on TAKE it would re-take. One activation per control per 350 ms.
+ * Not used for GO: two quick GOs are two cues.
+ */
+const lastPress = new Map<string, number>();
+function firstPress(key: string, ms = 350): boolean {
+  const t = performance.now();
+  const prev = lastPress.get(key);
+  lastPress.set(key, t);
+  return prev === undefined || t - prev >= ms;
+}
+/** The control was pressed within the last `ms` (a double-click's dblclick comes right after its second press). */
+function pressedRecently(key: string, ms = 350): boolean {
+  const prev = lastPress.get(key);
+  return prev !== undefined && performance.now() - prev < ms;
+}
+/** Keeps a button's double-click from reaching its cue row (which moves the GO pointer). */
+const stopDoubleClick = (e: { stopPropagation(): void }) => e.stopPropagation();
 
 /** Re-render on a slow tick so clocks and fade levels stay current. */
 function useTick(ms: number) {
@@ -142,7 +204,11 @@ function SceneTitle({ scene }: { scene: { id: string; number: number; name: stri
 
 function Monitors() {
   const scene = useProject(selectedScene);
-  const program = useShow((s) => s.program);
+  // Only what the header shows: the whole program changes on every fader step.
+  const standby = useShow((s) => s.program.standby);
+  const liveScene = useShow((s) => s.program.runtime?.scene);
+  const transitioning = useShow((s) => !!s.program.transition);
+  const blackout = useShow((s) => !!s.program.blackout?.on);
   const output = useShow((s) => s.output);
   const operatorAudio = useOperatorIsAudioHost();
   const capture = useCaptureThumb();
@@ -164,13 +230,13 @@ function Monitors() {
         </div>
         <div className="min-w-0">
           <MonitorHeader kind="program" info="Exactly what the LED wall shows right now.">
-            {program.standby ? <span className="text-muted-foreground">Standby picture</span> : <SceneTitle scene={program.runtime?.scene} />}
-            {program.transition && (
+            {standby ? <span className="text-muted-foreground">Standby picture</span> : <SceneTitle scene={liveScene} />}
+            {transitioning && (
               <span className="flex items-center gap-1 text-[12px] text-armed">
                 <Loader2 className="size-3.5 animate-spin" /> Transition
               </span>
             )}
-            {program.blackout?.on && (
+            {blackout && (
               <span className="flex items-center gap-1 text-[12px] font-semibold text-armed">
                 <Moon className="size-3.5" /> Blackout
               </span>
@@ -271,12 +337,12 @@ function TakeBar() {
   const scene = useProject(selectedScene);
   const assets = useProject((s) => s.project.assets);
   const next = useShow((s) => s.nextTransition);
-  const program = useShow((s) => s.program);
+  const liveSceneId = useShow((s) => (s.program.standby ? null : (s.program.runtime?.scene.id ?? null)));
+  const busy = useShow((s) => !!s.program.transition);
   const spec: TransitionSpec | null = next ?? scene?.transition ?? null;
   const setSpec = (p: Partial<TransitionSpec>) => spec && useShow.getState().setNextTransition({ ...spec, ...p });
   const videos = assets.filter((a) => a.type === "video");
-  const isLiveAlready = !!scene && program.runtime?.scene.id === scene.id && !program.standby;
-  const busy = !!program.transition;
+  const isLiveAlready = !!scene && liveSceneId === scene.id;
 
   return (
     <div className="mt-3 flex items-center gap-2 rounded-lg border border-border bg-well p-2">
@@ -309,7 +375,7 @@ function TakeBar() {
       )}
       <Button
         disabled={!scene || busy}
-        onClick={() => scene && void takeScene(scene.id)}
+        onClick={() => scene && firstPress("take") && void takeScene(scene.id)}
         className="ml-auto h-11 min-w-[200px] gap-2 rounded-lg bg-live font-key text-[17px] font-bold tracking-wide text-white shadow-[0_0_20px_-6px] shadow-live hover:bg-live/85 disabled:bg-muted disabled:shadow-none"
         title="Ctrl/⌘ + Enter"
       >
@@ -373,7 +439,7 @@ function CueList() {
   const { target, rt } = useControlTarget();
   const [tab, setTab] = useState<"cues" | "media">("cues");
   const mediaDrop = useSceneMediaDrop();
-  useTick(400);
+  // No clock here: the rows change only with the runtime (fired cues, pointer), which re-renders this already.
   if (!rt) return null;
   const cues = rt.scene.cues;
   const live = target === "program";
@@ -410,19 +476,22 @@ function CueList() {
             {cues.map((c, i) => {
               const done = i < rt.cuePointer || !!rt.fired?.includes(c.id);
               const next = i === rt.cuePointer;
+              // Keyed by cue, not button: after the first click the same spot shows the "go back" button.
+              const fire = () => firstPress(`fire:${target}:${c.id}`) && cueControl.fire(target, i);
               return (
                 <li
                   key={c.id}
                   className={cn(
                     "group relative flex items-center gap-3 overflow-hidden rounded-lg border py-2 pl-3 pr-2 transition-colors",
                     next ? (live ? "border-live/60 bg-live/[0.08]" : "border-preview/60 bg-preview/[0.07]") : "border-border bg-card/60 hover:bg-card",
-                    done && "opacity-45",
                   )}
-                  onDoubleClick={() => cueControl.set(target, i)}
+                  // Not when the double-click was on this cue's fire button (it may have swapped under the pointer).
+                  onDoubleClick={() => !pressedRecently(`fire:${target}:${c.id}`) && cueControl.set(target, i)}
                 >
                   {next && <span className={cn("absolute inset-y-0 left-0 w-1", live ? "bg-live" : "bg-preview")} />}
-                  <span className={cn("w-7 shrink-0 text-right font-key text-[20px] font-bold leading-none tabular", next ? (live ? "text-live" : "text-preview") : "text-muted-foreground/70")}>{i + 1}</span>
-                  <div className="min-w-0 flex-1">
+                  <span className={cn("w-7 shrink-0 text-right font-key text-[20px] font-bold leading-none tabular", next ? (live ? "text-live" : "text-preview") : "text-muted-foreground/70", done && "opacity-45")}>{i + 1}</span>
+                  {/* A passed cue is dimmed but its button is not: it goes back to it. */}
+                  <div className={cn("min-w-0 flex-1", done && "opacity-45")}>
                     <div className="flex items-center gap-2">
                       {c.fire && c.fire.mode !== "go" && (
                         <Tip label="Fires by itself (GO fires it early)">
@@ -447,16 +516,22 @@ function CueList() {
                       <Crosshair />
                     </Button>
                   </Tip>
-                  {c.fire && c.fire.mode !== "go" ? (
+                  {done ? (
+                    <Tip label={live ? "Go back to this cue on the live wall: the scene returns to its moment and plays on from here" : "Go back to this cue in the preview: the scene returns to its moment and plays on from here"}>
+                      <Button size="icon-sm" variant="outline" className={cn("size-9 rounded-lg", live ? "border-live/60 text-live hover:text-live" : "text-foreground")} onClick={fire} onDoubleClick={stopDoubleClick}>
+                        <RotateCcw />
+                      </Button>
+                    </Tip>
+                  ) : c.fire && c.fire.mode !== "go" ? (
                     <Tip label={live ? "This cue fires by itself. Trigger it by hand now, on the live wall" : "This cue fires by itself. Trigger it by hand now, in the preview"}>
-                      <Button size="sm" variant="outline" className={cn("h-9 rounded-lg px-2.5 text-[12px] font-semibold", live ? "border-live/60 text-live hover:text-live" : "text-foreground")} onClick={() => cueControl.fire(target, i)}>
+                      <Button size="sm" variant="outline" className={cn("h-9 rounded-lg px-2.5 text-[12px] font-semibold", live ? "border-live/60 text-live hover:text-live" : "text-foreground")} onClick={fire} onDoubleClick={stopDoubleClick}>
                         Fire now
                       </Button>
                     </Tip>
                   ) : (
                     <Tip label={live ? "Fire this cue on the live wall" : "Fire this cue in the preview"}>
-                      <Button size="icon-sm" className={cn("size-9 rounded-lg", live ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70")} onClick={() => cueControl.fire(target, i)}>
-                        <Zap />
+                      <Button size="icon-sm" className={cn("size-9 rounded-lg", live ? "bg-live text-white hover:bg-live/85" : "bg-accent text-foreground hover:bg-accent/70")} onClick={fire} onDoubleClick={stopDoubleClick}>
+                        <Play className="fill-current" />
                       </Button>
                     </Tip>
                   )}
@@ -508,7 +583,8 @@ function StatusBar() {
   const seenAt = useShow((s) => s.outputSeenAt);
   const lost = useShow((s) => s.outputLostAt);
   const dirty = useProject((s) => s.dirty);
-  const saveError = useProject((s) => s.saveError);
+  const loadProblem = useProject((s) => s.loadProblem);
+  const saveError = useProject((s) => s.saveError) ?? loadProblem;
   const counters = useIo((s) => s.counters);
   const midi = useIo((s) => s.midiStatus);
   const osc = useIo((s) => s.oscStatus);
@@ -527,7 +603,7 @@ function StatusBar() {
       </Tip>
       <span className={cn("flex items-center gap-1.5", saveError && "text-destructive")}>
         {saveError ? <AlertTriangle className="size-3.5" /> : dirty ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-        {saveError ? "Save failed" : dirty ? "Saving" : "Saved"}
+        {loadProblem ? "Show file problem" : saveError ? "Save failed" : dirty ? "Saving" : "Saved"}
       </span>
       <Tip label="MIDI / OSC messages received and sent">
         <span className={cn("flex items-center gap-1.5", ioOn && "text-foreground/80")}>
@@ -587,7 +663,7 @@ export function describeAction(a: import("@/core/types").CueAction): string {
     case "clock":
       return `${a.op === "pause" ? "freeze" : a.op === "resume" ? "resume" : "freeze/resume"}${d}`;
     case "sound":
-      return `sound${d}`;
+      return `sound${a.speakers?.length ? ` on ${a.speakers.map(speakerLabel).join(" + ")}` : ""}${d}`;
     case "audio.fade":
       return `fade out ${a.which === "all" ? "all audio" : `${a.which.length} sound${a.which.length === 1 ? "" : "s"}`} (${a.fade}s)${d}`;
     case "send":
@@ -616,13 +692,20 @@ export function describeAction(a: import("@/core/types").CueAction): string {
 }
 
 /** The operator plays the live wall's video sound only while no output window is up (same rule as cue sounds). */
-function useOperatorIsAudioHost(): boolean {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const h = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(h);
-  }, []);
+function operatorIsAudioHost(): boolean {
   const s = useShow.getState();
   const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
   return !outputUp;
+}
+function useOperatorIsAudioHost(): boolean {
+  const [host, setHost] = useState(operatorIsAudioHost);
+  useEffect(() => {
+    // Checked once a second; the monitors re-render only when the answer changes.
+    const h = setInterval(() => {
+      const next = operatorIsAudioHost();
+      setHost((cur) => (cur === next ? cur : next));
+    }, 1000);
+    return () => clearInterval(h);
+  }, []);
+  return host;
 }

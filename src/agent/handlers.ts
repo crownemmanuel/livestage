@@ -9,7 +9,7 @@ import * as factories from "@/core/factories";
 import { defaultTransition, makeClip, makeCue, makeScene, makeShot } from "@/core/factories";
 import { normalizeGroups, sceneCodes, sceneRows } from "@/core/groups";
 import { uid } from "@/core/ids";
-import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, revealAsset, saveGeneratedAsset } from "@/core/platform";
+import { assetTypeFor, closeOutputWindow, isTauri, openOutputWindow, resolveAssetUrls, revealAsset, saveGeneratedAsset, workspaceGet, workspaceSet, workspaceShowDir } from "@/core/platform";
 import { levelDifferences, SOUND_LEVELS, type MergeChoice } from "@/core/showMerge";
 import { CloudAheadError, listCloudShows, loadCloudSettings } from "@/core/cloud";
 import type { ImportPreview, IncomingPackage } from "@/core/showPackage";
@@ -19,6 +19,7 @@ import * as runtime from "@/core/runtime";
 import type { Asset, AssetType, Cue, CueAction, CueActionType, IoMessage, MediaMarker, Project, Scene, SceneComponent, SceneRuntime, TransitionSpec } from "@/core/types";
 import { markerHosts, setHostMarkers, type MarkerHost } from "@/core/markers";
 import { normalizeStageLight, resolveWithCatalog, STAGELIGHT_OPS } from "@/core/stageLight";
+import { setWallVideo, useWallVideo } from "@/engine/wallVideoLink";
 import { pingStageLight, requestStageLightCatalog, stageLightAnswer, stageLightCatalog, stageLightReach, stageLightWire, useStageLight } from "@/engine/stageLight";
 import { contextScene, describeMessage, injectIncoming, sendMessage, soundWire, useIo, type IncomingMessage } from "@/engine/io";
 import { soundAppReach, useSoundApp } from "@/engine/soundApp";
@@ -26,11 +27,12 @@ import { normalizeSound } from "@/core/soundControl";
 import * as ops from "@/engine/operator";
 import * as transport from "@/engine/transport";
 import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
-import { describeProbe } from "@/core/mediaCheck";
+import { describeProbe, packAdvice } from "@/core/mediaCheck";
 import { audioRoleOf, liveAudioSources } from "@/engine/mixer";
 import { filePos, lifePlaying, soundLives } from "@/core/music";
 import { chaseMusicOn, musicAt, soundDuration } from "@/engine/musicChase";
 import { DANTE_WDM_STEPS, danteAsioOnly, getAudioRoute, nativeOutputs, setAudioRoute, webDefaultName, webOutputs, webOutputsHidden, type AudioRoute } from "@/engine/audioOutput";
+import { getSpeakerSetup, isSpeakerId, otherDevicesSupported, setSpeakerSetup, SPEAKER_IDS, testSpeaker, type SpeakerMap } from "@/engine/speakers";
 import { cancelPending, cueControl, pendingCount, playAnnouncement, previewAtStep, previewAtTime, runCue, runTimer, stopAnnouncement, takeScene } from "@/engine/operator";
 import { layoutScene } from "@/engine/timeline";
 import { requestSnap } from "@/render/snap";
@@ -254,6 +256,14 @@ function exampleMessage(t: IoMessage["type"]): IoMessage {
   return defaultMessage(t);
 }
 
+/** Where an asset plays from on this computer, for list_assets. */
+function playsFrom(x: Asset): "workspace" | "library" | "bundled" | "url" {
+  if (x.rel && x.path && !/[\\/]assets[\\/]/.test(x.path) && !x.url.startsWith("/media/")) return "workspace";
+  if (x.url.startsWith("/media/")) return "bundled";
+  if (x.path || x.file) return "library";
+  return "url";
+}
+
 function schemaDoc(topic: string) {
   const strip = <T extends object>(o: T) => {
     const c: any = structuredClone(o);
@@ -285,7 +295,7 @@ function schemaDoc(topic: string) {
     out.cueActions = {
       note: "Examples are built for the selected scene, so ids are real where it has such components. Every action has delay (seconds after the cue fires).",
       musicChase: "Show-wide project/chaseMusic (default true): firing a cue out of order (by hand, ahead of cues not run yet, or back) or taking a scene out of running order starts the music that would be playing there at the second it would have reached (0.5 s fade-in) and fades out what would not be. project/cueTimings (scene id → cue id or \"@end\" → seconds after TAKE) is learned from runs in sequence; music_at shows the result.",
-      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take); a scene with stopCarriedSounds: true fades such carried sounds out when it is taken. loop = start again from the top until faded out (a music bed). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); add delay: seconds to hold them before their fade starts; null leaves other audio alone. audio.fade = fade audio out at that moment without starting anything: {type: "audio.fade", which: ["sound:<assetId>"] | "all", fade: seconds} (where a music bed stops). fadeIn = seconds this sound fades in from silence. trimStart = seconds cut off the top of the file (it starts that far in; a loop goes back there; the Build timeline\'s left edge drags it, moving the start by as much so the rest stays in place). levels = [{at, level, fade}] level changes as it plays (at: seconds after it starts, level: share of its volume, 0.6 = 40% down, fade: seconds to glide), e.g. a duck under a live voice; they carry into the next scene with the sound. fadeOut = seconds it fades out over before its file ends (a fade that stops it earlier is an audio.fade or another sound\'s fadeOthers). A crossfade: {fadeIn: 2, fadeOthers: {which: [...], fade: 2, delay: 1}}.',
+      sound: 'sound: keepPlaying = carry on into the next scene (default: fades out on the next take); a scene with stopCarriedSounds: true fades such carried sounds out when it is taken. loop = start again from the top until faded out (a music bed). fadeOthers = fade other audio out as it starts: {which: "all", fade: 3} (every other cue sound and every video\'s sound on the wall) or {which: ["sound:<assetId>", "<componentId>"], fade: seconds} (mixer keys); add delay: seconds to hold them before their fade starts; null leaves other audio alone. audio.fade = fade audio out at that moment without starting anything: {type: "audio.fade", which: ["sound:<assetId>"] | "all", fade: seconds} (where a music bed stops). fadeIn = seconds this sound fades in from silence. trimStart = seconds cut off the top of the file (it starts that far in; a loop goes back there; the Build timeline\'s left edge drags it, moving the start by as much so the rest stays in place). levels = [{at, level, fade}] level changes as it plays (at: seconds after it starts, level: share of its volume, 0.6 = 40% down, fade: seconds to glide), e.g. a duck under a live voice; they carry into the next scene with the sound. fadeOut = seconds it fades out over before its file ends (a fade that stops it earlier is an audio.fade or another sound\'s fadeOthers). A crossfade: {fadeIn: 2, fadeOthers: {which: [...], fade: 2, delay: 1}}. speakers = surround speakers it plays on instead of the main output: any of ["left", "right", "back1", "back2"] (absent = main output; left + right together = stereo, one alone = mono; which sound card each one is: the speakers command).',
       fire: 'Cue.fire: {mode: "go"} (default) | {mode: "time", at: seconds after TAKE} | {mode: "follow", after: seconds after the previous cue} | {mode: "video"} (fired by a media marker whose cueId is this cue). A GO cue may carry hold: planned seconds after the cue before, for the Build timeline only.',
       types: (Object.keys(ACTION_INFO) as MenuType[]).map((t) => {
         const preset = SEND_PRESETS[t];
@@ -300,6 +310,20 @@ function schemaDoc(topic: string) {
   }
   if (topic === "transitions" || topic === "all") {
     out.transitions = { kinds: TRANSITIONS, default: defaultTransition(), note: "video needs videoAssetId; wipe uses direction + softness; travel uses travelDistance." };
+  }
+  if (topic === "assets" || topic === "all") {
+    out.assets = {
+      fields: "id, name, type (image|video|model|audio), url, file (portable key under the app data folder), rel, macRel, hasAlpha, alphaPacked, macUrl/macFile (HEVC-alpha twin), builtIn, audioRole",
+      alphaPacked:
+        "A transparent video as one ordinary H.264 file at twice the picture's height: the colour (premultiplied by the matte) in the top half, the matte (alpha as greyscale) in the bottom half. The shader puts them together, so it plays on the GPU path on Mac and Windows from one file (no HEVC-alpha / VP9 twins, no per-frame CPU copy). Make one with asset_optimise { pack: true } from a VP9 / VP8 alpha WebM or ProRes 4444 source; import one made elsewhere with asset_import { alphaPacked: true }. hasAlpha stays true.",
+      rel: "Place in the workspace: <scene folder>/<images|audio|video|other>/<file>, relative to <workspace root>/<show>/ (workspace_get shows both). When that file exists on this computer it is played instead of file/url; otherwise the asset plays as before. Set with patch project/assets/<id>/rel. Nothing moves files into the workspace yet.",
+    };
+  }
+  if (topic === "room" || topic === "all") {
+    out.room = {
+      roomViews: "project.roomViews: [{id, name, assetId, wall}], photos of the room the wall stands in (one per lighting state), for Room mode (ui {mode: \"room\", roomView, roomShow}). assetId = an image asset (the photo); wall = the LED wall's corners on the photo, [[x,y] top-left, top-right, bottom-right, bottom-left] as fractions of the photo's width and height. Add one with patch {op: \"insert\", path: \"project/roomViews/-\", value: {...}} (create the list with set if it is missing). Show data: a show's room photos travel with its package and sync.",
+      example: { id: "room_house", name: "House lights", assetId: "asset_…", wall: [[0.3, 0.33], [0.7, 0.33], [0.7, 0.53], [0.3, 0.53]] },
+    };
   }
   if (topic === "io" || topic === "all") {
     out.io = {
@@ -367,8 +391,9 @@ async function importAsset(a: Args): Promise<Asset> {
   const name: string = a.name || a.fileName || (a.url ? String(a.url).split(/[\\/]/).pop() : "") || "asset";
   const type = (a.type as AssetType | undefined) ?? assetTypeFor(a.fileName || a.url || name);
   if (!type) throw new Error(`Cannot tell the media type of "${name}"; pass type`);
-  const hasAlpha = typeof a.hasAlpha === "boolean" ? a.hasAlpha : /\.(png|webp|webm)$|alpha/i.test(a.fileName || a.url || name);
-  if (a.url) return { id: uid("asset"), name, type, url: String(a.url), hasAlpha };
+  const alphaPacked = a.alphaPacked === true && type === "video" ? true : undefined;
+  const hasAlpha = alphaPacked || (typeof a.hasAlpha === "boolean" ? a.hasAlpha : /\.(png|webp|webm)$|alpha/i.test(a.fileName || a.url || name));
+  if (a.url) return { id: uid("asset"), name, type, url: String(a.url), hasAlpha, alphaPacked };
   if (typeof a.data !== "string") throw new Error("Give a file or a url");
   const bin = atob(a.data);
   const bytes = new Uint8Array(bin.length);
@@ -376,10 +401,10 @@ async function importAsset(a: Args): Promise<Asset> {
   const ext = String(a.fileName ?? name).split(".").pop()?.toLowerCase() ?? "";
   if (isTauri) {
     const saved = await saveGeneratedAsset(bytes, a.fileName || name, type);
-    return { ...saved, name, hasAlpha };
+    return { ...saved, name, hasAlpha, alphaPacked };
   }
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: MIME[ext] ?? "application/octet-stream" }));
-  return { id: uid("asset"), name, type, url, ephemeral: true, hasAlpha };
+  return { id: uid("asset"), name, type, url, ephemeral: true, hasAlpha, alphaPacked };
 }
 
 // ---------------------------------------------------------------- show packages and cloud versions
@@ -477,7 +502,7 @@ export const handlers: Record<AgentCommand, Handler> = {
     const outputUp = !!s.outputStatus && Date.now() - s.outputSeenAt < 3500;
     const io = useIo.getState();
     return {
-      app: { specVersion: AGENT_SPEC_VERSION, dev: import.meta.env.DEV, desktop: isTauri, mode: p.mode, show: p.project.name, scenes: p.project.scenes.length, unsaved: p.dirty, saveError: p.saveError },
+      app: { specVersion: AGENT_SPEC_VERSION, dev: import.meta.env.DEV, desktop: isTauri, mode: p.mode, show: p.project.name, scenes: p.project.scenes.length, unsaved: p.dirty, saveError: p.saveError, ...(p.loadProblem ? { loadProblem: p.loadProblem } : {}) },
       selected: { scene: brief(p.project.scenes.find((x) => x.id === p.selectedSceneId)), componentId: p.selectedComponentId },
       live: live ? runtimeSummary("program", live) : null,
       wall: {
@@ -488,7 +513,7 @@ export const handlers: Record<AgentCommand, Handler> = {
         announcement: prog.announce && !prog.announce.stoppedAt ? prog.announce.id : null,
         mixerTrims: prog.mix ?? {},
       },
-      preview: s.preview ? { scene: brief(s.preview.scene), cuePointer: s.preview.cuePointer, sceneTime: round(sceneNow(s.preview) / 1000), solo: s.solo, hidden: s.hidden } : null,
+      preview: s.preview ? { scene: brief(s.preview.scene), cuePointer: s.preview.cuePointer, sceneTime: round(sceneNow(s.preview) / 1000), solo: s.solo, muted: s.muted, hidden: s.hidden } : null,
       output: { open: outputUp, status: outputUp ? s.outputStatus : null, lost: !!s.outputLostAt },
       timers: (p.project.timers ?? []).map((t) => {
         const r = prog.timers?.[t.id];
@@ -574,6 +599,9 @@ export const handlers: Record<AgentCommand, Handler> = {
           type: x.type,
           url: x.url.startsWith("blob:") || x.url.length > 200 ? undefined : x.url,
           hasAlpha: x.hasAlpha || undefined,
+          alphaPacked: x.alphaPacked || undefined,
+          rel: x.rel,
+          playsFrom: playsFrom(x),
           audioRole: x.type === "audio" ? (audioRoleOf(x) ?? undefined) : undefined,
           builtIn: x.builtIn || undefined,
           ephemeral: x.ephemeral || undefined,
@@ -587,8 +615,9 @@ export const handlers: Record<AgentCommand, Handler> = {
   async asset_check(a) {
     const all = P().project.assets.filter((x) => x.type === "video");
     const list = a.asset ? [byIdOrName(all, a.asset, "video asset")] : all;
-    if (!isTauri) return { tools: null, assets: list.map((x) => ({ id: x.id, name: x.name, note: "browser session: files cannot be probed" })) };
+    if (!isTauri) return { tools: null, assets: list.map((x) => ({ id: x.id, name: x.name, alphaPacked: x.alphaPacked || undefined, note: "browser session: files cannot be probed" })) };
     const tools = await mediaTools();
+    const wall = { canvasWidth: P().project.output.canvasWidth, canvasHeight: P().project.output.canvasHeight };
     const assets = [];
     for (const x of list) {
       let asset = x;
@@ -600,30 +629,69 @@ export const handlers: Record<AgentCommand, Handler> = {
         });
       }
       const problems = assetProblems(asset);
+      const fileHere = !!asset.path && !asset.builtIn && !asset.url.startsWith("/media/");
+      const pack = packAdvice(asset.probe, wall, { hasAlpha: asset.hasAlpha, alphaPacked: asset.alphaPacked });
       assets.push({
         id: asset.id,
         name: asset.name,
         file: asset.file,
+        alphaPacked: asset.alphaPacked || undefined,
         format: asset.probe ? describeProbe(asset.probe) : undefined,
         probe: asset.probe ?? (asset.path ? undefined : "not a file on this machine (ships with the app or a URL): not probed"),
         optimised: asset.optimised ? { from: asset.optimised.from, at: new Date(asset.optimised.at).toISOString(), was: describeProbe(asset.optimised.source) || undefined } : undefined,
         problems,
         playsWell: !problems.some((p) => p.severity === "error"),
-        canOptimise: !!asset.path && !asset.builtIn && !asset.url.startsWith("/media/") && !asset.hasAlpha,
+        canOptimise: fileHere && (!asset.hasAlpha || !!asset.alphaPacked),
+        // A transparent video that is not alpha-packed yet: can the optimiser pack it, and why it would help.
+        canPack: pack ? pack.can && fileHere : undefined,
+        pack: pack && !asset.alphaPacked ? (pack.can && !fileHere ? `${pack.note} This one ships with the app or is not a file in the library, so it cannot be packed here.` : pack.note) : undefined,
       });
     }
-    return { wall: { canvasWidth: P().project.output.canvasWidth, canvasHeight: P().project.output.canvasHeight }, tools, assets };
+    return { wall, tools, assets };
   },
 
   async asset_optimise(a) {
     const x = byIdOrName(P().project.assets, a.asset, "asset");
-    const r = await optimiseAsset(x.id, { force: !!a.force });
-    return { id: r.asset.id, name: r.asset.name, file: r.asset.file, skipped: r.skipped, format: describeProbe(r.asset.probe), problems: r.problems, optimised: r.asset.optimised ? { from: r.asset.optimised.from, was: describeProbe(r.asset.optimised.source) || undefined } : undefined };
+    const r = await optimiseAsset(x.id, { force: !!a.force, pack: !!a.pack });
+    return {
+      id: r.asset.id,
+      name: r.asset.name,
+      file: r.asset.file,
+      rel: r.asset.rel,
+      alphaPacked: r.asset.alphaPacked || undefined,
+      skipped: r.skipped,
+      format: describeProbe(r.asset.probe),
+      problems: r.problems,
+      optimised: r.asset.optimised ? { from: r.asset.optimised.from, was: describeProbe(r.asset.optimised.source) || undefined } : undefined,
+      // Files the asset no longer plays, left where they were (workspace finals and the transparent sources of a pack): archive them.
+      kept: r.kept,
+    };
   },
 
   async asset_reveal(a) {
     const x = byIdOrName(P().project.assets, a.asset, "asset");
     return { id: x.id, name: x.name, revealed: await revealAsset(x) };
+  },
+
+  async workspace_get() {
+    const w = await workspaceGet();
+    if (!w) return { available: false, note: "The workspace folder is a desktop app setting." };
+    const p = P().project;
+    const withRel = p.assets.filter((x) => x.rel);
+    // Only name the show's folder once media lives in it: reading must not create folders.
+    const showDir = withRel.length ? await workspaceShowDir(p.lineage?.showId, p.name) : undefined;
+    return { ...w, show: p.name, showDir, assetsWithRel: withRel.length, assetsPlayingFromWorkspace: withRel.filter((x) => playsFrom(x) === "workspace").length };
+  },
+
+  async workspace_set(a) {
+    const w = await workspaceSet(a.path ?? null);
+    // Point the assets at the new root's files (the show itself is untouched).
+    const p = P().project;
+    const assets = await resolveAssetUrls(p.assets, { id: p.lineage?.showId, name: p.name });
+    P().update((d) => {
+      d.assets = assets;
+    });
+    return w;
   },
 
   get(a) {
@@ -735,8 +803,8 @@ export const handlers: Record<AgentCommand, Handler> = {
   seek(a) {
     rtFor(a.target);
     if (a.target === "program" && S().program.runtime?.clock.pausedAt == null) throw new Error('The live wall scrubs only while held: freeze {target: "program", op: "pause"} (or transport hold) first');
-    S().dispatch(a.target, { type: "seek", t: Math.max(0, Number(a.seconds)) * 1000 });
-    return { sceneTime: round(sceneNow(rtFor(a.target)!) / 1000) };
+    ops.seekRun(a.target, Math.max(0, Number(a.seconds)));
+    return runtimeSummary(a.target, rtFor(a.target)!);
   },
 
   freeze(a) {
@@ -893,6 +961,52 @@ export const handlers: Record<AgentCommand, Handler> = {
     return { route: getAudioRoute(), ...all, webDefault: await webDefaultName(), webNamesHidden: await webOutputsHidden(), ...(dante ? { danteNotListed: DANTE_WDM_STEPS } : {}) };
   },
 
+  async speakers(a) {
+    const web = otherDevicesSupported ? await webOutputs() : [];
+    if (a.set !== undefined) {
+      if (!isObj(a.set)) throw new Error("set must be an object: {left: {device, channel}, back1: null, …}");
+      const next: SpeakerMap = { ...getSpeakerSetup() };
+      for (const [id, v] of Object.entries(a.set as Args)) {
+        if (!isSpeakerId(id)) throw new Error(`No speaker "${id}". Speakers: ${SPEAKER_IDS.join(", ")}`);
+        if (v === null) {
+          delete next[id];
+          continue;
+        }
+        if (!isObj(v)) throw new Error(`${id} must be {device, channel} or null`);
+        const ch = Number((v as Args).channel ?? 1);
+        if (!Number.isInteger(ch) || ch < 1) throw new Error(`${id}.channel must be a whole number from 1`);
+        const dev = String((v as Args).device ?? "main");
+        if (dev.toLowerCase() === "main" || dev === "") next[id] = { device: "", channel: ch - 1 };
+        else {
+          if (!otherDevicesSupported) throw new Error("This computer can only play to the main output: use device \"main\" and one of its channels.");
+          const w = web.find((o) => o.deviceId === dev || o.label.toLowerCase() === dev.toLowerCase());
+          if (!w) throw new Error(`No audio output "${dev}". Outputs: ${web.map((o) => o.label).join(", ") || "none listed"}`);
+          next[id] = { device: w.deviceId, deviceName: w.label, channel: ch - 1 };
+        }
+      }
+      setSpeakerSetup(next);
+    }
+    if (a.test !== undefined) {
+      if (!isSpeakerId(a.test)) throw new Error(`No speaker "${a.test}". Speakers: ${SPEAKER_IDS.join(", ")}`);
+      await testSpeaker(a.test);
+    }
+    const setup = getSpeakerSetup();
+    return {
+      speakers: Object.fromEntries(
+        SPEAKER_IDS.map((id) => {
+          const s = setup[id];
+          if (!s) return [id, null];
+          const name = s.device ? (web.find((o) => o.deviceId === s.device)?.label ?? s.deviceName ?? s.device) : "main";
+          return [id, { device: name, ...(s.device ? { deviceId: s.device, connected: !otherDevicesSupported ? false : web.some((o) => o.deviceId === s.device) } : {}), channel: s.channel + 1 }];
+        }),
+      ),
+      mainOutput: getAudioRoute()?.name ?? "computer default",
+      otherDevices: otherDevicesSupported,
+      outputs: web.map((o) => ({ deviceId: o.deviceId, name: o.label, dante: o.dante })),
+      ...(a.test ? { tested: a.test } : {}),
+    };
+  },
+
   timer_overlay(a) {
     if (a.timer === null) {
       S().setTimerOverlay(null);
@@ -933,6 +1047,28 @@ export const handlers: Record<AgentCommand, Handler> = {
 
   stagelight_status() {
     return stageLightStatus();
+  },
+
+  async wall_video(a) {
+    const patch: Parameters<typeof setWallVideo>[0] = {};
+    for (const k of ["width", "fps", "quality", "port"] as const) {
+      if (a[k] === undefined) continue;
+      if (typeof a[k] !== "number" || !Number.isFinite(a[k])) throw new Error(`${k} must be a number`);
+      patch[k] = a[k];
+    }
+    if (a.on !== undefined) {
+      if (typeof a.on !== "boolean") throw new Error("on must be true or false");
+      patch.on = a.on;
+    }
+    if (a.source !== undefined) {
+      if (a.source !== "program" && a.source !== "preview") throw new Error('source must be "program" or "preview"');
+      patch.source = a.source;
+    }
+    await setWallVideo(patch);
+    // Give a fresh link a moment to reach StageLight.
+    if (a.on === true) await new Promise((r) => setTimeout(r, 800));
+    const { on, settings, status } = useWallVideo.getState();
+    return { on, settings, ...status, note: on && settings.source === "preview" && !P().project.io?.stagelight?.enabled ? "The StageLight link is off, so preview light cues cannot be sent (stagelight_link {enabled: true}); the video still streams." : undefined };
   },
 
   async stagelight_catalog(a) {
@@ -1024,8 +1160,30 @@ export const handlers: Record<AgentCommand, Handler> = {
     return { open: up, status: up ? s.outputStatus : null, note: a.op === "open" ? "The output reports in within a second or two; ask status again to confirm." : undefined };
   },
 
-  ui(a) {
+  async ui(a) {
     if (a.mode) P().setMode(a.mode);
+    let room: Record<string, unknown> | undefined;
+    if (a.roomView !== undefined || a.roomShow !== undefined || P().mode === "room") {
+      // Room's store loads on demand, like the mode itself.
+      const { useRoom } = await import("@/ui/room/roomStore");
+      const views = P().project.roomViews ?? [];
+      if (a.roomView !== undefined) {
+        const v = views.find((x) => x.id === a.roomView || x.name === a.roomView);
+        if (!v) throw new Error(`No room photo ${a.roomView}. Room photos: ${views.map((x) => `${x.id} (${x.name})`).join(", ") || "none (add to project/roomViews)"}`);
+        useRoom.setState({ viewId: v.id });
+      }
+      if (a.roomShow !== undefined) {
+        if (a.roomShow === null || a.roomShow === "preview") useRoom.setState({ assetId: null });
+        else {
+          const asset = P().project.assets.find((x) => x.id === a.roomShow || x.name === a.roomShow);
+          if (!asset || (asset.type !== "image" && asset.type !== "video")) throw new Error(`No image or video asset ${a.roomShow}`);
+          useRoom.setState({ assetId: asset.id });
+        }
+      }
+      const r = useRoom.getState();
+      const v = views.find((x) => x.id === r.viewId) ?? views[0];
+      room = { view: v ? { id: v.id, name: v.name } : null, onWall: r.assetId ?? "preview", views: views.map((x) => ({ id: x.id, name: x.name })) };
+    }
     const sel = P().project.scenes.find((s) => s.id === P().selectedSceneId);
     const need = (s: Scene | undefined) => {
       if (!s) throw new Error("No scene selected: select_scene first");
@@ -1033,10 +1191,29 @@ export const handlers: Record<AgentCommand, Handler> = {
     };
     if (a.component !== undefined) P().selectComponent(a.component === null ? null : componentOf(need(sel), a.component).id);
     const pv = S().preview?.scene;
-    if (a.solo !== undefined) S().setSolo(a.solo === null ? null : componentOf(need(pv), a.solo).id);
+    if (a.muted !== undefined)
+      S().setMuted(
+        ((a.muted ?? []) as string[]).map((ref) => {
+          const name = ref.replace(/^sound:/, "");
+          const asset = S().assets.find((x) => x.id === name || x.name === name);
+          if (!asset) throw new Error(`No asset ${name}`);
+          return `sound:${asset.id}`;
+        }),
+      );
+    if (a.solo !== undefined) {
+      const refs = (a.solo === null ? [] : Array.isArray(a.solo) ? a.solo : [a.solo]) as string[];
+      S().setSolo(
+        refs.map((ref) => {
+          if (!ref.startsWith("sound:")) return componentOf(need(pv), ref).id;
+          const asset = S().assets.find((x) => x.id === ref.slice(6) || x.name === ref.slice(6));
+          if (!asset) throw new Error(`No asset ${ref.slice(6)}`);
+          return `sound:${asset.id}`;
+        }),
+      );
+    }
     if (a.hidden !== undefined) useShow.setState({ hidden: (a.hidden as string[]).map((r) => componentOf(need(pv), r).id) });
     const s = S();
-    return { mode: P().mode, selectedScene: brief(sel), selectedComponentId: P().selectedComponentId, solo: s.solo, hidden: s.hidden };
+    return { mode: P().mode, selectedScene: brief(sel), selectedComponentId: P().selectedComponentId, solo: s.solo, muted: s.muted, hidden: s.hidden, ...(room ? { room } : {}) };
   },
 
   update_live_scene() {
@@ -1281,13 +1458,26 @@ export const handlers: Record<AgentCommand, Handler> = {
     return { removed: summarize(removed, 2) };
   },
 
-  patch(a) {
+  async patch(a) {
     if (!Array.isArray(a.ops) || !a.ops.length) throw new Error("ops must be a non-empty list");
     let before: { path: string; before: unknown }[] = [];
     P().update((d) => {
       before = applyOps(d, a.ops as PatchOp[]);
     });
-    return { applied: a.ops.length, before: summarize(before, 8) };
+    // A new workspace place (rel / macRel) only takes effect once the asset's urls are resolved again (on load
+    // otherwise): until then it keeps playing its old library copy, without its Mac (HEVC-alpha) twin.
+    const relChanged = (a.ops as PatchOp[]).some((o) => /^project\/assets\/[^/]+\/(rel|macRel)$/.test(String(o.path)));
+    let resolved: { id: string; playsFrom: string }[] | undefined;
+    if (relChanged) {
+      const p = P().project;
+      const assets = await resolveAssetUrls(p.assets, { id: p.lineage?.showId, name: p.name });
+      P().update((d) => {
+        d.assets = assets;
+      });
+      const ids = new Set((a.ops as PatchOp[]).map((o) => String(o.path).split("/")[2]));
+      resolved = assets.filter((x) => ids.has(x.id) || ids.has(x.name)).map((x) => ({ id: x.id, playsFrom: playsFrom(x) }));
+    }
+    return { applied: a.ops.length, before: summarize(before, 8), resolved };
   },
 
   async asset_import(a) {
@@ -1299,6 +1489,7 @@ export const handlers: Record<AgentCommand, Handler> = {
       name: final.name,
       type: final.type,
       hasAlpha: final.hasAlpha,
+      alphaPacked: final.alphaPacked || undefined,
       ephemeral: final.ephemeral || undefined,
       format: final.probe ? describeProbe(final.probe) : undefined,
       optimised: r?.optimised ? { from: final.optimised?.from, was: describeProbe(final.optimised?.source) || undefined } : undefined,

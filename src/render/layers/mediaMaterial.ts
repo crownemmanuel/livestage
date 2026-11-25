@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { BlendMode, ChromaKey, Crop, LayerMask } from "@/core/types";
+import { isPackedTexture } from "./video";
 
 const vert = /* glsl */ `
 varying vec2 vUv;
@@ -24,12 +25,20 @@ uniform float feather;
 uniform float blendMode; // 0 normal, 1 add, 2 screen, 3 multiply
 uniform vec3 grade;
 uniform float decodeSrgb;
+uniform float packed;     // 1: alpha-packed video, colour (premultiplied) in the top half, matte in the bottom half
+uniform float packedEdge; // half a texel of the packed frame's height: keeps each half's samples out of the other
 varying vec2 vUv;
 
 // three.js uploads video frames without sRGB decoding (linear internal format),
 // so custom shaders must decode them or colours come out washed out.
 vec3 srgbToLinear(vec3 c) {
   return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, step(c, vec3(0.04045)));
+}
+
+// The matte of an alpha-packed video went through a lossy codec: pull the last 2 % at each end to
+// fully clear / fully solid, so compression noise never leaves a veil over the plate or holes in the subject.
+float packedMatte(float m) {
+  return clamp((m - 0.02) / 0.96, 0.0, 1.0);
 }
 
 vec2 rgbToUv(vec3 c) {
@@ -40,7 +49,15 @@ void main() {
   vec2 uv = vUv;
   if (flipX > 0.5) uv.x = 1.0 - uv.x;
   vec2 tuv = vec2(mix(crop.x, 1.0 - crop.y, uv.x), mix(crop.w, 1.0 - crop.z, uv.y));
-  vec4 c = texture2D(map, tuv);
+  vec4 c;
+  if (packed > 0.5) {
+    float hy = clamp(tuv.y * 0.5, packedEdge, 0.5 - packedEdge);
+    float matte = packedMatte(texture2D(map, vec2(tuv.x, hy)).g);
+    // The colour was multiplied by the matte before encoding (so the codec and the filter blend edges
+    // towards nothing, not towards whatever lay under the clear pixels): divide it back out.
+    vec3 rgb = texture2D(map, vec2(tuv.x, hy + 0.5)).rgb;
+    c = vec4(matte > 0.0 ? min(rgb / matte, vec3(1.0)) : vec3(0.0), matte);
+  } else c = texture2D(map, tuv);
   if (decodeSrgb > 0.5) c.rgb = srgbToLinear(c.rgb);
   float a = c.a;
   if (chroma > 0.5) {
@@ -93,6 +110,8 @@ export function makeMediaMaterial() {
       blendMode: { value: 0 },
       grade: { value: new THREE.Color(1, 1, 1) },
       decodeSrgb: { value: 0 },
+      packed: { value: 0 },
+      packedEdge: { value: 0 },
     },
   });
 }
@@ -101,6 +120,17 @@ export function makeMediaMaterial() {
 export function setMap(mat: THREE.ShaderMaterial, tex: THREE.Texture | null) {
   mat.uniforms.map.value = tex;
   mat.uniforms.decodeSrgb.value = tex && (tex as THREE.VideoTexture).isVideoTexture && tex.colorSpace === THREE.SRGBColorSpace ? 1 : 0;
+  setPacked(mat, tex);
+}
+
+/** Tell a shader with `packed` / `packedEdge` uniforms whether its map is an alpha-packed video (see Asset.alphaPacked). */
+export function setPacked(mat: THREE.ShaderMaterial, tex: THREE.Texture | null) {
+  const on = isPackedTexture(tex);
+  mat.uniforms.packed.value = on ? 1 : 0;
+  if (on) {
+    const h = (tex!.image as { videoHeight?: number } | null)?.videoHeight ?? 0;
+    mat.uniforms.packedEdge.value = h > 0 ? 0.5 / h : 0.0005;
+  }
 }
 
 export function applyBlend(mat: THREE.ShaderMaterial, mode: BlendMode) {

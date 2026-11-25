@@ -50,6 +50,7 @@ const toEvent = (s: NominalSound, at: number): SoundEvent => {
   if (trim > 0) ev.trimStart = trim;
   if (s.fadeOut) ev.fadeOut = s.fadeOut;
   if (s.levels?.length) ev.levels = s.levels;
+  if (s.speakers?.length) ev.speakers = s.speakers;
   return ev;
 };
 

@@ -28,6 +28,8 @@ export interface OutputStatus {
   sounds?: string[];
   /** Of `sounds`, the ones silent while the live scene is held. */
   heldSounds?: string[];
+  /** Sound files decoded and ready in this window (the warm list: live scene, next scenes, announcements). */
+  soundsReady?: number;
   /** Time spent handing video frames to WebGL in the last second, and how many frames. */
   upload?: { ms: number; count: number };
   /** <video> elements in the window, and how many hold a loaded file (a decoder each). */
@@ -49,6 +51,8 @@ export type BusMessage =
   | { type: "project"; assets: Asset[]; output: OutputSettings }
   | { type: "program"; program: WireProgram; scenes: Record<string, Scene> }
   | { type: "poses"; program: ActorPoses; from: ActorPoses | null }
+  /** Sound assets the audio host keeps decoded, ready to start on the beat (engine/audio.ts warmSounds). */
+  | { type: "warm"; sounds: string[] }
   | { type: "output-status"; status: OutputStatus }
   | { type: "output-bye" };
 

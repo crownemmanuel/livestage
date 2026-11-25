@@ -12,7 +12,7 @@
 // (src-tauri/src/cloud.rs), which streams media between disk and network.
 
 import { uid } from "./ids";
-import { isTauri } from "./platform";
+import { isTauri, workspaceFiles } from "./platform";
 import { outgoingShow, showUnits, stampOutgoing } from "./showMerge";
 import { machineName, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION, portableAssets, type IncomingPackage, type PackageFile, type PackageManifest } from "./showPackage";
 import type { Project } from "./types";
@@ -235,7 +235,8 @@ export async function pushShow(s: CloudSettings, project: Project, opts: { force
   const showId = stamped.lineage!.showId;
   const root = (await appDataDir()).replace(/[\\/]+$/, "");
   const sep = root.includes("\\") ? "\\" : "/";
-  const { assets, files, unpackable } = portableAssets(stamped.assets, root, (...p) => p.join(sep));
+  const ws = await workspaceFiles(stamped.assets, { id: showId, name: stamped.name });
+  const { assets, files, unpackable } = portableAssets(stamped.assets, root, (...p) => p.join(sep), ws);
   const unique = [...new Map(files.map((f) => [f.key, f])).values()];
 
   const hashes = await invoke<(PackageFile | null)[]>("cloud_hash_sources", { files: unique });

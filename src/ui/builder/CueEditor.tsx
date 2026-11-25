@@ -33,6 +33,7 @@ import { audioRoleOf } from "@/engine/mixer";
 import { FireField } from "./FireField";
 import { flowNext } from "@/core/groups";
 import { formatClock } from "@/core/timers";
+import { SpeakerChooser } from "../show/SpeakerPicker";
 
 /**
  * "hog", "stagelight" and "soundApp" are Send actions preset to a Hog 4, StageLight or StageMics
@@ -479,10 +480,13 @@ export function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueActi
             onChange={(v) => {
               inheritSoundRole(a.assetId, v);
               onChange({ ...a, assetId: v });
+              carrySoundSwap(scene.id, a.assetId, v);
             }}
             placeholder="Choose a sound…" title="Choose a sound" className="h-6 w-[220px] text-[11px]" />
           {lbl("vol")}
           <NumberInput className="h-6 w-14" value={a.volume} min={0} max={1} step={0.05} onChange={(v) => onChange({ ...a, volume: v })} />
+          {lbl("on")}
+          <SpeakerChooser value={a.speakers} onChange={(v) => onChange({ ...a, speakers: v })} />
           <label className="flex items-center gap-1 text-[10.5px] text-muted-foreground" title="Off: the sound fades out when another scene is taken. On: it carries on into the next scene.">
             <Switch size="sm" checked={!!a.keepPlaying} onCheckedChange={(v) => onChange({ ...a, keepPlaying: v })} />
             keep playing into next scene
@@ -713,6 +717,30 @@ export function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueActi
  * A sound swapped into a cue takes the role of the one it replaces (music, voice, ambience, effect: its track on the
  * timeline and its group in the mixer), unless the new file already has a role of its own.
  */
+/**
+ * A sound swapped for another in a cue: once nothing in the scene plays the old one any more, what named it
+ * (fade-outs, a sound's fade-others, the preview's solo) names the new one, so the new sound fades where the
+ * old one did instead of the old one turning into a ghost "carried in from an earlier scene".
+ */
+function carrySoundSwap(sceneId: string, from: string | null, to: string | null) {
+  if (!from || !to || from === to) return;
+  const scene = useProject.getState().project.scenes.find((s) => s.id === sceneId);
+  if (!scene || scene.cues.some((c) => c.actions.some((x) => x.type === "sound" && x.assetId === from))) return;
+  const old = `sound:${from}`;
+  const swap = <T extends "all" | string[]>(w: T): T => (Array.isArray(w) ? (w.map((k) => (k === old ? `sound:${to}` : k)) as T) : w);
+  const names = (w: "all" | string[]) => Array.isArray(w) && w.includes(old);
+  if (scene.cues.some((c) => c.actions.some((x) => (x.type === "audio.fade" && names(x.which)) || (x.type === "sound" && x.fadeOthers && names(x.fadeOthers.which)))))
+    useProject.getState().updateScene(sceneId, (s) => {
+      for (const c of s.cues)
+        for (const x of c.actions) {
+          if (x.type === "audio.fade") x.which = swap(x.which);
+          else if (x.type === "sound" && x.fadeOthers) x.fadeOthers = { ...x.fadeOthers, which: swap(x.fadeOthers.which) };
+        }
+    });
+  const { solo, setSolo } = useShow.getState();
+  if (solo.includes(old)) setSolo(solo.map((k) => (k === old ? `sound:${to}` : k)));
+}
+
 function inheritSoundRole(from: string | null, to: string | null) {
   if (!from || !to || from === to) return;
   const st = useProject.getState();

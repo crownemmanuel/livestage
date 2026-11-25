@@ -8,7 +8,7 @@ import { terrainHeight } from "@/core/terrain";
 import type { EnvironmentPreset, ProceduralComponent } from "@/core/types";
 import { cached } from "../cache";
 import { NOISE_GLSL } from "../glsl";
-import { useStage } from "../frame";
+import { parsedColor, useStage } from "../frame";
 import { useLayerPresence } from "../layers/presence";
 
 interface Props {
@@ -141,7 +141,7 @@ function Birds({ comp }: { comp: ProceduralComponent }) {
     mesh.visible = vis > 0.01;
     mat.uniforms.uTime.value = t;
     mat.uniforms.uOpacity.value = vis;
-    mat.uniforms.uColor.value.set(comp.color ?? "#1b1a1d").lerp(frame.horizon, comp.haze ?? 0.35);
+    mat.uniforms.uColor.value.copy(parsedColor(comp.color ?? "#1b1a1d")).lerp(frame.horizon, comp.haze ?? 0.35);
     const [cx, cz] = comp.center;
     // Position of bird b at time tt: a pure function of time, so every window agrees.
     const at = (b: (typeof birds)[number], tt: number, out: THREE.Vector3) => {
@@ -358,8 +358,10 @@ function Campfire({ comp, preset }: Props) {
 
 // ---------------------------------------------------------------- town lights
 
+const townBuf = new THREE.Vector2();
+
 function TownLights({ comp, preset }: Props) {
-  const { frame } = useStage();
+  const { frame, canvasH } = useStage();
   const presence = useLayerPresence(comp.id, comp.fade);
   const { points, mat } = useMemo(() => {
     const r = rng(comp.count * 7 + 1);
@@ -375,8 +377,11 @@ function TownLights({ comp, preset }: Props) {
     const points = new THREE.Points(g, mat);
     return { points, mat };
   }, [comp.count, comp.center, comp.radius, preset]);
-  useFrame(() => {
+  useFrame(({ gl }) => {
     mat.opacity = presence() * smoothstep(0.45, 0.85, frame.tod) * (0.85 + 0.15 * Math.sin(frame.ts * 3));
+    // 3 px on a wall-sized buffer, the same share of the picture in every canvas. three multiplies
+    // the size by the pixel ratio, so divide it out to size in drawing-buffer px.
+    mat.size = (3 * gl.getDrawingBufferSize(townBuf).y) / Math.max(1, canvasH) / gl.getPixelRatio();
   });
   return <primitive object={points} />;
 }

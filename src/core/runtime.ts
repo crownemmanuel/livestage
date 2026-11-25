@@ -94,9 +94,24 @@ const staticFraming = (f: Framing | undefined) => {
 export const initialNames = (): NamesRuntime => ({ shown: 0, shownAt: LONG_AGO, burn: tween(0, 0, 0, 0), bloom: tween(0, 0, 0, 0) });
 
 /** A copy of the scene for the runtime: thumbnails are never needed to render and bloat every broadcast. */
+/**
+ * One copy per scene object, and a copy is its own copy. A runtime's scene is never changed in place (an
+ * edit makes a new scene object), so runs of the same definition can share it, and they must: a seek
+ * rebuilds the run from its scene on every scrub step, and a fresh copy each time re-rendered the whole
+ * tree under the canvas, redrew its text textures and sent the scene to the output again (the stall that
+ * sending the scene "once per run" was meant to end, once per seek).
+ */
+const runtimeCopies = new WeakMap<Scene, Scene>();
+const isRuntimeCopy = new WeakSet<Scene>();
 function runtimeScene(scene: Scene): Scene {
-  const s = structuredClone(scene);
-  s.thumbnail = null;
+  if (isRuntimeCopy.has(scene)) return scene;
+  let s = runtimeCopies.get(scene);
+  if (!s) {
+    s = structuredClone(scene);
+    s.thumbnail = null;
+    runtimeCopies.set(scene, s);
+    isRuntimeCopy.add(s);
+  }
   return s;
 }
 
@@ -330,10 +345,17 @@ export function mediaElapsed(rt: SceneRuntime, id: string, startAt: number, t: n
  * already playing when it began: a video (re)started or a clip begun after it plays at full level.
  */
 export function videoAudioFade(rt: SceneRuntime, componentId: string, t: number): number {
-  const segs = rt.clipActors[componentId]?.segments;
-  const playingSince = segs ? (segs.filter((s) => s.at <= t).at(-1)?.at ?? -Infinity) : (rt.layers[componentId]?.startAt ?? -Infinity);
+  // Called for every video on every frame: nothing to do (and nothing allocated) without sound events.
+  const sounds = rt.sounds;
+  if (!sounds?.length) return 1;
+  const segs = rt.clipActors?.[componentId]?.segments;
+  let playingSince = -Infinity;
+  if (segs) {
+    // The start of the clip on screen: the last segment begun by `t`, in list order.
+    for (const s of segs) if (s.at <= t) playingSince = s.at;
+  } else playingSince = rt.layers[componentId]?.startAt ?? -Infinity;
   let k = 1;
-  for (const ev of rt.sounds ?? []) {
+  for (const ev of sounds) {
     const f = ev.fadeOthers;
     if (!f || ev.at > t || (f.which !== "all" && !f.which.includes(componentId))) continue;
     const from = ev.at + (f.delay ?? 0) * 1000;
@@ -506,12 +528,12 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
         const fired = [...new Set([...(rt.fired ?? []).filter((id) => id !== cue.id && !later.has(id)), ...earlier]), cue.id];
         // Time cues already behind the clock become plain GO cues (as after a scrub) instead of all firing at once.
         const reached = Math.max(rt.clock.reached ?? 0, t);
-        return { rt: { ...rt, fired, cuePointer: cmd.index + 1, clock: { ...rt.clock, reached } }, poses };
+        return { rt: { ...rt, fired, firedAt: { ...rt.firedAt, [cue.id]: t }, cuePointer: cmd.index + 1, clock: { ...rt.clock, reached } }, poses };
       }
       const fired = rt.fired?.includes(cue.id) ? rt.fired : [...(rt.fired ?? []), cue.id];
       let ptr = Math.max(rt.cuePointer, cmd.index + 1);
       while (ptr < scene.cues.length && fired.includes(scene.cues[ptr].id)) ptr++;
-      return { rt: { ...rt, fired, cuePointer: ptr }, poses };
+      return { rt: { ...rt, fired, firedAt: { ...rt.firedAt, [cue.id]: t }, cuePointer: ptr }, poses };
     }
     case "seek": {
       const target = Math.max(0, cmd.t);
@@ -606,6 +628,7 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
       if (cmd.fadeOut && cmd.fadeOut > 0) ev.fadeOut = cmd.fadeOut;
       if (cmd.levels?.length) ev.levels = cmd.levels;
       if (cmd.fadeOthers && (cmd.fadeOthers.which === "all" || cmd.fadeOthers.which.length)) ev.fadeOthers = cmd.fadeOthers;
+      if (cmd.speakers?.length) ev.speakers = cmd.speakers;
       return { rt: { ...rt, sounds: trimSounds([...(rt.sounds ?? []), ev]) }, poses };
     }
     case "sounds":

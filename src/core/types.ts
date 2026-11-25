@@ -28,14 +28,30 @@ export interface Asset {
    * arrived in a show package or sync; when that file is there, it is played instead of `url`.
    */
   file?: string;
+  /**
+   * Place in this computer's workspace: `<scene folder>/<images|audio|video|other>/<file>`, relative to the
+   * show's folder `<workspace>/<show>/` (see docs/SHOW_PACKAGE.md). When that file is there it is played
+   * instead of `file` / `url`; shows without it keep working as before.
+   */
+  rel?: string;
   /** Portable key of the HEVC-alpha twin (see `macUrl`). */
   macFile?: string;
+  /** Workspace place of the HEVC-alpha twin (see `rel`). */
+  macRel?: string;
   /** Blob URLs disappear when the app reloads. */
   ephemeral?: boolean;
   /** Video/image declares an alpha channel (WebM VP9 alpha, HEVC alpha, PNG). */
   hasAlpha?: boolean;
   /** HEVC-with-alpha twin of a transparent WebM, played on WebKit (macOS), which cannot decode VP9 alpha. */
   macUrl?: string;
+  /**
+   * Alpha-packed video: one ordinary opaque H.264 file at twice the picture's height, the colour
+   * (premultiplied by the matte) in the top half and the matte (alpha as greyscale) in the bottom half.
+   * The shader puts the two together, so a cut-out plays on the GPU path on every platform from one
+   * file: no HEVC-alpha / VP9-alpha twins and no per-frame CPU copy on WebKit (docs/ARCHITECTURE.md,
+   * "Media formats"). `hasAlpha` stays true (the picture is transparent); `macUrl` is not used.
+   */
+  alphaPacked?: boolean;
   /** Ships with the app (served from /media); never deleted from disk. */
   builtIn?: boolean;
   /** What the file is (codec, size, frame rate, keyframes), read when it was imported or optimised. */
@@ -555,6 +571,8 @@ export interface TransitionSpec {
   direction?: "left" | "right" | "up" | "down";
   /** For wipe/burn: edge softness (0..1). */
   softness?: number;
+  /** For video: seconds it fades into the scene at its end (0 = cut). Unset: the last tenth of it. */
+  fadeOut?: number;
 }
 
 export type CueAction =
@@ -597,6 +615,8 @@ export type CueAction =
       levels?: SoundLevel[];
       /** When this sound starts, fade other audio out (null/absent = leave it). See AudioFadeOut. */
       fadeOthers?: AudioFadeOut | null;
+      /** Surround speakers it plays on (absent/empty = the main output). See SpeakerId. */
+      speakers?: SpeakerId[];
     }
   /**
    * Fade audio out at this moment: cue sounds and video sound named by mixer key (`sound:<assetId>`,
@@ -750,6 +770,22 @@ export interface Project {
   cueTimings?: Record<string, Record<string, number>>;
   /** Where this copy of the show came from, so a show package or sync can tell local edits from incoming ones. */
   lineage?: ShowLineage;
+  /**
+   * Photos of the room the wall stands in (one per lighting state: house lights, warm, night...), for the Room
+   * view: a scene or an image is drawn onto the photo's LED wall to see how it looks to the audience. Show data,
+   * so a show's own photos (with its sets) travel with it and never with the app.
+   */
+  roomViews?: RoomView[];
+}
+
+/** A photo of the room with the LED wall's corners marked on it (ui/room/RoomMode.tsx). */
+export interface RoomView {
+  id: string;
+  name: string;
+  /** An image asset: the photo. */
+  assetId: string;
+  /** The wall's corners on the photo, top-left, top-right, bottom-right, bottom-left, as fractions of its width and height. */
+  wall: [number, number][];
 }
 
 /**
@@ -792,6 +828,8 @@ export interface Announcement {
   pinned?: boolean;
   /** Shown in red (for "technical difficulties" and other emergencies). */
   urgent?: boolean;
+  /** Surround speakers it plays on (absent/empty = the main output). */
+  speakers?: SpeakerId[];
 }
 
 /** A timer's live state: counting toward `endsAt` (wall ms), or paused with `remaining` seconds. */
@@ -960,6 +998,13 @@ export interface RouteRuntime {
   progress: Tween;
 }
 
+/**
+ * A surround speaker. Which sound card and channel each one is lives on this computer (Settings → Audio,
+ * engine/speakers.ts), not in the show file. A sound sent to both of a pair (left + right, back1 + back2)
+ * plays its left channel on the first and its right channel on the second; sent to one alone it plays in mono.
+ */
+export type SpeakerId = "left" | "right" | "back1" | "back2";
+
 export interface SoundEvent {
   id: string;
   /** Empty for a fade alone (the audio.fade action): nothing starts, `fadeOthers` fades what it names. */
@@ -980,6 +1025,8 @@ export interface SoundEvent {
   levels?: SoundLevel[];
   /** Other audio this sound fades out as it starts (see the sound action). */
   fadeOthers?: AudioFadeOut;
+  /** Surround speakers it plays on (see the sound action); absent = the main output. */
+  speakers?: SpeakerId[];
   /**
    * Started part-way through by the music chase or carried in from an earlier scene: it starts where the clock
    * says it is (however late) with a short fade-in, instead of from the top. `at` is when its file began, so it
@@ -1062,6 +1109,13 @@ export interface SceneRuntime {
   cuePointer: number;
   /** Cues already fired in this run of the scene (GO, scene time, follow or a video marker). */
   fired?: string[];
+  /**
+   * Scene time (ms) each cue last fired in this run, kept when a seek un-fires it: a scrub back and
+   * forth replays the run as it happened (see seekScene in engine/operator.ts).
+   */
+  firedAt?: Record<string, number>;
+  /** Wall ms of the last seek that rebuilt this run's state (seekScene): audio hosts resync their sounds to it. */
+  rebuiltAt?: number;
   /** Video actors: the clips scheduled so far (scene time ms). */
   clipActors: Record<string, ClipActorRuntime>;
   /** One-shot effect events (shake, projectile): scene time they fired. */
@@ -1135,7 +1189,7 @@ export interface ProgramState {
   /** A show timer put on screen over everything (the label travels with it for the output window). */
   timerOverlay?: { timerId: string; label: string } | null;
   /** The announcement playing (or last played); `stoppedAt` set when it was stopped early. */
-  announce?: { key: string; id: string; assetId: string; volume: number; at: number; stoppedAt?: number };
+  announce?: { key: string; id: string; assetId: string; volume: number; at: number; stoppedAt?: number; speakers?: SpeakerId[] };
   /**
    * Live mixer: the operator's volume trim per audio source, multiplied into the designed volume
    * (1 = as designed, 0 = silent). Keys: `sound:<assetId>` for cue sounds, a component id for the sound

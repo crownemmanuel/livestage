@@ -122,6 +122,8 @@ export function SceneCanvas(p: SceneCanvasProps) {
         el.addEventListener("webglcontextrestored", rebuild);
       }}
       style={{ position: "absolute", inset: 0 }}
+      // Lets the wall video link (engine/wallVideo.ts, loaded only while it is on) find the preview canvas.
+      data-stage-role={p.role}
     >
       <StageContext.Provider value={ctx}>
         {limited && <FrameLimiter fps={p.targetFps} />}
@@ -131,6 +133,48 @@ export function SceneCanvas(p: SceneCanvasProps) {
       </StageContext.Provider>
     </Canvas>
   );
+}
+
+/**
+ * Keep one failing layer from freezing the wall. Every canvas in a window is drawn from one shared
+ * animation-frame loop, one canvas after the other, with nothing catching errors: a per-frame callback
+ * that throws (a layer meeting data it did not expect) ends that frame there, every frame, so the canvases
+ * after it are never drawn again (the incoming scene behind a failing outgoing one, say), and no error
+ * boundary sees it. Each per-frame callback of this canvas is therefore run guarded: one that throws is
+ * reported once, skipped for a second and tried again, while everything else keeps drawing.
+ */
+type FrameRef = { current: (...args: unknown[]) => void };
+function makeFrameGuard(role: SlotRole) {
+  const guarded = new WeakSet<object>();
+  let seen: unknown = null;
+  let seenLength = -1;
+  const guard = (ref: FrameRef) => {
+    if (guarded.has(ref)) return;
+    guarded.add(ref);
+    let inner = ref.current;
+    let failedAt = 0;
+    let reported = 0;
+    const run = (...args: unknown[]) => {
+      if (failedAt && performance.now() - failedAt < 1000) return;
+      try {
+        inner(...args);
+        failedAt = 0;
+      } catch (e) {
+        failedAt = performance.now();
+        if (reported++ < 3) recordError(`Render error in the ${role === "live" ? "program" : role} picture (that layer is skipped and retried): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+    // The same ref object stays registered (the loop and its unsubscribe hold it); React keeps assigning
+    // the latest callback to `current`, which now lands in `inner`.
+    Object.defineProperty(ref, "current", { configurable: true, get: () => run, set: (fn: FrameRef["current"]) => (inner = fn) });
+  };
+  /** Guard every callback registered so far. Called at the top of each frame; does nothing when the list is unchanged. */
+  return (subscribers: { ref: unknown }[]) => {
+    if (subscribers === seen && subscribers.length === seenLength) return;
+    seen = subscribers;
+    seenLength = subscribers.length;
+    for (const sub of subscribers) guard(sub.ref as FrameRef);
+  };
 }
 
 /** Frame-rate cap aligned to the display's refresh (a timer-driven cap judders). */
@@ -154,8 +198,12 @@ function FrameLimiter({ fps }: { fps: number }) {
 }
 
 function FrameDriver() {
-  const { getRt, frame } = useStage();
+  const { getRt, frame, role } = useStage();
+  const get = useThree((s) => s.get);
+  const guardFrames = useMemo(() => makeFrameGuard(role), [role]);
   useFrame(() => {
+    // First callback of the frame (lowest priority number): put the guard on any callback added since.
+    guardFrames(get().internal.subscribers);
     const rt = getRt();
     if (rt) updateFrame(frame, rt, now());
   }, -10);
@@ -255,9 +303,33 @@ function Compositor({ back, front, fx, children, background, onCapture, look }: 
   const bg = useMemo(() => new THREE.Color(background), [background]);
   const captured = useRef(false);
   const mountedAt = useMemo(() => performance.now(), []);
+  /** Shader warm-ups done: one on the first frame, one a little later for layers that mount late. */
+  const warmed = useRef(0);
 
   useFrame(({ gl, scene, camera }) => {
     gl.autoClear = false;
+    // three compiles a material's shader the first time the object is drawn, and skips hidden objects: rain,
+    // a lightning bolt, fog, a title or a cut-out that waits for its cue compiled on the frame the cue fired,
+    // a dropped frame (or several) exactly on the beat, again in every run because each TAKE is a new GL
+    // context. So everything in the scene is compiled once up front, hidden or not, while the TAKE's
+    // transition covers it, against the same targets it will be drawn to.
+    if (warmed.current === 0 || (warmed.current === 1 && performance.now() - mountedAt > 1500)) {
+      warmed.current++;
+      try {
+        if (look?.enabled) {
+          gl.getDrawingBufferSize(bufSize);
+          post.setSize(bufSize.x, bufSize.y);
+          gl.setRenderTarget(post.scene);
+        } else gl.setRenderTarget(null);
+        gl.compile(scenes.back, ortho);
+        gl.compile(scene, camera);
+        gl.setRenderTarget(null);
+        gl.compile(scenes.front, ortho);
+        gl.compile(scenes.fx, ortho);
+      } catch (e) {
+        console.warn("shader warm-up failed", e);
+      }
+    }
     // The flat layers share the framing with the 3D camera.
     if (ortho.zoom !== frame.frameZoom || ortho.position.x !== (frame.frameX - 0.5) * canvasW || ortho.position.y !== (0.5 - frame.frameY) * canvasH) {
       ortho.zoom = frame.frameZoom;

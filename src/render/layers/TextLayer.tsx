@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { clamp, easeOut, now } from "@/core/clock";
@@ -146,8 +146,9 @@ export function TextLayer({ comp }: { comp: TextComponent }) {
     mat.needsUpdate = true;
   }, [mat, comp.blend]);
 
-  // Re-render the canvases when the text or its style changes.
-  useEffect(() => {
+  // Re-render the canvases when the text or its style changes. A layout effect, so the
+  // first frame already uploads the real title, never the 16x16 placeholder.
+  useLayoutEffect(() => {
     const texW = overlayTexWidth(canvasW);
     const res = (texW / canvasW) * canvasH;
     const ctx = tex.ctx;

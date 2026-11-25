@@ -89,6 +89,7 @@ const SETTINGS: { key: string; label: string; value: (p: Project) => unknown }[]
   { key: "effectPresets", label: "Effect presets", value: (p) => p.effectPresets ?? [] },
   { key: SOUND_LEVELS, label: "Sound levels (live mixer)", value: (p) => p.mix ?? {} },
   { key: "chaseMusic", label: "Chase music on jumps", value: (p) => p.chaseMusic !== false },
+  { key: "roomViews", label: "Room photos (Room view)", value: (p) => p.roomViews ?? [] },
 ];
 
 export interface UnitInfo {
@@ -301,6 +302,7 @@ export function applyMerge(local: Project, incoming: Project, plan: MergePlan, i
   if (takes("effectPresets")) out.effectPresets = inc.effectPresets;
   if (takes(SOUND_LEVELS)) out.mix = inc.mix;
   if (takes("chaseMusic")) out.chaseMusic = inc.chaseMusic;
+  if (takes("roomViews")) out.roomViews = inc.roomViews;
   // Learned cue timings are not a choice: the ones learned here win, the other machine's fill in the rest.
   if (inc.cueTimings) {
     const mine = out.cueTimings ?? {};

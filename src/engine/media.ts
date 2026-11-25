@@ -7,7 +7,7 @@
 
 import { create } from "zustand";
 import { isTauri } from "@/core/platform";
-import { checkMedia, needsOptimise, type MediaProbe, type MediaProblem, type WallFormat } from "@/core/mediaCheck";
+import { checkMedia, needsOptimise, PACKED_MAX_HEIGHT, type MediaProbe, type MediaProblem, type WallFormat } from "@/core/mediaCheck";
 import type { Asset } from "@/core/types";
 import { useProject } from "@/store/project";
 
@@ -70,7 +70,7 @@ export function wallFormat(): WallFormat {
 /** Problems of an asset against the current wall (recomputed from its probe so a wall-size change counts). */
 export function assetProblems(a: Asset, wall: WallFormat = wallFormat()): MediaProblem[] {
   if (a.type !== "video") return [];
-  if (a.probe) return checkMedia(a.probe, wall, { hasAlpha: a.hasAlpha });
+  if (a.probe) return checkMedia(a.probe, wall, { hasAlpha: a.hasAlpha, alphaPacked: a.alphaPacked });
   return a.problems ?? [];
 }
 
@@ -98,7 +98,7 @@ export async function checkAsset(a: Asset): Promise<Asset> {
   if (!isTauri || !path) return a;
   try {
     const probe = await probeFile(path);
-    return { ...a, probe, problems: checkMedia(probe, wallFormat(), { hasAlpha: a.hasAlpha }) };
+    return { ...a, probe, problems: checkMedia(probe, wallFormat(), { hasAlpha: a.hasAlpha, alphaPacked: a.alphaPacked }) };
   } catch (e) {
     return { ...a, problems: [{ severity: "warn", code: "unreadable", message: `Could not read the file: ${String(e)}`, fixable: false }] };
   }
@@ -115,17 +115,26 @@ function patchAsset(id: string, fn: (a: Asset) => Asset) {
  * Re-encode a library video into the wall format and point the asset at the new file. The old
  * library copy is deleted (the operator's original stays where it was imported from). Throws with
  * a plain-language reason when it cannot (no ffmpeg, alpha video, media that ships with the app).
+ *
+ * `pack`: turn a video with an alpha channel into an alpha-packed one (`Asset.alphaPacked`): one
+ * opaque H.264 file, colour over matte, written beside the source as `<name>.packed.mp4`. The asset
+ * then plays that file on every platform and drops its HEVC-alpha twin. The transparent sources are
+ * left where they are (they are the masters a later re-pack needs) and returned as `kept`.
  */
-export async function optimiseAsset(assetId: string, opts: { force?: boolean } = {}): Promise<{ asset: Asset; problems: MediaProblem[]; skipped?: string }> {
+export async function optimiseAsset(assetId: string, opts: { force?: boolean; pack?: boolean } = {}): Promise<{ asset: Asset; problems: MediaProblem[]; skipped?: string; kept?: string[] }> {
   const a = useProject.getState().project.assets.find((x) => x.id === assetId);
   if (!a) throw new Error("No such asset");
   if (a.type !== "video") throw new Error(`${a.name} is not a video`);
-  if (a.hasAlpha || a.probe?.video?.alpha) throw new Error(`${a.name} has an alpha channel; re-encoding would flatten it. Prepare transparent video as HEVC alpha (Mac) or VP9 WebM.`);
+  const pack = !!opts.pack && !a.alphaPacked;
+  if (opts.pack && a.alphaPacked && !opts.force) return { asset: a, problems: assetProblems(a), skipped: "already alpha-packed" };
+  const transparent = !a.alphaPacked && (a.hasAlpha || !!a.probe?.video?.alpha);
+  if (pack && !transparent) throw new Error(`${a.name} has no alpha channel to pack.`);
+  if (!pack && transparent) throw new Error(`${a.name} has an alpha channel; re-encoding would flatten it. Pack it instead (pack: true: one H.264 file, colour over matte), or prepare transparent video as HEVC alpha (Mac) and VP9 WebM.`);
   const src = libraryPath(a);
-  if (!src) throw new Error(a.builtIn || a.url.startsWith("/media/") ? `${a.name} ships with the app: re-encode it in media-src and rebuild.` : `${a.name} is not a file in the show library (browser session import?).`);
+  if (!src) throw new Error(a.builtIn || a.url.startsWith("/media/") ? `${a.name} ships with the app: re-encode it and rebuild.` : `${a.name} is not a file in the show library (browser session import?).`);
   const checked = a.probe ? a : await checkAsset(a);
   const problems = assetProblems(checked);
-  if (!opts.force && !problems.some((p) => p.fixable)) {
+  if (!pack && !opts.force && !problems.some((p) => p.fixable)) {
     patchAsset(assetId, () => checked);
     return { asset: checked, problems, skipped: "already in a format the wall plays well" };
   }
@@ -137,36 +146,63 @@ export async function optimiseAsset(assetId: string, opts: { force?: boolean } =
     const fs = await import("@tauri-apps/plugin-fs");
     const dir = await dirname(src);
     const srcBase = src.split(/[\\/]/).pop() ?? "video.mp4";
-    const stem = srcBase.replace(/\.[^.]+$/, "").replace(/\.wall$/, "");
-    const dest = await join(dir, `${stem}.wall.mp4`);
+    const tag = pack || a.alphaPacked ? "packed" : "wall";
+    const stem = srcBase.replace(/\.[^.]+$/, "").replace(/\.(wall|packed)(-[0-9a-z]{8})?$/i, "");
+    // A new name whenever the plain one is taken or is the source itself (re-optimising a .wall file):
+    // ffmpeg cannot write over its input, and WebKit caches a video by its URL, so a rewritten file
+    // needs a new name anyway.
+    let dest = await join(dir, `${stem}.${tag}.mp4`);
+    const taken = async (p: string) => p === src || (await fs.exists(p).catch(() => true));
+    if (await taken(dest)) dest = await join(dir, `${stem}.${tag}-${Date.now().toString(36)}.mp4`);
     const wall = wallFormat();
     const v = checked.probe?.video;
+    // An alpha-packed file is re-encoded at its own size: fitted to the wall it would lose half its height.
+    const box = a.alphaPacked && v?.width && v.height ? { w: v.width, h: v.height } : { w: wall.canvasWidth, h: pack ? Math.min(wall.canvasHeight, PACKED_MAX_HEIGHT) : wall.canvasHeight };
     const probe = await invoke<MediaProbe>("media_optimise", {
       job: assetId,
       src,
       dest,
-      maxWidth: wall.canvasWidth,
-      maxHeight: wall.canvasHeight,
+      maxWidth: box.w,
+      maxHeight: box.h,
       sourceFps: v?.fps || null,
       sourceDurationS: checked.probe?.duration_s || null,
+      packAlpha: pack,
     });
-    const newProblems = checkMedia(probe, wall, { hasAlpha: false });
+    const alphaPacked = pack || !!a.alphaPacked;
+    const newProblems = checkMedia(probe, wall, { hasAlpha: false, alphaPacked });
     const destBase = dest.split(/[\\/]/).pop() ?? srcBase;
-    const fileKey = a.file ? a.file.split("/").slice(0, -1).concat(destBase).join("/") : `assets/${destBase}`;
+    // The source was the asset's workspace file (`rel`) when their names match: the new file sits beside it.
+    const fromWorkspace = !!a.rel && a.rel.split("/").pop() === srcBase;
+    const beside = (key: string) => key.split("/").slice(0, -1).concat(destBase).join("/");
     const next: Asset = {
       ...checked,
       path: dest,
       url: convertFileSrc(dest),
-      file: fileKey,
+      file: fromWorkspace ? undefined : a.file ? beside(a.file) : `assets/${destBase}`,
       probe,
       problems: newProblems,
       optimised: { from: srcBase, at: Date.now(), source: checked.probe },
     };
+    let kept: string[] | undefined;
+    if (pack) {
+      // One file for every platform from here on: the twin and its keys go, the files themselves stay.
+      next.alphaPacked = true;
+      next.hasAlpha = true;
+      next.rel = fromWorkspace ? beside(a.rel!) : undefined;
+      kept = [fromWorkspace ? a.rel! : src, a.macRel ?? a.macFile].filter((x): x is string => !!x);
+      delete next.macUrl;
+      delete next.macFile;
+      delete next.macRel;
+    } else if (fromWorkspace) {
+      // A workspace final is never deleted by the app: the asset moves to the new file and the old one waits to be archived.
+      next.rel = beside(a.rel!);
+      kept = [a.rel!];
+    }
     patchAsset(assetId, () => next);
-    if (dest !== src) await fs.remove(src).catch(() => {});
+    if (!pack && !fromWorkspace && dest !== src) await fs.remove(src).catch(() => {});
     setJob(assetId, { state: "done", fraction: 1 });
     clearJobLater(assetId, 4000);
-    return { asset: next, problems: newProblems };
+    return { asset: next, problems: newProblems, kept };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     patchAsset(assetId, (x) => ({ ...checked, ...x, probe: checked.probe, problems: assetProblems(checked) }));

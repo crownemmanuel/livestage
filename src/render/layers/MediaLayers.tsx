@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { clamp, easeOut, lerp, smootherstep } from "@/core/clock";
@@ -9,7 +9,7 @@ import { mixLevel } from "@/store/show";
 import type { BackgroundComponent, EntranceKind, ImageLayerComponent, KenBurns, MediaSettings, VideoLayerComponent } from "@/core/types";
 import { useStage } from "../frame";
 import { applyBlend, applyMediaSettings, makeMediaMaterial, missingTexture, setMap } from "./mediaMaterial";
-import { mediaTime, syncVideo, useVideo, videoDuration, type VideoHandle } from "./video";
+import { isPackedTexture, mediaTime, syncVideo, useVideo, videoAlpha, videoDuration, type SyncWant, type VideoHandle } from "./video";
 
 export function useImageTexture(url: string | null) {
   const [tex, setTex] = useState<THREE.Texture | null>(null);
@@ -21,8 +21,16 @@ export function useImageTexture(url: string | null) {
       (t) => {
         t.colorSpace = THREE.SRGBColorSpace;
         t.anisotropy = 8;
-        if (alive) setTex(t);
-        else t.dispose();
+        const ready = () => {
+          if (alive) setTex(t);
+          else t.dispose();
+        };
+        // A loaded image is still compressed: the browser decodes it when it is first drawn, on the main
+        // thread, in the middle of a frame (a wall-size plate is tens of milliseconds). Ask for the
+        // decode now, off the main thread, and hand the texture over once it is done.
+        const img = t.image as HTMLImageElement | undefined;
+        if (img && typeof img.decode === "function") img.decode().then(ready, ready);
+        else ready();
       },
       undefined,
       (e) => console.warn("image failed", url, e),
@@ -36,7 +44,8 @@ export function useImageTexture(url: string | null) {
 }
 
 function texAspect(tex: THREE.Texture | null, video: HTMLVideoElement | null) {
-  if (video && video.videoWidth) return video.videoWidth / video.videoHeight;
+  // An alpha-packed file is twice as tall as the picture it shows.
+  if (video && video.videoWidth) return (video.videoWidth / video.videoHeight) * (isPackedTexture(tex) ? 2 : 1);
   const img = tex?.image as { width?: number; height?: number } | undefined;
   return img?.width && img.height ? img.width / img.height : 16 / 9;
 }
@@ -79,6 +88,11 @@ type LayerComp = VideoLayerComponent | ImageLayerComponent;
 /** Loop period when the element's own loop (whole file) is the wanted loop, so drift is judged on the circle. */
 function nativeLoop(m: MediaSettings, video: VideoHandle): number | undefined {
   return m.loop && m.startTime === 0 && m.endTime == null ? videoDuration(video) || undefined : undefined;
+}
+
+/** A video that is not on screen: silent, paused on `time` (the frame its next showing starts from). */
+function parkedAt(time: number, once: boolean): SyncWant {
+  return { play: false, time: Math.max(0, time), rate: 1, muted: true, volume: 0, once };
 }
 
 interface InstanceState {
@@ -139,7 +153,7 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
   const assetId = comp.kind === "video" ? comp.media.assetId : comp.assetId;
   const asset = assetId ? assets.find((a) => a.id === assetId) : undefined;
   const isVideo = comp.kind === "video";
-  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, { alpha: asset?.hasAlpha });
+  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, videoAlpha(asset));
   const image = useImageTexture(!isVideo && asset ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => {
@@ -185,11 +199,21 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
 
     if (video) {
       const m = (comp as VideoLayerComponent).media;
-      // Walkers stagger their playback; a single layer follows the speed ramps.
-      const mediaSec = comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
-      const time = mediaTime(m, mediaSec, videoDuration(video));
-      const rate = comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
-      syncVideo(video, { play: show && rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, local: role === "preview", volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video), once: !m.loop }, frame.wall);
+      if (!show) {
+        // Hidden (not shown yet, faded out, a walker between crossings): wait on the frame the next
+        // showing starts from. Showing a layer restarts it (startAt = the show), so that frame is
+        // already decoded when its cue fires. It must not follow the scene clock while hidden: the
+        // wanted time moved on every frame, and a paused element chasing it seeks ~25 times a second
+        // (each a decode from the last keyframe, and for a cut-out a VideoFrame copy), for a picture
+        // nobody sees, in every canvas that has the scene.
+        syncVideo(video, parkedAt(mediaTime(m, comp.walker.enabled ? index * 1.37 * m.playbackRate : 0, videoDuration(video)), !m.loop), frame.wall);
+      } else {
+        // Walkers stagger their playback; a single layer follows the speed ramps.
+        const mediaSec = comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
+        const time = mediaTime(m, mediaSec, videoDuration(video));
+        const rate = comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
+        syncVideo(video, { play: rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, local: role === "preview", volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video), once: !m.loop }, frame.wall);
+      }
     }
     if (!show) return;
 
@@ -270,10 +294,12 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
   const { assets, getRt, frame, canvasW, canvasH, isOutput, audio, role } = useStage();
   const asset = comp.media.assetId ? assets.find((a) => a.id === comp.media.assetId) : undefined;
   const isVideo = asset?.type === "video";
-  const video = useVideo(isVideo ? playableUrl(asset) : null, { alpha: asset?.hasAlpha });
+  const video = useVideo(isVideo ? playableUrl(asset) : null, videoAlpha(asset));
   const image = useImageTexture(asset && !isVideo ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat), [mat]);
+  /** Scene time (ms) this plate last started at while it was the current one. */
+  const startRef = useRef(0);
   useEffect(() => {
     applyMediaSettings(mat, { crop: comp.crop });
   }, [mat, comp.crop]);
@@ -289,16 +315,25 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
     const tex = (video?.texture ?? image) || (!isOutput && !asset ? missingTexture() : null);
     mesh.visible = presence > 0 && !!tex;
     mesh.renderOrder = isCur ? 1 : 0;
-    const startAt = isCur && bg.changedAt > -1e8 ? bg.changedAt : 0;
+    // The plate fading out keeps the start it had while it was up: the runtime only keeps the current
+    // plate's, and falling back to 0 made the outgoing video (and its Ken Burns) jump at the change.
+    const startAt = isCur ? (bg.changedAt > -1e8 ? bg.changedAt : 0) : isPrev ? startRef.current : 0;
+    if (isCur) startRef.current = startAt;
     if (video) {
-      const mediaSec = mediaElapsed(rt, comp.id, startAt, frame.t, comp.media.playbackRate);
-      const rate = mediaRate(rt, comp.id, frame.t, comp.media.playbackRate);
-      const time = mediaTime(comp.media, mediaSec, videoDuration(video));
-      syncVideo(
-        video,
-        { play: presence > 0 && rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, local: role === "preview", volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video), once: !comp.media.loop },
-        frame.wall,
-      );
+      if (presence <= 0) {
+        // Not on screen: wait on the frame it comes up from (a plate starts from its top when it is
+        // switched to), not on a time that moves with the clock, see MediaInstance.
+        syncVideo(video, parkedAt(mediaTime(comp.media, 0, videoDuration(video)), !comp.media.loop), frame.wall);
+      } else {
+        const mediaSec = mediaElapsed(rt, comp.id, startAt, frame.t, comp.media.playbackRate);
+        const rate = mediaRate(rt, comp.id, frame.t, comp.media.playbackRate);
+        const time = mediaTime(comp.media, mediaSec, videoDuration(video));
+        syncVideo(
+          video,
+          { play: rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, local: role === "preview", volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video), once: !comp.media.loop },
+          frame.wall,
+        );
+      }
     }
     if (!mesh.visible || !tex) return;
     setMap(mat, tex);

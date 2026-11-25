@@ -133,6 +133,22 @@ const STORM_Z = new THREE.Color("#3b4048");
 const STORM_H = new THREE.Color("#6a707a");
 const tmp = new THREE.Color();
 const MOON = new THREE.Color("#9fb4ff");
+const FOG_GREY = new THREE.Color("#9aa0a8");
+
+const colorCache = new Map<string, THREE.Color>();
+/**
+ * A colour string parsed once and cached, for per-frame code. The result is shared:
+ * copy it (`x.copy(parsedColor(s))`), never modify it.
+ */
+export function parsedColor(s: string): THREE.Color {
+  let c = colorCache.get(s);
+  if (!c) {
+    if (colorCache.size > 256) colorCache.clear(); // edits can type many values; keep it bounded
+    c = new THREE.Color(s);
+    colorCache.set(s, c);
+  }
+  return c;
+}
 
 function sampleStops(arr: THREE.Color[], tod: number, out: THREE.Color) {
   for (let i = 0; i < STOPS.length - 1; i++) {
@@ -146,7 +162,7 @@ function sampleStops(arr: THREE.Color[], tod: number, out: THREE.Color) {
 
 /** Lightning flicker: a main flash and two re-strikes, scaled to the strike duration. */
 export function flashCurve(dtSec: number, duration: number): number {
-  if (dtSec < 0 || dtSec > duration * 1.6) return 0;
+  if (!(duration > 0) || dtSec < 0 || dtSec > duration * 1.6) return 0; // zero duration: 0 / 0 below
   const k = duration / 0.55;
   const pulse = (at: number, amp: number, decay: number) => {
     const x = dtSec - at * k;
@@ -233,10 +249,10 @@ export function updateFrame(f: FrameState, rt: SceneRuntime, wall: number) {
   const nightK = smoothstep(0.25, 1, f.tod) * gradeAmount;
   f.mediaGrade
     .set(1, 1, 1)
-    .lerp(tmp.set(gradeColor), nightK)
+    .lerp(parsedColor(gradeColor), nightK)
     .multiplyScalar((1 - 0.35 * f.storm) * (1 - 0.35 * nightK))
     .addScalar(flash * 0.5);
-  f.fogColor.copy(f.horizon).lerp(tmp.set("#9aa0a8").multiplyScalar(f.ambient), 0.25 + f.storm * 0.3);
+  f.fogColor.copy(f.horizon).lerp(tmp.copy(FOG_GREY).multiplyScalar(f.ambient), 0.25 + f.storm * 0.3);
   f.sceneFogDensity = 0.0016 + haze * 0.0045 + fog * 0.012 + f.storm * 0.0035;
 
   const fr = evalFraming(rt.framing, t);

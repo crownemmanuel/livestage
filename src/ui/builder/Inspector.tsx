@@ -33,6 +33,8 @@ import type {
 import { useModelInfo } from "@/store/modelInfo";
 import { selectedScene, useProject, NO_ITEMS } from "@/store/project";
 import { FontPicker } from "../FontPicker";
+import { SpeakerChooser, speakersToParam } from "../show/SpeakerPicker";
+import { parseSpeakers } from "@/engine/audio";
 import { AssetField, ColorField, Field, NumberField, NumberInput, Section, SelectBox, SelectField, SliderField, SwitchField, TextField, Vec3Field } from "../fields";
 
 type Updater<T> = (fn: (c: T) => void) => void;
@@ -599,6 +601,12 @@ function EffectForm({ c, up }: { c: EffectComponent; up: Updater<EffectComponent
         if (p.type === "range") return <SliderField key={p.key} label={p.label} value={num(c.params, p.key, num(def.defaults, p.key))} min={p.min} max={p.max} step={p.step} unit={p.unit} onChange={set} />;
         if (p.type === "color") return <ColorField key={p.key} label={p.label} value={str(c.params, p.key, str(def.defaults, p.key, "#ffffff"))} onChange={set} />;
         if (p.type === "bool") return <SwitchField key={p.key} label={p.label} value={bool(c.params, p.key, bool(def.defaults, p.key))} onChange={set} />;
+        if (p.type === "speakers")
+          return (
+            <Field key={p.key} label={p.label}>
+              <SpeakerChooser value={parseSpeakers(str(c.params, p.key))} onChange={(v) => set(speakersToParam(v))} />
+            </Field>
+          );
         return <AssetField key={p.key} label={p.label} type={p.assetType} value={str(c.params, p.key) || null} onChange={(v) => set(v ?? "")} />;
       })}
       <p className="text-[10.5px] text-muted-foreground">These are the values used when the scene goes live; most can also be adjusted live from Show Mode.</p>

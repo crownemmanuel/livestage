@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { clamp, now, smoothstep } from "@/core/clock";
 import type { ScalingMode, SceneRuntime } from "@/core/types";
 import { cn } from "@/lib/utils";
-import { useShow } from "@/store/show";
+import { soloParts, useShow } from "@/store/show";
 import { ErrorBoundary } from "@/ui/ErrorBoundary";
 import { SceneCanvas } from "./SceneCanvas";
 import { usePreviewHeard } from "@/engine/previewAudio";
@@ -80,7 +80,8 @@ export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 
   const sx = rect.h > 0 ? rect.w / ((rect.h * W) / H) : 1;
 
   return (
-    <div ref={box} className="relative h-full w-full overflow-hidden" style={{ background: "#000" }}>
+    // data-stage-source and the data-wall-* marks let the wall video link (engine/wallVideo.ts, loaded only while it is on) find these layers.
+    <div ref={box} className="relative h-full w-full overflow-hidden" style={{ background: "#000" }} data-stage-source={isOutput ? "output" : source}>
       {cw > 0 && ch > 0 && (
         <div className="absolute overflow-hidden" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, background: output.backgroundColor }}>
           {source === "program" ? (
@@ -103,16 +104,17 @@ export function StageView({ source, isOutput = false, scaling = "fit", maxDpr = 
 
 // ---------------------------------------------------------------- preview
 
-/** The preview runtime, cut down to one component when Build isolates it, or without the ones it hides. */
-function useSoloRuntime(rt: SceneRuntime | null, solo: string | null, hidden: string[]) {
+/** The preview runtime, cut down to the components Build solos, or without the ones it hides. */
+function useSoloRuntime(rt: SceneRuntime | null, solo: string[], hidden: string[]) {
   const scene = rt?.scene;
   const filtered = useMemo(() => {
-    if (scene && !solo && hidden.length) return { ...scene, components: scene.components.filter((c) => !hidden.includes(c.id)) };
-    if (!scene || !solo || !scene.components.some((c) => c.id === solo)) return null;
-    const comp = scene.components.find((c) => c.id === solo)!;
-    // A media plate on its own shows on black; an environment look keeps its world.
-    const keepWorld = comp.kind === "background" && comp.source === "environment";
-    return { ...scene, components: [comp], environment: keepWorld ? scene.environment : ("none" as const) };
+    const ids = soloParts(solo).components;
+    const comps = scene ? scene.components.filter((c) => ids.includes(c.id)) : [];
+    if (scene && !comps.length && hidden.length) return { ...scene, components: scene.components.filter((c) => !hidden.includes(c.id)) };
+    if (!scene || !comps.length) return null;
+    // Media plates on their own show on black; an environment look keeps its world.
+    const keepWorld = comps.some((c) => c.kind === "background" && c.source === "environment");
+    return { ...scene, components: comps, environment: keepWorld ? scene.environment : ("none" as const) };
   }, [scene, solo, hidden]);
   // Only the scene matters to the canvas (it reads live state through getRt), so rebuild on scene changes, not every tick.
   const soloRt = useMemo(() => (rt && filtered ? { ...rt, scene: filtered } : null), [rt?.key, filtered]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -139,17 +141,18 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
   const capture = useCallback(
     (d: string) => {
       const cur = useShow.getState().preview;
-      if (cur && !solo && !hidden.length) onCapture?.(cur.scene.id, d);
+      if (cur && !solo.length && !hidden.length) onCapture?.(cur.scene.id, d);
     },
     [solo, hidden, onCapture],
   );
   // Videos and clips sound in the preview only while Build's preview sound is on.
-  const heard = usePreviewHeard();
+  // Soloed cue sounds alone are heard alone: the videos keep playing, silent. Soloed components keep their own sound.
+  const heard = usePreviewHeard() && (!solo.length || soloParts(solo).components.length > 0);
   if (!rt) return <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">No scene selected</div>;
   return (
     <ErrorBoundary name="preview canvas" retryAfter={1500} fallback={null}>
     <SceneCanvas
-      key={`${key}:${solo ?? ""}:${hidden.join(",")}`}
+      key={`${key}:${soloParts(solo).components.join(",")}:${hidden.join(",")}`}
       role="preview"
       runtime={rt}
       getRt={getRt}
@@ -222,7 +225,12 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
           else if (kind === "fadeblack") o = isIn ? (p >= 0.5 ? 1 : 0) : p < 0.5 ? 1 : 0;
           else if (kind === "dissolve" || kind === "wipe" || kind === "burn") o = 1;
           else if (kind === "travel") o = isIn ? smoothstep(0.38, 0.62, p) : 1;
-          else if (kind === "video") o = isIn ? (p > 0.85 ? 1 : 0) : p > 0.9 ? 0 : 1;
+          // The scene is up underneath before the video's end fade starts (or before its last frame, on a cut).
+          else if (kind === "video") {
+            const fo = tr.spec.fadeOut;
+            const end = fo == null ? 0.9 : Math.max(0, 1 - fo / Math.max(0.001, tr.spec.duration));
+            o = isIn ? (p > Math.min(0.85, end - 0.05) ? 1 : 0) : p > Math.min(0.9, end) ? 0 : 1;
+          }
           if (isOut && tr.fromStandby) o = 0;
         }
         el.style.opacity = String(o);
@@ -252,7 +260,10 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
           if (v.paused) void v.play().catch(() => {});
         }
         const fadeIn = clamp(want / 0.15, 0, 1);
-        const fadeOut = 1 - smoothstep(0.9, 1, p);
+        // Its end: a fade over the last tenth, or over `fadeOut` seconds (0 = a cut to the scene).
+        const fo = tr.spec.fadeOut;
+        const from = fo == null ? 0.9 : 1 - Math.min(1, fo / Math.max(0.001, tr.spec.duration));
+        const fadeOut = from >= 1 ? (p >= 1 ? 0 : 1) : 1 - smoothstep(from, 1, p);
         v.style.opacity = String(fadeIn * fadeOut);
         // A travel video starts on the outgoing plate and ends on the incoming one:
         // glide its vertical framing between the two plates' framings so both ends line up.
@@ -287,6 +298,7 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
           }}
           className="absolute inset-0"
           style={{ opacity: 0 }}
+          data-wall-slot={s.role}
         >
           <ProgramCanvas rt={s.rt} role={s.role} W={W} H={H} dpr={dpr} isOutput={isOutput} audio={audio && s.role === "live"} />
         </div>
@@ -303,15 +315,17 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
           muted={!audio}
           className="absolute inset-0 h-full w-full object-cover"
           style={{ zIndex: 5, opacity: 0 }}
+          data-wall-layer="video"
         />
       )}
       {audio && audioAsset && <audio key={`a${program.takeCount}`} ref={audioRef} src={audioAsset.url} preload="auto" />}
-      <div ref={blackRef} className="pointer-events-none absolute inset-0" style={{ background: "#000", opacity: 0, zIndex: 6 }} />
-      <div ref={blackoutRef} className="pointer-events-none absolute inset-0" style={{ background: "#000", opacity: 0, zIndex: 8 }} />
+      <div ref={blackRef} className="pointer-events-none absolute inset-0" style={{ background: "#000", opacity: 0, zIndex: 6 }} data-wall-layer="fade" />
+      <div ref={blackoutRef} className="pointer-events-none absolute inset-0" style={{ background: "#000", opacity: 0, zIndex: 8 }} data-wall-layer="blackout" />
       <div
         ref={standbyRef}
         className="pointer-events-none absolute inset-0 grid place-items-center"
         style={{ background: st.color, opacity: 1, zIndex: 7, containerType: "size" }}
+        data-wall-layer="standby"
       >
         {standbyImg ? (
           <img src={standbyImg.url} className={cn("h-full w-full", STANDBY_FIT[output.scaling])} alt="" />

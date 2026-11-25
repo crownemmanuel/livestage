@@ -44,12 +44,14 @@ function grabVideo(a: Asset): Promise<Info> {
       v.currentTime = Math.min(1, (v.duration || 2) / 3);
     };
     v.onseeked = () => {
-      const aspect = v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : null;
+      // An alpha-packed file is twice as tall as its picture: the thumbnail is the colour (top) half.
+      const ph = a.alphaPacked ? v.videoHeight / 2 : v.videoHeight;
+      const aspect = v.videoWidth && ph ? v.videoWidth / ph : null;
       try {
         const c = document.createElement("canvas");
         c.width = 240;
         c.height = Math.round(240 / (aspect ?? 16 / 9));
-        c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
+        c.getContext("2d")!.drawImage(v, 0, 0, v.videoWidth, ph, 0, 0, c.width, c.height);
         finish({ src: c.toDataURL("image/jpeg", 0.72), aspect, duration: Number.isFinite(v.duration) ? v.duration : undefined });
       } catch {
         finish({ src: null, aspect, duration: Number.isFinite(v.duration) ? v.duration : undefined });

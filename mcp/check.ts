@@ -87,6 +87,10 @@ if (status.error) {
   }
   const check = await call("asset_check");
   ok("asset_check", Array.isArray(check.json?.assets), JSON.stringify(check.json).slice(0, 200));
+  const assetsDoc = await call("schema", { topic: "assets" });
+  ok("schema assets describes alpha-packed video", typeof assetsDoc.json?.assets?.alphaPacked === "string", assetsDoc.error ?? "");
+  const ws = await call("workspace_get");
+  ok("workspace_get", typeof ws.json?.root === "string" || ws.json?.available === false, ws.error ?? (ws.json?.root ? `${ws.json.root}${ws.json.isDefault ? " (default)" : ""}, ${ws.json.assetsWithRel ?? 0} asset(s) with rel` : "browser session"));
   const mix = await call("mixer");
   ok("mixer (read)", Array.isArray(mix.json?.sources), mix.error ?? `${mix.json?.sources?.length ?? 0} sources playing`);
   // The mixer's levels are the show file's sound levels (project/mix).
@@ -98,6 +102,8 @@ if (status.error) {
     const music = await call("music_at", { scene: firstScene });
     ok("music_at", Array.isArray(music.json?.sounds), music.error ?? `${music.json?.sounds?.length} sound(s) at the top of ${music.json?.scene?.name}, chase ${music.json?.chase ? "on" : "off"}`);
   }
+  const spk = await call("speakers");
+  ok("speakers (read)", !!spk.json?.speakers, spk.error ?? Object.entries(spk.json?.speakers ?? {}).map(([k, v]) => `${k}: ${v ? "set" : "main"}`).join(", "));
   const out = await call("audio_output");
   ok("audio_output (read)", Array.isArray(out.json?.native), out.error ?? `${out.json?.native?.length ?? 0} native, ${out.json?.web?.length ?? 0} web outputs`);
   // Read-only: StageMics reach (sends nothing).
@@ -105,6 +111,8 @@ if (status.error) {
   ok("stagemics_status", !sm.error, sm.error ?? `StageMics ${typeof sm.json === "string" ? sm.json : sm.json?.reach}`);
   const io = await call("schema", { topic: "io" });
   ok("schema io lists StageMics messages", ["sound"].every((t) => io.json?.io?.outgoing?.some((m: { type: string }) => m.type === t)), io.error ?? "");
+  const wv = await call("wall_video");
+  ok("wall_video", typeof wv.json?.on === "boolean", wv.error ?? `wall video ${wv.json?.on ? `${wv.json.state}, ${wv.json.viewers} viewers` : "off"}`);
   const sl = await call("stagelight_status");
   ok("stagelight_status", typeof sl.json?.enabled === "boolean", sl.error ?? `link ${sl.json?.enabled ? `${sl.json.host}:${sl.json.port}, ${sl.json.reach}` : "off"}`);
   const slCat = await call("stagelight_catalog");

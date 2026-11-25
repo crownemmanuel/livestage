@@ -120,8 +120,11 @@ const TAKE_FADE = 0.8;
 const round = (n: number) => Math.round(n * 100) / 100;
 const fireMode = (c: Cue): CueFire["mode"] => c.fire?.mode ?? "go";
 
-/** Lay the scene out. */
-export function sceneTimeline(scene: Scene, env: TimelineEnv): SceneTimeline {
+/**
+ * Lay the scene out. `fixed[i]`, when given, is where cue i starts (scene seconds; null = it does not fire),
+ * in place of the plan: the times cues really fired in a run, so the rest lays out from them.
+ */
+export function sceneTimeline(scene: Scene, env: TimelineEnv, fixed?: (number | null | undefined)[]): SceneTimeline {
   const starts: (number | null)[] = [];
   const cues: TimelineCue[] = [];
   const lastStart = (i: number) => {
@@ -131,7 +134,9 @@ export function sceneTimeline(scene: Scene, env: TimelineEnv): SceneTimeline {
   scene.cues.forEach((cue, i) => {
     const f = cue.fire;
     const tc: TimelineCue = { index: i, id: cue.id, name: cue.name, mode: fireMode(cue), start: null };
-    if (f?.mode === "time") tc.start = Math.max(0, f.at);
+    const fx = fixed?.[i];
+    if (fx !== undefined) tc.start = fx;
+    else if (f?.mode === "time") tc.start = Math.max(0, f.at);
     else if (f?.mode === "follow") {
       const prev = i > 0 ? starts[i - 1] : 0;
       tc.start = prev == null ? null : prev + Math.max(0, f.after);

@@ -1,14 +1,16 @@
 // The scene's media as a list of cards (ProPresenter-style), stacked like layers: the top of the
 // list is in front. The ON/OFF pill sets what the scene starts with, so what the preview shows is
 // what TAKE puts on the wall. Clicking a video makes it the one the scrub bar moves through.
-import { Clapperboard, EyeOff, Film, Image as ImageIcon, Music, Play, Upload } from "lucide-react";
+import { ContextMenu } from "radix-ui";
+import { Clapperboard, EyeOff, Film, FolderOpen, Image as ImageIcon, Music, Play, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { playableUrl } from "@/core/platform";
+import { fileManagerName, isTauri, playableUrl, revealAsset } from "@/core/platform";
 import type { Asset, AssetType, Scene, SceneComponent, SceneRuntime } from "@/core/types";
 import { useShow } from "@/store/show";
 import { useProject } from "@/store/project";
 import { assignMedia, componentFor, mediaSlot, NEW_FROM_DROP, useMediaDrop } from "../mediaDrop";
 import { selectScrubSource, useAssetDurations, useScrubSelection, videoSources } from "../PreviewTools";
+import { useAssetInfo } from "../assetThumbs";
 
 interface Item {
   key: string;
@@ -126,9 +128,15 @@ const ICON = { video: Film, image: ImageIcon, clip: Clapperboard, audio: Music }
 
 function Thumb({ item }: { item: Item }) {
   const url = playableUrl(item.asset);
+  // Videos show the session's cached JPEG frame: a <video> per card is a decoder in the window that runs the show.
+  const info = useAssetInfo(item.asset?.type === "video" ? item.asset : null);
   if (!url) return <div className="grid h-full place-items-center bg-[repeating-conic-gradient(#ffffff0d_0_25%,transparent_0_50%)] bg-[length:16px_16px] text-[10px] text-muted-foreground">No media yet</div>;
   if (item.asset?.type === "image") return <img src={url} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />;
-  if (item.asset?.type === "video") return <video src={`${url}#t=0.6`} preload="metadata" muted playsInline className="absolute inset-0 h-full w-full object-cover" />;
+  if (item.asset?.type === "video") {
+    if (info?.src) return <img src={info.src} alt="" className="absolute inset-0 h-full w-full object-cover" draggable={false} />;
+    // No frame could be grabbed: the video element itself, as before.
+    if (info) return <video src={`${url}#t=0.6`} preload="metadata" muted playsInline className="absolute inset-0 h-full w-full object-cover" />;
+  }
   const I = ICON[item.kind];
   return (
     <div className="grid h-full place-items-center text-muted-foreground">
@@ -181,6 +189,7 @@ function MediaRow({ it, scrubbing }: { it: Item; scrubbing: boolean }) {
   const { over, dropProps } = useMediaDrop(it.drop?.types ?? [], (list) => it.drop?.assign(list[0].id));
   return (
     <li {...(it.drop ? dropProps : {})}>
+      <MediaMenu asset={it.asset}>
       <button
         onClick={() => {
           if (it.scrubKey) selectScrubSource(it.scrubKey);
@@ -209,7 +218,33 @@ function MediaRow({ it, scrubbing }: { it: Item; scrubbing: boolean }) {
           </span>
         )}
       </button>
+      </MediaMenu>
     </li>
+  );
+}
+
+/** Right-click menu on a media card: show the file in Finder / File Explorer. */
+function MediaMenu({ asset, children }: { asset: Asset | undefined; children: React.ReactNode }) {
+  const can = isTauri && !!asset;
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="z-50 min-w-[220px] overflow-hidden rounded-md border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-md">
+          <ContextMenu.Item
+            disabled={!can}
+            onSelect={() => {
+              if (asset) revealAsset(asset).catch((x) => window.alert(x instanceof Error ? x.message : String(x)));
+            }}
+            className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+          >
+            <FolderOpen className="size-4 text-muted-foreground" />
+            Show in {fileManagerName}
+          </ContextMenu.Item>
+          {!isTauri && <div className="px-2 py-1.5 text-[11.5px] text-muted-foreground">Desktop app only</div>}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 

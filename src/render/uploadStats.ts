@@ -14,7 +14,8 @@ export function instrumentUploads(gl: WebGLRenderingContext | WebGL2RenderingCon
     const raw = gl[name] as unknown as (...a: unknown[]) => void;
     (gl as unknown as Record<string, unknown>)[name] = function (this: WebGLRenderingContext, ...args: unknown[]) {
       const src = args[args.length - 1];
-      if (typeof HTMLVideoElement !== "undefined" && src instanceof HTMLVideoElement) {
+      // A VideoFrame is how a video with alpha is uploaded on WebKit (render/layers/video.ts).
+      if ((typeof HTMLVideoElement !== "undefined" && src instanceof HTMLVideoElement) || (typeof VideoFrame !== "undefined" && src instanceof VideoFrame)) {
         const t0 = performance.now();
         raw.apply(this, args);
         ms += performance.now() - t0;
@@ -22,6 +23,11 @@ export function instrumentUploads(gl: WebGLRenderingContext | WebGL2RenderingCon
       } else raw.apply(this, args);
     };
   }
+}
+
+/** Time spent preparing a frame for upload outside texImage2D (taking a VideoFrame of an alpha video). */
+export function addUploadTime(dt: number) {
+  ms += dt;
 }
 
 /** Upload time and count since the last call, then reset. */

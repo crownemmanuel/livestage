@@ -4,7 +4,7 @@ import { onBus, send, unpackProgram } from "@/core/bus";
 import { isTauri } from "@/core/platform";
 import { steadyInterval } from "@/core/steadyTimer";
 import type { Scene } from "@/core/types";
-import { heldCueSounds, playingCueSounds, startProgramAudio, unlockAudio } from "@/engine/audio";
+import { heldCueSounds, playingCueSounds, startProgramAudio, unlockAudio, warmSoundCount, warmSounds } from "@/engine/audio";
 import { startAudioRouting } from "@/engine/audioOutput";
 import { StageView } from "@/render/StageView";
 import { takeVideoSyncStats } from "@/render/layers/video";
@@ -53,6 +53,7 @@ export function OutputApp() {
           void send({ type: "hello" });
         }
       } else if (msg.type === "poses") useShow.setState({ programPoses: msg.program, fromPoses: msg.from, posesAt: now() });
+      else if (msg.type === "warm") warmSounds(msg.sounds);
     });
     void send({ type: "hello" });
     const stopRouting = startAudioRouting();
@@ -88,6 +89,7 @@ export function OutputApp() {
           video: takeVideoSyncStats(),
           sounds: playingCueSounds(),
           heldSounds: heldCueSounds(),
+          soundsReady: warmSoundCount(),
           upload: takeUploadStats(),
           videoElements: countVideos(),
           stalls,

@@ -41,6 +41,12 @@ export function makeCanvasTex(w: number, h: number): CanvasTex {
   return { canvas, ctx, texture, w: canvas.width, h: canvas.height };
 }
 
+/**
+ * Resize the canvas (which clears it). Returns true when the size changed: the caller must
+ * redraw and set `needsUpdate`. three allocates immutable texture storage on the first upload
+ * and only sub-uploads afterwards, so a resized canvas would fail to upload; disposing the GPU
+ * texture here makes the next upload allocate storage at the new size.
+ */
 export function resizeCanvasTex(c: CanvasTex, w: number, h: number) {
   const W = Math.max(2, Math.round(w));
   const H = Math.max(2, Math.round(h));
@@ -49,6 +55,7 @@ export function resizeCanvasTex(c: CanvasTex, w: number, h: number) {
   c.canvas.height = H;
   c.w = W;
   c.h = H;
+  c.texture.dispose();
   return true;
 }
 

@@ -15,7 +15,7 @@
 import { sceneNow } from "./clock";
 import { initialSegments, scheduleClip } from "./clipActor";
 import { cueMarkers } from "./markers";
-import type { Cue, CueAction, Project, Scene, SceneRuntime, SoundEvent, SoundLevel } from "./types";
+import type { Cue, CueAction, Project, Scene, SceneRuntime, SoundEvent, SoundLevel, SpeakerId } from "./types";
 
 /** Mixer key of a cue sound (see ProgramState.mix). */
 export const soundKey = (assetId: string) => `sound:${assetId}`;
@@ -231,6 +231,8 @@ export interface NominalSound {
   levels?: SoundLevel[];
   /** Seconds since it started at that point. */
   since?: number;
+  /** Surround speakers it plays on (see the sound action). */
+  speakers?: SpeakerId[];
   /** The scene and cue whose sound action started it. */
   sceneId: string;
   cueId: string;
@@ -275,6 +277,7 @@ export function nominalMusic(project: Pick<Project, "scenes" | "cueTimings">, sc
         if (a.fadeOut && a.fadeOut > 0) ev.fadeOut = a.fadeOut;
         if (a.levels?.length) ev.levels = a.levels;
         if (a.fadeOthers && (a.fadeOthers.which === "all" || a.fadeOthers.which.length)) ev.fadeOthers = a.fadeOthers;
+        if (a.speakers?.length) ev.speakers = a.speakers;
         events.push(ev);
       }
     });
@@ -285,7 +288,7 @@ export function nominalMusic(project: Pick<Project, "scenes" | "cueTimings">, sc
         .filter((l) => lifePlaying(l, at))
         .map((l) => {
           const e = l.ev as TimedEvent;
-          return { assetId: e.assetId, offset: filePos(e, at, duration(e.assetId)), volume: e.volume, loop: !!e.loop, keepPlaying: !!e.keepPlaying, fadeOut: e.fadeOut, trimStart: e.trimStart, levels: e.levels, since: (at - e.at) / 1000, sceneId: e.sceneId, cueId: e.cueId };
+          return { assetId: e.assetId, offset: filePos(e, at, duration(e.assetId)), volume: e.volume, loop: !!e.loop, keepPlaying: !!e.keepPlaying, fadeOut: e.fadeOut, trimStart: e.trimStart, levels: e.levels, speakers: e.speakers, since: (at - e.at) / 1000, sceneId: e.sceneId, cueId: e.cueId };
         });
       return { showTime: T + cut, sceneTime: cut, sounds };
     }

@@ -76,7 +76,7 @@ export const OVERSIZE_FACTOR = 1.5;
 const PLAYABLE = new Set(["h264", "hevc", "vp9", "vp8", "av1", "prores", "mjpeg"]);
 
 /** Problems with a file, worst first. Empty means it is fine as it is. */
-export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, opts: { hasAlpha?: boolean } = {}): MediaProblem[] {
+export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, opts: { hasAlpha?: boolean; alphaPacked?: boolean } = {}): MediaProblem[] {
   const out: MediaProblem[] = [];
   if (!p) return out;
   const v = p.video;
@@ -86,15 +86,20 @@ export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, o
   }
   if (!v) return out;
   // Alpha video is a deliberate format (HEVC alpha on macOS, VP9 WebM elsewhere): re-encoding would flatten it.
-  const alpha = !!opts.hasAlpha || v.alpha;
+  // An alpha-packed file (colour over matte) is ordinary H.264 and re-encodes like any other, but only at
+  // its own size: scaling it would smear the seam between its two halves.
+  const packed = !!opts.alphaPacked;
+  const alpha = !packed && (!!opts.hasAlpha || v.alpha);
+  const pictureHeight = packed ? v.height / 2 : v.height;
+  const repack = packed ? " Pack it again from the transparent original." : "";
   const px = (n: number) => n.toLocaleString();
 
   if (v.codec === "h264" && (v.width > H264_MAX_DIM || v.height > H264_MAX_DIM)) {
     out.push({
       severity: "error",
       code: "h264-too-wide",
-      message: `H.264 at ${px(v.width)}×${px(v.height)} is wider than the ${px(H264_MAX_DIM)} px the hardware decoder handles: on a Mac the picture comes out green with garbage. Re-encode at the wall size.`,
-      fixable: !alpha,
+      message: `H.264 at ${px(v.width)}×${px(v.height)} is wider than the ${px(H264_MAX_DIM)} px the hardware decoder handles: on a Mac the picture comes out green with garbage. Re-encode at the wall size.${repack}`,
+      fixable: !alpha && !packed,
     });
   }
   if ((v.max_frame_bytes ?? 0) > MAX_FRAME_BYTES) {
@@ -114,12 +119,12 @@ export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, o
   } else if (v.codec === "prores" || v.codec === "mjpeg") {
     out.push({ severity: "warn", code: "high-bitrate", message: `${v.codec === "prores" ? "ProRes" : "Motion JPEG"} at ${Math.round(p.bitrate_kbps / 1000)} Mbit/s reads the disk hard; an H.264 copy plays lighter.`, fixable: !alpha });
   }
-  if (v.width > wall.canvasWidth * OVERSIZE_FACTOR || v.height > wall.canvasHeight * OVERSIZE_FACTOR) {
+  if (v.width > wall.canvasWidth * OVERSIZE_FACTOR || pictureHeight > wall.canvasHeight * OVERSIZE_FACTOR) {
     out.push({
       severity: "warn",
       code: "oversize",
-      message: `${px(v.width)}×${px(v.height)} is far bigger than the ${px(wall.canvasWidth)}×${px(wall.canvasHeight)} wall: every window decodes pixels it never shows.`,
-      fixable: !alpha,
+      message: `${px(v.width)}×${px(pictureHeight)} is far bigger than the ${px(wall.canvasWidth)}×${px(wall.canvasHeight)} wall: every window decodes pixels it never shows.${repack}`,
+      fixable: !alpha && !packed,
     });
   }
   if (p.fragmented) {
@@ -138,6 +143,37 @@ export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, o
   }
   const rank = { error: 0, warn: 1 };
   return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+}
+
+/** The tallest picture an alpha-packed file can hold: two stacked must stay inside the H.264 decoder's ceiling. */
+export const PACKED_MAX_HEIGHT = H264_MAX_DIM / 2;
+
+export interface PackAdvice {
+  /** The optimiser can pack this file (`asset_optimise` with `pack`). */
+  can: boolean;
+  note: string;
+}
+
+/**
+ * Could this transparent video be alpha-packed (one opaque H.264 file, colour over matte, see
+ * `Asset.alphaPacked`)? Null for a video without transparency.
+ */
+export function packAdvice(p: MediaProbe | null | undefined, wall: WallFormat, opts: { hasAlpha?: boolean; alphaPacked?: boolean } = {}): PackAdvice | null {
+  if (opts.alphaPacked) return { can: false, note: "Already alpha-packed: one H.264 file, GPU path on every platform." };
+  const v = p?.video;
+  if (!opts.hasAlpha && !v?.alpha) return null;
+  const why = "Transparent video is copied on the CPU every frame on a Mac (3-4 ms per frame per window at wall size) and needs a WebM twin for Windows; alpha-packed it is one H.264 file on the GPU path everywhere.";
+  if (!v) return { can: false, note: `${why} This file was not probed (not a file on this computer).` };
+  if (v.codec === "hevc") return { can: false, note: `${why} ffmpeg cannot read HEVC's alpha layer: pack from the clip's WebM (VP9 alpha) or ProRes 4444 version.` };
+  if (!["vp9", "vp8", "prores"].includes(v.codec) && !v.alpha) return { can: false, note: `${why} ${v.codec} is not a format with alpha the optimiser reads (VP9 / VP8 WebM, ProRes 4444).` };
+  let size = "";
+  if (v.width && v.height) {
+    const k = Math.min(wall.canvasWidth / v.width, Math.min(wall.canvasHeight, PACKED_MAX_HEIGHT) / v.height, 1);
+    const w = Math.max(2, Math.floor(v.width * k) & ~1);
+    const h = Math.max(2, Math.floor(v.height * k) & ~1);
+    size = ` (${w}×${h * 2})`;
+  }
+  return { can: true, note: `${why} Pack it${size} with asset_optimise { pack: true }.` };
 }
 
 /** Should the import optimise this file without asking? Only for faults the operator would otherwise hit on the wall. */

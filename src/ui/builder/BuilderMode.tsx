@@ -324,7 +324,7 @@ function ComponentList() {
           {scene.components.map((c) => {
             const Icon = KIND_ICON[c.kind];
             const enters = entersAt(scene, c.id, c.initiallyVisible);
-            const isolated = solo === c.id;
+            const isolated = solo.includes(c.id);
             const isHidden = hidden.includes(c.id);
             return (
               <li key={c.id} className="group/row" data-comp-row={c.id}>
@@ -346,10 +346,10 @@ function ComponentList() {
                   </button>
                   <button
                     type="button"
-                    title={isolated ? "Show the whole scene" : "Isolate: show only this in the preview"}
+                    title={isolated ? "Stop isolating it" : "Isolate: show only this in the preview (isolate more to see them together)"}
                     aria-label="Isolate"
                     onClick={() => {
-                      useShow.getState().setSolo(isolated ? null : c.id);
+                      useShow.getState().toggleSolo(c.id);
                       st.selectComponent(c.id);
                     }}
                     className={cn("grid size-5 shrink-0 place-items-center rounded", isolated ? "bg-armed text-black" : "text-muted-foreground opacity-0 hover:text-foreground group-hover/row:opacity-100")}
