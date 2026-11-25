@@ -24,6 +24,8 @@ uniform float feather;
 uniform float blendMode; // 0 normal, 1 add, 2 screen, 3 multiply
 uniform vec3 grade;
 uniform float decodeSrgb;
+uniform float alphaPacked;
+uniform float packedTexel;
 varying vec2 vUv;
 
 // three.js uploads video frames without sRGB decoding (linear internal format),
@@ -40,7 +42,10 @@ void main() {
   vec2 uv = vUv;
   if (flipX > 0.5) uv.x = 1.0 - uv.x;
   vec2 tuv = vec2(mix(crop.x, 1.0 - crop.y, uv.x), mix(crop.w, 1.0 - crop.z, uv.y));
-  vec4 c = texture2D(map, tuv);
+  // Video textures are flipped vertically on upload: upper colour occupies v=.5..1.
+  float packedY = clamp(tuv.y * 0.5, packedTexel * 0.5, 0.5 - packedTexel * 0.5);
+  vec4 c = texture2D(map, vec2(tuv.x, alphaPacked > 0.5 ? 0.5 + packedY : tuv.y));
+  if (alphaPacked > 0.5) c.a *= texture2D(map, vec2(tuv.x, packedY)).r;
   if (decodeSrgb > 0.5) c.rgb = srgbToLinear(c.rgb);
   float a = c.a;
   if (chroma > 0.5) {
@@ -93,6 +98,8 @@ export function makeMediaMaterial() {
       blendMode: { value: 0 },
       grade: { value: new THREE.Color(1, 1, 1) },
       decodeSrgb: { value: 0 },
+      alphaPacked: { value: 0 },
+      packedTexel: { value: 0 },
     },
   });
 }
@@ -100,6 +107,9 @@ export function makeMediaMaterial() {
 /** Set the texture and whether the shader must decode it (video frames). */
 export function setMap(mat: THREE.ShaderMaterial, tex: THREE.Texture | null) {
   mat.uniforms.map.value = tex;
+  mat.uniforms.alphaPacked.value = tex?.userData.alphaPacked ? 1 : 0;
+  const image = tex?.image as { videoHeight?: number; height?: number } | undefined;
+  mat.uniforms.packedTexel.value = tex?.userData.alphaPacked ? 1 / Math.max(2, image?.videoHeight || image?.height || 2) : 0;
   mat.uniforms.decodeSrgb.value = tex && (tex as THREE.VideoTexture).isVideoTexture && tex.colorSpace === THREE.SRGBColorSpace ? 1 : 0;
 }
 

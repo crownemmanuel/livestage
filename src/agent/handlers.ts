@@ -264,6 +264,10 @@ function schemaDoc(topic: string) {
   const scene = p.scenes.find((s) => s.id === P().selectedSceneId) ?? p.scenes[0] ?? makeScene(1, "Example");
   const out: Record<string, unknown> = {};
   if (topic === "components" || topic === "all") {
+    out.assets = {
+      alphaPacked: "Optional asset boolean: colour in the top half, grayscale alpha mask in the bottom half. Logical picture height is half the encoded height. Supported by video layers, backgrounds and clip actors. Set via asset_import or patch project/assets/<id>/alphaPacked; old assets default to false.",
+      hasAlpha: "Native transparent video on WebKit uses an RGBA canvas upload to avoid green frames on Intel Macs. Packed alpha uses the media shader and the main url, even when macUrl is present.",
+    };
     out.components = {
       note: "component_add builds these defaults; pass `props` to override. Every component also has id, name, initiallyVisible (shown when the scene is taken). Backgrounds stack like layers: the scene opens on the first one in component order with initiallyVisible (none marked: the first background).",
       background: strip(factories.makeBackground("Background")),
@@ -367,8 +371,10 @@ async function importAsset(a: Args): Promise<Asset> {
   const name: string = a.name || a.fileName || (a.url ? String(a.url).split(/[\\/]/).pop() : "") || "asset";
   const type = (a.type as AssetType | undefined) ?? assetTypeFor(a.fileName || a.url || name);
   if (!type) throw new Error(`Cannot tell the media type of "${name}"; pass type`);
-  const hasAlpha = typeof a.hasAlpha === "boolean" ? a.hasAlpha : /\.(png|webp|webm)$|alpha/i.test(a.fileName || a.url || name);
-  if (a.url) return { id: uid("asset"), name, type, url: String(a.url), hasAlpha };
+  const alphaPacked = a.alphaPacked === true;
+  if (alphaPacked && type !== "video") throw new Error("alphaPacked is only supported for video assets");
+  const hasAlpha = alphaPacked || (typeof a.hasAlpha === "boolean" ? a.hasAlpha : /\.(png|webp|webm)$|alpha/i.test(a.fileName || a.url || name));
+  if (a.url) return { id: uid("asset"), name, type, url: String(a.url), hasAlpha, alphaPacked };
   if (typeof a.data !== "string") throw new Error("Give a file or a url");
   const bin = atob(a.data);
   const bytes = new Uint8Array(bin.length);
@@ -376,10 +382,10 @@ async function importAsset(a: Args): Promise<Asset> {
   const ext = String(a.fileName ?? name).split(".").pop()?.toLowerCase() ?? "";
   if (isTauri) {
     const saved = await saveGeneratedAsset(bytes, a.fileName || name, type);
-    return { ...saved, name, hasAlpha };
+    return { ...saved, name, hasAlpha, alphaPacked };
   }
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: MIME[ext] ?? "application/octet-stream" }));
-  return { id: uid("asset"), name, type, url, ephemeral: true, hasAlpha };
+  return { id: uid("asset"), name, type, url, ephemeral: true, hasAlpha, alphaPacked };
 }
 
 // ---------------------------------------------------------------- show packages and cloud versions
@@ -574,6 +580,7 @@ export const handlers: Record<AgentCommand, Handler> = {
           type: x.type,
           url: x.url.startsWith("blob:") || x.url.length > 200 ? undefined : x.url,
           hasAlpha: x.hasAlpha || undefined,
+          alphaPacked: x.alphaPacked || undefined,
           audioRole: x.type === "audio" ? (audioRoleOf(x) ?? undefined) : undefined,
           builtIn: x.builtIn || undefined,
           ephemeral: x.ephemeral || undefined,
@@ -609,7 +616,7 @@ export const handlers: Record<AgentCommand, Handler> = {
         optimised: asset.optimised ? { from: asset.optimised.from, at: new Date(asset.optimised.at).toISOString(), was: describeProbe(asset.optimised.source) || undefined } : undefined,
         problems,
         playsWell: !problems.some((p) => p.severity === "error"),
-        canOptimise: !!asset.path && !asset.builtIn && !asset.url.startsWith("/media/") && !asset.hasAlpha,
+        canOptimise: !!asset.path && !asset.builtIn && !asset.url.startsWith("/media/") && !asset.hasAlpha && !asset.alphaPacked,
       });
     }
     return { wall: { canvasWidth: P().project.output.canvasWidth, canvasHeight: P().project.output.canvasHeight }, tools, assets };
@@ -1299,6 +1306,7 @@ export const handlers: Record<AgentCommand, Handler> = {
       name: final.name,
       type: final.type,
       hasAlpha: final.hasAlpha,
+      alphaPacked: final.alphaPacked || undefined,
       ephemeral: final.ephemeral || undefined,
       format: final.probe ? describeProbe(final.probe) : undefined,
       optimised: r?.optimised ? { from: final.optimised?.from, was: describeProbe(final.optimised?.source) || undefined } : undefined,

@@ -76,7 +76,7 @@ export const OVERSIZE_FACTOR = 1.5;
 const PLAYABLE = new Set(["h264", "hevc", "vp9", "vp8", "av1", "prores", "mjpeg"]);
 
 /** Problems with a file, worst first. Empty means it is fine as it is. */
-export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, opts: { hasAlpha?: boolean } = {}): MediaProblem[] {
+export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, opts: { hasAlpha?: boolean; alphaPacked?: boolean } = {}): MediaProblem[] {
   const out: MediaProblem[] = [];
   if (!p) return out;
   const v = p.video;
@@ -86,7 +86,7 @@ export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, o
   }
   if (!v) return out;
   // Alpha video is a deliberate format (HEVC alpha on macOS, VP9 WebM elsewhere): re-encoding would flatten it.
-  const alpha = !!opts.hasAlpha || v.alpha;
+  const alpha = !!opts.hasAlpha || !!opts.alphaPacked || v.alpha;
   const px = (n: number) => n.toLocaleString();
 
   if (v.codec === "h264" && (v.width > H264_MAX_DIM || v.height > H264_MAX_DIM)) {
@@ -114,11 +114,12 @@ export function checkMedia(p: MediaProbe | null | undefined, wall: WallFormat, o
   } else if (v.codec === "prores" || v.codec === "mjpeg") {
     out.push({ severity: "warn", code: "high-bitrate", message: `${v.codec === "prores" ? "ProRes" : "Motion JPEG"} at ${Math.round(p.bitrate_kbps / 1000)} Mbit/s reads the disk hard; an H.264 copy plays lighter.`, fixable: !alpha });
   }
-  if (v.width > wall.canvasWidth * OVERSIZE_FACTOR || v.height > wall.canvasHeight * OVERSIZE_FACTOR) {
+  const pictureHeight = v.height / (opts.alphaPacked ? 2 : 1);
+  if (v.width > wall.canvasWidth * OVERSIZE_FACTOR || pictureHeight > wall.canvasHeight * OVERSIZE_FACTOR) {
     out.push({
       severity: "warn",
       code: "oversize",
-      message: `${px(v.width)}×${px(v.height)} is far bigger than the ${px(wall.canvasWidth)}×${px(wall.canvasHeight)} wall: every window decodes pixels it never shows.`,
+      message: `${px(v.width)}×${px(pictureHeight)} is far bigger than the ${px(wall.canvasWidth)}×${px(wall.canvasHeight)} wall: every window decodes pixels it never shows.`,
       fixable: !alpha,
     });
   }

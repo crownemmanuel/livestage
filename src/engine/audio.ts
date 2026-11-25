@@ -122,6 +122,7 @@ export const soundMixKey = soundKey;
 
 /** The live mixer moved: glide each playing cue sound to its new level. */
 function applyMix() {
+  if (!cueSounds.size) return;
   const ac = audio();
   for (const [key, s] of cueSounds) s.gain?.gain.setTargetAtTime(s.volume * mixLevel(soundMixKey(key)), ac.currentTime, 0.05);
 }
@@ -243,6 +244,7 @@ function followClock(rt: SceneRuntime | null) {
   const c = rt.clock;
   const prev = lastClock;
   lastClock = { key: rt.key, base: c.base, pausedAt: c.pausedAt };
+  if (!cueSounds.size) return;
   const held = c.pausedAt !== null;
   const ac = audio();
   if (prev?.key !== rt.key) {
@@ -320,6 +322,7 @@ export function playingCueSounds(): string[] {
 
 /** Seconds into each playing cue sound's file, as the speakers have it (diagnostics). */
 export function cueSoundPositions(): Record<string, number> {
+  if (!cueSounds.size) return {};
   const ac = audio();
   return Object.fromEntries([...cueSounds].map(([k, s]) => [k, Math.round(soundPos(s, ac) * 100) / 100]));
 }
@@ -408,7 +411,7 @@ export function startProgramAudio(isHost: () => boolean): () => void {
       const late = t - ev.at > 1500;
       const wallAt = rt.clock.base + ev.at;
       // Fades others as it starts (a chase's stop has no file and only does this); one from before has done so.
-      if (!late && !ev.chase) fadeOthersFor(ev, audio().currentTime + Math.max(0, (wallAt - now()) / 1000), rt.key);
+      if (!late && !ev.chase && ev.fadeOthers && cueSounds.size) fadeOthersFor(ev, audio().currentTime + Math.max(0, (wallAt - now()) / 1000), rt.key);
       const asset = ev.assetId ? s.assets.find((a) => a.id === ev.assetId) : undefined;
       if (!asset) continue;
       if (!late && !ev.chase) {
@@ -480,6 +483,9 @@ export function startProgramAudio(isHost: () => boolean): () => void {
 
 /** Browsers need a user gesture before audio can start. */
 export function unlockAudio() {
+  // Browsing a silent show must not activate the system audio session. A sound
+  // creates its context when needed; gestures only unlock one already waiting.
+  if (!ctx) return;
   try {
     audio();
   } catch {

@@ -83,7 +83,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `stagelight_link` | Set up the StageLight link (on, IP, port, mirror TAKE / GO as triggers `scene.<code>` / `cue.<code>.<n>`), ping it and return `stagelight_status` |
 | `upsert`, `remove` | Any list by path: camera shots, media markers, clips, timers, announcements, triggers, OSC targets, Hog items, presets (StageLight messages in markers are checked as in `cue_add`) |
 | `patch` | Set / merge / insert / remove anything in the show file in one change; returns the old values |
-| `asset_import`, `asset_remove` | Library media (local file or URL). An imported video is probed and, when the wall would not play it well, re-encoded into the wall format on the way in (`optimise: false` to only report) |
+| `asset_import`, `asset_remove` | Library media (local file or URL). `alphaPacked: true` imports colour-above-mask video, implies `hasAlpha`, and uses the main URL on every platform. The optional flag is also editable with `patch`, reported by `list_assets`, and described by `schema`. Native transparent video uses a canvas upload on WebKit to avoid green frames on Intel Macs. Opaque imports are probed and re-encoded when needed (`optimise: false` to only report) |
 | `asset_check` | What a video is (codec, size, frame rate, keyframe gap, bit rate, audio) and whether the wall plays it well: problems with severity and whether optimising fixes them; the encoder tools on this machine |
 | `asset_optimise` | Re-encode a library video into the wall format (H.264, fitted to the wall, keyframe every ½ s, fast start); `force` when no problem was found |
 | `asset_reveal` | Open the operator's Finder / Explorer with an asset's file selected (desktop app only) |

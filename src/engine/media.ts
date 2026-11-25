@@ -70,7 +70,7 @@ export function wallFormat(): WallFormat {
 /** Problems of an asset against the current wall (recomputed from its probe so a wall-size change counts). */
 export function assetProblems(a: Asset, wall: WallFormat = wallFormat()): MediaProblem[] {
   if (a.type !== "video") return [];
-  if (a.probe) return checkMedia(a.probe, wall, { hasAlpha: a.hasAlpha });
+  if (a.probe) return checkMedia(a.probe, wall, { hasAlpha: a.hasAlpha, alphaPacked: a.alphaPacked });
   return a.problems ?? [];
 }
 
@@ -98,7 +98,7 @@ export async function checkAsset(a: Asset): Promise<Asset> {
   if (!isTauri || !path) return a;
   try {
     const probe = await probeFile(path);
-    return { ...a, probe, problems: checkMedia(probe, wallFormat(), { hasAlpha: a.hasAlpha }) };
+    return { ...a, probe, problems: checkMedia(probe, wallFormat(), { hasAlpha: a.hasAlpha, alphaPacked: a.alphaPacked }) };
   } catch (e) {
     return { ...a, problems: [{ severity: "warn", code: "unreadable", message: `Could not read the file: ${String(e)}`, fixable: false }] };
   }
@@ -120,7 +120,7 @@ export async function optimiseAsset(assetId: string, opts: { force?: boolean } =
   const a = useProject.getState().project.assets.find((x) => x.id === assetId);
   if (!a) throw new Error("No such asset");
   if (a.type !== "video") throw new Error(`${a.name} is not a video`);
-  if (a.hasAlpha || a.probe?.video?.alpha) throw new Error(`${a.name} has an alpha channel; re-encoding would flatten it. Prepare transparent video as HEVC alpha (Mac) or VP9 WebM.`);
+  if (a.hasAlpha || a.alphaPacked || a.probe?.video?.alpha) throw new Error(`${a.name} has transparency; re-encoding could flatten its alpha or resize its packed mask. Prepare transparent video as HEVC alpha, VP9 WebM or colour-above-mask packed H.264.`);
   const src = libraryPath(a);
   if (!src) throw new Error(a.builtIn || a.url.startsWith("/media/") ? `${a.name} ships with the app: re-encode it in media-src and rebuild.` : `${a.name} is not a file in the show library (browser session import?).`);
   const checked = a.probe ? a : await checkAsset(a);

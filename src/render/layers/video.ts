@@ -135,25 +135,31 @@ export function setWarm(h: VideoHandle, warm: boolean) {
 }
 
 /**
- * WebKit hands an HEVC-with-alpha <video> to WebGL without its alpha: every pixel arrives opaque, so the
- * clear parts of a full-wall cut-out (a goat walking into a street) draw black over the plate. A WebCodecs
- * VideoFrame taken from the same element keeps the alpha (measured in the app: 3-4 ms for a 3072 x 768
- * frame). So on WebKit an alpha video's texture uploads a VideoFrame of the element's current picture,
- * taken whenever the texture is marked for upload. Returns the cleanup.
+ * WebKit's direct video / VideoFrame uploads can lose HEVC alpha or turn the entire
+ * texture green on Intel Macs. Its 2D canvas decoder preserves the same frame's RGBA.
+ * Copy only when a decoded frame is marked for upload, leaving playback and the
+ * shared clock on the original video. Packed-alpha H.264 uses the normal GPU path.
  */
-function uploadAsVideoFrame(v: HTMLVideoElement, texture: THREE.VideoTexture): () => void {
-  let frame: VideoFrame | null = null;
+function uploadViaCanvas(v: HTMLVideoElement, texture: THREE.VideoTexture): () => void {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  // Never fall back to a raw video upload while its first decoded picture is pending.
+  texture.source.data = canvas as unknown as HTMLVideoElement;
   const proto = Object.getPrototypeOf(THREE.VideoTexture.prototype) as object;
   const base = Object.getOwnPropertyDescriptor(proto, "needsUpdate")!;
   Object.defineProperty(texture, "needsUpdate", {
     configurable: true,
     set(value: boolean) {
-      if (value && v.readyState >= 2) {
+      if (value && ctx && v.readyState >= 2 && v.videoWidth && v.videoHeight) {
         try {
-          const next = new VideoFrame(v);
-          frame?.close();
-          frame = next;
-          texture.source.data = next as unknown as HTMLVideoElement; // three uploads a VideoFrame like an element
+          if (canvas.width !== v.videoWidth || canvas.height !== v.videoHeight) {
+            canvas.width = v.videoWidth;
+            canvas.height = v.videoHeight;
+          }
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(v, 0, 0);
+          texture.source.data = canvas as unknown as HTMLVideoElement;
         } catch {
           // No picture to take yet (a seek in flight): keep the last frame.
         }
@@ -164,24 +170,25 @@ function uploadAsVideoFrame(v: HTMLVideoElement, texture: THREE.VideoTexture): (
   return () => {
     // VideoTexture.dispose cancels its frame callback on the element, so hand it back first.
     texture.source.data = v;
-    frame?.close();
-    frame = null;
+    canvas.width = canvas.height = 0;
   };
 }
 
 /**
  * One <video> per use; playback is slaved to the shared scene clock.
  * `lazy`: create the element cold; the owner decides each frame whether it should be warm (`setWarm`).
- * `alpha`: the file has an alpha channel (see uploadAsVideoFrame).
+ * `alpha`: the file has a native alpha channel (see uploadViaCanvas).
+ * `alphaPacked`: colour above a grayscale mask, reconstructed by the media shader.
  */
-export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean } = {}): VideoHandle | null {
+export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean; alphaPacked?: boolean } = {}): VideoHandle | null {
   // Created in an effect, never in render: React (StrictMode, concurrent rendering) may run a
   // render twice and keep one result, and a <video> made in the discarded render would stay in
   // the page, buffering and holding a decoder, with nothing left to remove it (seen: two decoders
   // per layer, 26 elements alive for a two-scene show).
   const [h, setH] = useState<VideoHandle | null>(null);
   const lazy = !!opts.lazy;
-  const alpha = !!opts.alpha && isWebKit && typeof VideoFrame !== "undefined";
+  const packed = !!opts.alphaPacked;
+  const alpha = !!opts.alpha && !packed && isWebKit;
   useEffect(() => {
     if (!url) {
       setH(null);
@@ -193,13 +200,13 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
     v.muted = true;
     v.loop = true;
     v.preload = "auto";
-    if (!lazy) v.src = url;
     const texture = new THREE.VideoTexture(v);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
-    const releaseFrame = alpha ? uploadAsVideoFrame(v, texture) : null;
+    texture.userData.alphaPacked = packed;
+    const releaseFrame = alpha ? uploadViaCanvas(v, texture) : null;
     // Uploading an element that has no frame yet hangs WebKit: texImage2D asks the GPU process for the
     // picture over a sync IPC, and a player with none waits up to a second for it in a nested run loop that
     // serves every window's requests. At a TAKE, with new players in the operator and the output, those
@@ -226,7 +233,11 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
     const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true, framed: false };
     arm();
     setH(handle);
+    // StrictMode replays effects immediately. Starting and cancelling native
+    // metadata loads in that replay can wedge WebKit's AVAsset teardown on Intel.
+    const loadTimer = !lazy ? setTimeout(() => { v.src = url; }, 0) : null;
     return () => {
+      if (loadTimer !== null) clearTimeout(loadTimer);
       v.pause();
       v.removeAttribute("src");
       v.load();
@@ -236,7 +247,7 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
       counters.delete(handle);
       setH((cur) => (cur === handle ? null : cur));
     };
-  }, [url, lazy, alpha]);
+  }, [url, lazy, alpha, packed]);
   return h;
 }
 

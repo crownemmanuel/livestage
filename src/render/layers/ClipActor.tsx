@@ -45,9 +45,12 @@ uniform float ground;   // uv.y of the ground contact line (y up)
 uniform float squash;   // how flat the shadow lies
 uniform float shear;    // sideways lean from the sun direction
 uniform float opacity;
+uniform float alphaPacked;
+uniform float packedTexel;
 varying vec2 vUv;
 float alphaAt(vec2 p) {
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 0.0;
+  if (alphaPacked > 0.5) return texture2D(map, vec2(p.x, clamp(p.y * 0.5, packedTexel * 0.5, 0.5 - packedTexel * 0.5))).r;
   return texture2D(map, p).a;
 }
 void main() {
@@ -75,7 +78,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
   const asset = srcId ? assets.find((a) => a.id === srcId) : undefined;
   // Cold until the frame loop decides the clip can come next (see setWarm): an actor with ten
   // clips must not hold ten decoders in every window for the one clip that is on screen.
-  const video = useVideo(playableUrl(asset), { lazy: true, alpha: asset?.hasAlpha });
+  const video = useVideo(playableUrl(asset), { lazy: true, alpha: asset?.hasAlpha, alphaPacked: asset?.alphaPacked });
   useEffect(() => {
     if (!video) return;
     handles.set(clip.id, video);
@@ -97,7 +100,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
         transparent: true,
         depthWrite: false,
         depthTest: false,
-        uniforms: { map: { value: null }, flipX: { value: 0 }, ground: { value: 0.25 }, squash: { value: 0.22 }, shear: { value: 0.6 }, opacity: { value: 0.5 } },
+        uniforms: { map: { value: null }, alphaPacked: { value: 0 }, packedTexel: { value: 0 }, flipX: { value: 0 }, ground: { value: 0.25 }, squash: { value: 0.22 }, shear: { value: 0.6 }, opacity: { value: 0.5 } },
       }),
     [],
   );
@@ -180,7 +183,7 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
     mat.uniforms.grade.value.copy(frame.mediaGrade);
 
     // Frame rectangle: fitted to the plate's aspect and framing so it lines up with the background.
-    const aspect = actor.frameAspect > 0 ? actor.frameAspect : video.video.videoWidth / Math.max(1, video.video.videoHeight);
+    const aspect = actor.frameAspect > 0 ? actor.frameAspect : video.video.videoWidth / Math.max(1, video.video.videoHeight / (asset?.alphaPacked ? 2 : 1));
     const canvasAspect = canvasW / canvasH;
     let w = canvasW;
     let h = canvasH;
@@ -223,6 +226,8 @@ function ClipQuad({ actor, clip, order, handles }: { actor: ClipActorComponent; 
       shadow.scale.copy(mesh.scale);
       shadow.position.copy(mesh.position);
       const u = shadowMat.uniforms;
+      u.alphaPacked.value = asset?.alphaPacked ? 1 : 0;
+      u.packedTexel.value = asset?.alphaPacked ? 1 / Math.max(2, video.video.videoHeight) : 0;
       u.map.value = video.texture;
       u.flipX.value = mirror ? 1 : 0;
       u.ground.value = 1 - L.pivotY;

@@ -30,7 +30,12 @@ import { armLiveState, flushLiveState, loadLiveState, setPendingSource, startLiv
 export function probeDuration(url: string): Promise<number | null> {
   return new Promise((resolve) => {
     const v = document.createElement("video");
+    let settled = false;
     const done = (d: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      v.onloadedmetadata = v.onerror = null;
       v.removeAttribute("src");
       v.load();
       resolve(d);
@@ -39,7 +44,7 @@ export function probeDuration(url: string): Promise<number | null> {
     v.muted = true;
     v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
     v.onerror = () => done(null);
-    setTimeout(() => done(null), 4000);
+    const timer = setTimeout(() => done(null), 4000);
     v.src = url;
   });
 }

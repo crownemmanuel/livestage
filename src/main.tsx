@@ -8,9 +8,12 @@ import { OperatorApp } from "@/app/OperatorApp";
 document.documentElement.classList.add("dark");
 document.title = windowRole === "output" ? "LiveStage — Output" : "LiveStage";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>{windowRole === "output" ? <OutputApp /> : <OperatorApp />}</StrictMode>,
-);
+const root = createRoot(document.getElementById("root")!);
+if (import.meta.env.DEV && (import.meta.env.VITE_SLS_VIDEO_TEST === "1" || new URLSearchParams(location.search).has("video-test"))) {
+  void import("./dev/VideoCompatibilityApp").then(({ VideoCompatibilityApp }) => root.render(<VideoCompatibilityApp />));
+} else {
+  root.render(<StrictMode>{windowRole === "output" ? <OutputApp /> : <OperatorApp />}</StrictMode>);
+}
 
 if (import.meta.env.DEV) {
   // Dev-only handle for inspecting state from the console.

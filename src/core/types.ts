@@ -34,6 +34,8 @@ export interface Asset {
   ephemeral?: boolean;
   /** Video/image declares an alpha channel (WebM VP9 alpha, HEVC alpha, PNG). */
   hasAlpha?: boolean;
+  /** Video stores colour in its top half and a grayscale alpha mask in its bottom half. */
+  alphaPacked?: boolean;
   /** HEVC-with-alpha twin of a transparent WebM, played on WebKit (macOS), which cannot decode VP9 alpha. */
   macUrl?: string;
   /** Ships with the app (served from /media); never deleted from disk. */

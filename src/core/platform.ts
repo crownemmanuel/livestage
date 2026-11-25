@@ -13,7 +13,7 @@ export const isWebKit =
 /** The URL this webview should play for an asset (its HEVC-alpha twin on WebKit, when there is one). */
 export function playableUrl(a: Asset | undefined | null): string | null {
   if (!a) return null;
-  return isWebKit && a.macUrl ? a.macUrl : a.url;
+  return isWebKit && !a.alphaPacked && a.macUrl ? a.macUrl : a.url;
 }
 
 export const windowRole: "operator" | "output" =

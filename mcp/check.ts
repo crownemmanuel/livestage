@@ -74,6 +74,8 @@ if (status.error) {
   ok("schema cueActions", Array.isArray(schema.json?.cueActions?.types), `${schema.json?.cueActions?.types?.length} action types`);
   const weather = await call("schema", { topic: "effects" });
   ok("schema weather controls", ["daynight", "rain", "fog"].every((type) => weather.json?.effects?.some((e: { type: string }) => e.type === type)));
+  const mediaSchema = await call("schema", { topic: "components" });
+  ok("schema describes packed alpha", typeof mediaSchema.json?.assets?.alphaPacked === "string");
   const width = await call("get", { path: "project/output/canvasWidth" });
   ok("get path", typeof width.json === "number", String(width.json));
   ok("bad path explains", !!(await call("get", { path: "project/nope/x" })).error);
@@ -125,6 +127,14 @@ if (status.error) {
     ok("scene_create", !!sc.json?.id, sc.error ?? sc.json?.code);
     const id = sc.json?.id;
     if (id) {
+      // Import metadata only; no media is played or sent to the wall.
+      const packed = await call("asset_import", { url: "/mcp-check-packed-alpha.mp4", name: "MCP packed-alpha check", type: "video", alphaPacked: true, optimise: false });
+      ok("asset_import packed alpha implies transparency", packed.json?.alphaPacked === true && packed.json?.hasAlpha === true, packed.error ?? "");
+      if (packed.json?.id) {
+        const listed = await call("list_assets", { query: "MCP packed-alpha check" });
+        ok("list_assets reports packed alpha", listed.json?.some((a: { id: string; alphaPacked?: boolean }) => a.id === packed.json.id && a.alphaPacked));
+        ok("remove packed-alpha check asset", !(await call("asset_remove", { asset: packed.json.id })).error);
+      }
       const bg = await call("component_add", { scene: id, kind: "background", name: "Sky", props: { source: "environment", env: { timeOfDay: 0.3, storm: 0 } } });
       ok("component_add background", !!bg.json?.id, bg.error ?? "");
       const title = await call("component_add", { scene: id, kind: "text", name: "Title", props: { text: "MCP CHECK", initiallyVisible: false } });

@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 24;
+export const AGENT_SPEC_VERSION = 25;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -476,6 +476,7 @@ export const AGENT_COMMANDS = {
       name: str("Display name (default: the file name)."),
       type: oneOf(["image", "video", "model", "audio"], "Default: from the extension."),
       hasAlpha: bool("Video/image has transparency (never re-encoded)."),
+      alphaPacked: bool("Video has colour above a grayscale alpha mask (top/bottom packed H.264); implies hasAlpha. Plays the main URL on every platform."),
       optimise: bool("Re-encode a video that the wall would not play well (default true). false: only probe and report."),
     }),
   },

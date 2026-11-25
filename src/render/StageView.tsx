@@ -124,7 +124,6 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
   const solo = useShow((s) => s.solo);
   const hidden = useShow((s) => s.hidden);
   const rt = useSoloRuntime(fullRt, solo, hidden);
-  const key = rt?.key;
   const assets = useShow((s) => s.assets);
   const targetFps = useShow((s) => s.output.targetFps);
   const bg = useShow((s) => s.output.backgroundColor);
@@ -149,7 +148,6 @@ function PreviewSlot({ W, H, dpr, onCapture }: { W: number; H: number; dpr: numb
   return (
     <ErrorBoundary name="preview canvas" retryAfter={1500} fallback={null}>
     <SceneCanvas
-      key={`${key}:${solo ?? ""}:${hidden.join(",")}`}
       role="preview"
       runtime={rt}
       getRt={getRt}

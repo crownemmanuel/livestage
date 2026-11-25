@@ -7,7 +7,7 @@
 
 import { sceneNow } from "@/core/clock";
 import { clipStateAt } from "@/core/clipActor";
-import { playableUrl } from "@/core/platform";
+import { isTauri, playableUrl } from "@/core/platform";
 import { mediaElapsed, type Command } from "@/core/runtime";
 import type { Asset, SceneRuntime } from "@/core/types";
 import { useShow, type Target } from "@/store/show";
@@ -17,6 +17,23 @@ import { probeDuration } from "./operator";
 
 const durationCache = new Map<string, number>();
 const probing = new Map<string, Promise<number | null>>();
+const durationQueue: (() => Promise<void>)[] = [];
+let durationJobs = 0;
+function queueDuration(work: () => Promise<number | null>): Promise<number | null> {
+  return new Promise((resolve) => {
+    durationQueue.push(async () => {
+      try { resolve(await work()); } catch { resolve(null); }
+      finally { durationJobs--; pumpDurations(); }
+    });
+    pumpDurations();
+  });
+}
+function pumpDurations() {
+  while (durationJobs < 2 && durationQueue.length) {
+    durationJobs++;
+    void durationQueue.shift()!();
+  }
+}
 
 /** Length (s) of a video asset, if it has been probed. */
 export function knownDuration(assetId: string | null | undefined): number | undefined {
@@ -29,9 +46,23 @@ export function probeDurations(assets: Asset[], ids: string[]): Promise<void> {
     if (durationCache.has(id)) return Promise.resolve();
     let job = probing.get(id);
     if (!job) {
-      const url = playableUrl(assets.find((x) => x.id === id));
+      const asset = assets.find((x) => x.id === id);
+      if (asset?.probe?.duration_s) {
+        durationCache.set(id, asset.probe.duration_s);
+        return Promise.resolve();
+      }
+      const url = playableUrl(asset);
       if (!url) return Promise.resolve();
-      job = probeDuration(url).then((d) => {
+      job = queueDuration(async () => {
+        // Learning an entire show's sound lengths must not create dozens of
+        // WebKit media players and then cancel their in-flight metadata loads.
+        if (isTauri && asset?.path) {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const probe = await invoke<{ duration_s: number | null }>("media_probe", { path: asset.path });
+          return probe.duration_s;
+        }
+        return probeDuration(url);
+      }).then((d) => {
         probing.delete(id);
         if (d) durationCache.set(id, d);
         return d;

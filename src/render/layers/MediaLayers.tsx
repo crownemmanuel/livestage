@@ -36,7 +36,7 @@ export function useImageTexture(url: string | null) {
 }
 
 function texAspect(tex: THREE.Texture | null, video: HTMLVideoElement | null) {
-  if (video && video.videoWidth) return video.videoWidth / video.videoHeight;
+  if (video && video.videoWidth) return video.videoWidth / (video.videoHeight / (tex?.userData.alphaPacked ? 2 : 1));
   const img = tex?.image as { width?: number; height?: number } | undefined;
   return img?.width && img.height ? img.width / img.height : 16 / 9;
 }
@@ -139,7 +139,7 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
   const assetId = comp.kind === "video" ? comp.media.assetId : comp.assetId;
   const asset = assetId ? assets.find((a) => a.id === assetId) : undefined;
   const isVideo = comp.kind === "video";
-  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, { alpha: asset?.hasAlpha });
+  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, { alpha: asset?.hasAlpha, alphaPacked: asset?.alphaPacked });
   const image = useImageTexture(!isVideo && asset ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => {
@@ -270,7 +270,7 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
   const { assets, getRt, frame, canvasW, canvasH, isOutput, audio, role } = useStage();
   const asset = comp.media.assetId ? assets.find((a) => a.id === comp.media.assetId) : undefined;
   const isVideo = asset?.type === "video";
-  const video = useVideo(isVideo ? playableUrl(asset) : null, { alpha: asset?.hasAlpha });
+  const video = useVideo(isVideo ? playableUrl(asset) : null, { alpha: asset?.hasAlpha, alphaPacked: asset?.alphaPacked });
   const image = useImageTexture(asset && !isVideo ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat), [mat]);

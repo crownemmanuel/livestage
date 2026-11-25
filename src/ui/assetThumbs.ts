@@ -14,13 +14,20 @@ interface Info {
   duration?: number;
 }
 
-const useInfo = create<{ map: Record<string, Info> }>(() => ({ map: {} }));
+const useInfo = create<{ map: Record<string, Info & { source: string }> }>(() => ({ map: {} }));
 const queued = new Set<string>();
+const latestSource = new Map<string, string>();
 const queue: Asset[] = [];
 let running = 0;
 
-function done(id: string, info: Info) {
-  useInfo.setState((s) => ({ map: { ...s.map, [id]: info } }));
+function sourceOf(a: Asset): string {
+  return JSON.stringify([a.type, playableUrl(a), !!a.alphaPacked]);
+}
+
+function done(a: Asset, info: Info) {
+  const source = sourceOf(a);
+  if (latestSource.get(a.id) !== source) return;
+  useInfo.setState((s) => ({ map: { ...s.map, [a.id]: { ...info, source } } }));
 }
 
 function grabVideo(a: Asset): Promise<Info> {
@@ -43,18 +50,22 @@ function grabVideo(a: Asset): Promise<Info> {
     v.onloadedmetadata = () => {
       v.currentTime = Math.min(1, (v.duration || 2) / 3);
     };
-    v.onseeked = () => {
-      const aspect = v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : null;
+    const capture = () => {
+      if (settled) return;
+      const pictureHeight = v.videoHeight / (a.alphaPacked ? 2 : 1);
+      const aspect = v.videoWidth && pictureHeight ? v.videoWidth / pictureHeight : null;
       try {
         const c = document.createElement("canvas");
         c.width = 240;
         c.height = Math.round(240 / (aspect ?? 16 / 9));
-        c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
+        c.getContext("2d")!.drawImage(v, 0, 0, v.videoWidth, pictureHeight, 0, 0, c.width, c.height);
         finish({ src: c.toDataURL("image/jpeg", 0.72), aspect, duration: Number.isFinite(v.duration) ? v.duration : undefined });
       } catch {
         finish({ src: null, aspect, duration: Number.isFinite(v.duration) ? v.duration : undefined });
       }
     };
+    // WebKit can signal seeked before canvas has the decoded picture.
+    v.onseeked = () => { setTimeout(capture, 100); };
     v.onerror = () => finish({ src: null, aspect: null });
     setTimeout(() => finish({ src: null, aspect: null }), 8000);
     v.src = url;
@@ -75,8 +86,9 @@ function pump() {
     const a = queue.shift()!;
     running++;
     void (a.type === "video" ? grabVideo(a) : grabImage(a))
-      .then((info) => done(a.id, info))
+      .then((info) => done(a, info))
       .finally(() => {
+        queued.delete(JSON.stringify([a.id, sourceOf(a)]));
         running--;
         pump();
       });
@@ -86,13 +98,17 @@ function pump() {
 /** Thumbnail + aspect for an asset (requests it on first use). Audio and models have none. */
 export function useAssetInfo(a: Asset | undefined | null): Info | null {
   const info = useInfo((s) => (a ? s.map[a.id] : undefined));
+  const source = a ? sourceOf(a) : null;
   useEffect(() => {
-    if (!a || (a.type !== "video" && a.type !== "image") || queued.has(a.id)) return;
-    queued.add(a.id);
+    if (!a || (a.type !== "video" && a.type !== "image")) return;
+    latestSource.set(a.id, sourceOf(a));
+    const key = JSON.stringify([a.id, source]);
+    if (info?.source === source || queued.has(key)) return;
+    queued.add(key);
     queue.push(a);
     pump();
-  }, [a]);
-  return info ?? null;
+  }, [a, source, info?.source]);
+  return info?.source === source ? info : null;
 }
 
 /** Aspect of an asset if known (for on-screen boxes); requests it like useAssetInfo. */

@@ -31,7 +31,7 @@ import { instrumentUploads } from "./uploadStats";
 
 export interface SceneCanvasProps {
   role: SlotRole;
-  /** Runtime key the canvas was mounted for; content is built from this runtime's scene. */
+  /** Content is rebuilt for a new runtime; the preview can keep its WebGL context. */
   runtime: SceneRuntime;
   getRt: () => SceneRuntime | null;
   getPoses: () => { poses: ActorPoses; at: number };
@@ -72,19 +72,21 @@ export function SceneCanvas(p: SceneCanvasProps) {
   const [gen, setGen] = useState(0);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const dead = useRef(false);
+  const releaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Browsers allow only a handful of live WebGL contexts per page. Every TAKE mounts a new
   // canvas, so release the old context the moment its canvas goes, instead of waiting for GC.
-  useEffect(
-    () => () => {
-      dead.current = true;
-      try {
-        glRef.current?.forceContextLoss();
-      } catch {
-        /* already gone */
-      }
-    },
-    [],
-  );
+  useEffect(() => {
+    dead.current = false;
+    if (releaseTimer.current) clearTimeout(releaseTimer.current);
+    return () => {
+      // React StrictMode immediately re-runs this effect without removing the
+      // canvas. Do not destroy the context during that simulated unmount.
+      releaseTimer.current = setTimeout(() => {
+        dead.current = true;
+        try { glRef.current?.forceContextLoss(); } catch { /* already gone */ }
+      }, 0);
+    };
+  }, []);
 
   return (
     <Canvas
@@ -100,6 +102,7 @@ export function SceneCanvas(p: SceneCanvasProps) {
         glRef.current = gl;
         instrumentUploads(gl.getContext());
         const el = gl.domElement;
+        el.dataset.slsRole = p.role;
         // A lost context (driver reset, GPU hiccup) must never leave the wall frozen: let the
         // browser restore it, then rebuild this canvas from the same runtime. Not every browser
         // restores a lost context (WebKit may not): if nothing comes within RESTORE_WAIT_MS a new
@@ -127,7 +130,7 @@ export function SceneCanvas(p: SceneCanvasProps) {
         {limited && <FrameLimiter fps={p.targetFps} />}
         <FrameDriver />
         <CameraRig />
-        <SceneContent runtime={p.runtime} background={p.background} onCapture={p.onCapture} />
+        <SceneContent key={p.runtime.key} runtime={p.runtime} background={p.background} onCapture={p.onCapture} />
       </StageContext.Provider>
     </Canvas>
   );
@@ -176,6 +179,7 @@ function CameraRig() {
   const look = useMemo(() => new THREE.Vector3(), []);
   // Smoothed follow destination so a 30 Hz pose feed never steps the camera.
   const follow = useRef<{ x: number; z: number; ready: boolean }>({ x: 0, z: 0, ready: false });
+  const runKey = useRef<string | null>(null);
   useLayoutEffect(() => {
     set({ camera });
   }, [camera, set]);
@@ -183,6 +187,10 @@ function CameraRig() {
   useFrame((_, dt) => {
     const rt = getRt();
     if (!rt) return;
+    if (runKey.current !== rt.key) {
+      runKey.current = rt.key;
+      follow.current.ready = false;
+    }
     const cam = rt.camera;
     let to = cam.to;
     if (cam.follow) {
