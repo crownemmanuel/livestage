@@ -1,0 +1,67 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<canvas id="c" width="3072" height="768" style="width:360px;height:90px"></canvas>
+<script>
+// Does starting a video, or turning its sound on, hold the page? Each mode loads `v` into a fresh <video>,
+// draws it into WebGL every frame (as the wall does) and records every main-thread hold over 50 ms, seen as a
+// late worker beat (5 ms) or a late frame, with what had just happened.
+//   muted  = load and play muted
+//   sound  = load and play with sound (volume 0.001)
+//   unmute = play muted, then turn the sound on after 1.5 s (what the app does: videos start muted, the sync
+//            then unmutes the one that should sound)
+const q = new URLSearchParams(location.search);
+const via = q.get("via") || "asset";
+const u = (p) => (via === "http" ? location.origin + "/f" + encodeURI(p) : "asset://localhost/" + encodeURIComponent(p));
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(o); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let t0 = performance.now(), lastEvent = "start", holds = [];
+const mark = (e) => { lastEvent = `${e}@${Math.round(performance.now() - t0)}`; };
+const w = new Worker(URL.createObjectURL(new Blob(["setInterval(()=>postMessage(0),5)"], { type: "text/javascript" })));
+let lastBeat = performance.now();
+w.onmessage = () => { const t = performance.now(); if (t - lastBeat > 50) holds.push({ via: "beat", at: Math.round(t - t0), ms: Math.round(t - lastBeat), after: lastEvent }); lastBeat = t; };
+
+const gl = document.getElementById("c").getContext("webgl2");
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+let video = null, lastFrame = performance.now(), uploads = 0;
+const frame = () => {
+  const t = performance.now();
+  if (t - lastFrame > 50) holds.push({ via: "frame", at: Math.round(t - t0), ms: Math.round(t - lastFrame), after: lastEvent });
+  lastFrame = t;
+  if (video && video.readyState >= 2) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video); uploads++; }
+  requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+
+async function run(file, mode, i) {
+  holds = []; uploads = 0; t0 = performance.now(); mark("create");
+  const v = document.createElement("video");
+  v.crossOrigin = "anonymous"; v.playsInline = true; v.preload = "auto"; v.loop = true;
+  v.muted = mode !== "sound"; v.volume = 0.001;
+  v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01";
+  document.body.appendChild(v);
+  v.addEventListener("error", () => post({ err: "video error", code: v.error?.code, msg: v.error?.message, file }));
+  v.src = u(file); mark("src");
+  const ok = await Promise.race([new Promise((r) => v.addEventListener("canplay", () => r(true), { once: true })), sleep(8000).then(() => false)]);
+  if (!ok) { post({ err: "no canplay in 8 s", readyState: v.readyState, networkState: v.networkState, file }); v.remove(); return; }
+  mark("canplay");
+  video = v;
+  const tp = performance.now();
+  await v.play().catch((e) => post({ err: String(e) })); mark("play");
+  const playMs = Math.round(performance.now() - tp);
+  if (mode === "unmute") { await sleep(1500); const tu = performance.now(); v.muted = false; mark("unmuted"); holds.push({ via: "unmute-call", ms: Math.round(performance.now() - tu) }); }
+  await sleep(mode === "unmute" ? 2500 : 4000);
+  mark("teardown");
+  video = null; v.pause(); v.removeAttribute("src"); v.load(); v.remove();
+  await sleep(500);
+  post({ file: file.split("/").pop(), mode, run: i, playCallMs: playMs, uploads, holds });
+}
+(async () => {
+  await sleep(800);
+  const files = [q.get("v"), q.get("v2")].filter(Boolean);
+  for (const f of files) for (const mode of ["muted", "sound", "unmute"]) for (let i = 0; i < 2; i++) await run(f, mode, i);
+  post({ done: true });
+})();
+</script></body></html>

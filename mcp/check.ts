@@ -78,12 +78,18 @@ if (status.error) {
   ok("get path", typeof width.json === "number", String(width.json));
   ok("bad path explains", !!(await call("get", { path: "project/nope/x" })).error);
   ok("io_log", Array.isArray((await call("io_log", { limit: 5 })).json));
+  ok("playback_log", Array.isArray((await call("playback_log", { limit: 5 })).json?.events));
+  const outDoc = await call("schema", { topic: "output" });
+  ok("schema output shows the video engine", ["auto", "webcodecs", "element"].includes(outDoc.json?.output?.current?.videoEngine ?? "auto") && typeof outDoc.json?.output?.videoEngine === "string", outDoc.error ?? `videoEngine ${outDoc.json?.output?.current?.videoEngine ?? "auto"}`);
+  ok("status reports the video engine", typeof status.json?.output?.videoEngine === "string", `operator WebCodecs players ${JSON.stringify(status.json?.output?.operatorVideo?.players ?? null)}`);
   const tl = await call("timeline", status.json.preview ? {} : { scene: scenes.json?.[0]?.id });
   ok("timeline", Array.isArray(tl.json?.cues) && Array.isArray(tl.json?.tracks), tl.error ?? `${tl.json?.cues?.length} cues, ${tl.json?.tracks?.length} tracks, ${tl.json?.end} s`);
   if (status.json.preview) {
     // Read-only: where the preview's video is, without holding or moving it.
     const tr = await call("transport", { target: "preview", op: "status" });
     ok("transport status (preview)", typeof tr.json?.held === "boolean", tr.error ?? (tr.json?.video ? `${tr.json.video.label} ${tr.json.video.position}/${tr.json.video.duration} s` : "no video"));
+    const dr = await call("drive", { target: "preview" });
+    ok("drive status (preview)", Array.isArray(dr.json?.layers), dr.error ?? `${dr.json?.layers?.length} drive layers, speed ${dr.json?.rate}`);
   }
   const check = await call("asset_check");
   ok("asset_check", Array.isArray(check.json?.assets), JSON.stringify(check.json).slice(0, 200));

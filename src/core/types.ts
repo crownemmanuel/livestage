@@ -85,7 +85,16 @@ export interface OutputSettings {
   standby: { text: string; subtext: string; assetId: string | null; color: string };
   /** How a show timer looks when it is put on screen over everything. */
   timerOverlay: TimerOverlayStyle;
+  /** What plays the wall's videos (render/layers/video.ts playsWithCodecs). Unset = "auto". */
+  videoEngine?: VideoEngine;
 }
+
+/**
+ * auto: WebCodecs on the Mac (its platform player can hold the GPU process for seconds), the platform player
+ * elsewhere; webcodecs: WebCodecs wherever it is available; element: the platform's <video> everywhere.
+ * Transparent cut-outs and files WebCodecs cannot play use the platform player in every case.
+ */
+export type VideoEngine = "auto" | "webcodecs" | "element";
 
 export type OverlayPosition = "top-left" | "top" | "top-right" | "left" | "center" | "right" | "bottom-left" | "bottom" | "bottom-right";
 
@@ -199,7 +208,11 @@ export interface LayerMask {
   feather: number;
 }
 
-export type EntranceKind = "none" | "fade" | "slide-left" | "slide-right" | "slide-up" | "scale";
+/**
+ * How a layer comes on or goes off. slide-* move a little and fade; off-left / off-right move a set piece all the way
+ * past that edge of the wall (or in from it) at full opacity, never fading.
+ */
+export type EntranceKind = "none" | "fade" | "slide-left" | "slide-right" | "slide-up" | "scale" | "off-left" | "off-right";
 
 export interface EntranceExit {
   enter: EntranceKind;
@@ -242,6 +255,8 @@ export interface BackgroundComponent extends ComponentBase {
   crop: Crop;
   /** Vertical framing when the plate is taller than the wall: 0 shows the top, 1 the bottom. */
   anchorY?: number;
+  /** Horizontal position: slides the picture left (-) or right (+) by this share of the wall's width, same size. */
+  offsetX?: number;
   opacity: number;
   /** Crossfade / relight duration when this background is activated. */
   transitionDuration: number;
@@ -249,6 +264,25 @@ export interface BackgroundComponent extends ComponentBase {
   kenBurns?: KenBurns;
   /** 2.5D depth: how much the plate drifts with the camera sway (0 = locked). Cut-out actors drift 1.6× more. */
   parallax?: number;
+}
+
+/**
+ * Hold to move: the operator moves this layer by holding an arrow key (→ forward, ← back, ↑ / ↓ faster / slower),
+ * so a crowd on the wall keeps pace with the cast. It travels from where it stands (screen.x) up to `distance`
+ * further on, and stops there. Other layers can follow it: a walk cycle shown only while it moves, a standing
+ * loop shown only while it stops, a lit plate uncovered up to the crowd as it goes (`reveal`).
+ */
+export interface LayerDrive {
+  /** Follow this layer's drive instead of having one of its own (same travel, same moving / stopped). */
+  follow?: string;
+  /** How far it travels, in wall widths (negative = to the left). */
+  distance: number;
+  /** Wall widths per second at normal speed: the speed its feet walk at, so they never skate. */
+  speed: number;
+  /** When it shows: always (default), only while moving (a walk cycle), only while stopped (standing still). */
+  show?: "always" | "moving" | "stopped";
+  /** Do not move: uncover the layer from the left up to the driven layer's centre + `lead` (wall widths), feathered by mask.feather. */
+  reveal?: { lead: number };
 }
 
 export interface MediaLayerCommon {
@@ -261,6 +295,8 @@ export interface MediaLayerCommon {
   blend: BlendMode;
   anim: EntranceExit;
   walker: WalkerSettings;
+  /** Hold to move (see LayerDrive). Absent: the layer stays where it is. */
+  drive?: LayerDrive;
 }
 
 export interface VideoLayerComponent extends ComponentBase, MediaLayerCommon {
@@ -571,7 +607,7 @@ export interface TransitionSpec {
   direction?: "left" | "right" | "up" | "down";
   /** For wipe/burn: edge softness (0..1). */
   softness?: number;
-  /** For video: seconds it fades into the scene at its end (0 = cut). Unset: the last tenth of it. */
+  /** For video: seconds it fades into the scene at its end. Unset or 0: a cut. */
   fadeOut?: number;
 }
 
@@ -635,6 +671,8 @@ export type CueAction =
   | { type: "route"; layerId: string; op: "play" | "reset" | "complete"; delay: number }
   /** Ramp a video's playback speed (time-lapse stings, the rewind, the run). */
   | { type: "media.speed"; layerId: string; rate: number; duration: number; delay: number }
+  /** Hold to move, from a cue: walk the drive layer to `to` (share of its distance, 0 = where it stands, 1 = the end) at its own speed, then stop. */
+  | { type: "drive"; layerId: string; to: number; delay: number }
   /** Glide the picture's framing (zoom / reposition), e.g. a slow push-in on a video plate. */
   | { type: "framing"; zoom: number; x: number; y: number; duration: number; delay: number }
   /** Change one live parameter of an effect (stars turn red, snow gets heavier…). */
@@ -1127,6 +1165,20 @@ export interface SceneRuntime {
   /** One-shot sounds (scene time). */
   sounds?: SoundEvent[];
   framing?: { from: Framing; to: Framing; at: number; dur: number };
+  /** Hold-to-move layers (by the id of the layer the keys move): where each was at `at` and how fast it goes since. */
+  drives?: Record<string, DriveRuntime>;
+  /** Operator speed for hold-to-move (1 = the layer's own speed); ↑ / ↓ change it. */
+  driveRate?: number;
+}
+
+/** A hold-to-move layer since its last change: `off` (wall widths travelled from its start) and `trav` (distance walked, both ways) at scene time `at`, moving at `v` × its speed since. */
+export interface DriveRuntime {
+  at: number;
+  off: number;
+  trav: number;
+  v: number;
+  /** Stop when `off` reaches this (a cue's walk to a point); absent = go until the key is let go or the end. */
+  to?: number;
 }
 
 export interface ClipSegment {

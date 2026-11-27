@@ -34,8 +34,14 @@ export interface OutputStatus {
   upload?: { ms: number; count: number };
   /** <video> elements in the window, and how many hold a loaded file (a decoder each). */
   videoElements?: { total: number; warm: number };
+  /** WebCodecs players in the window (render/video), and how many are warm (a decoder each). */
+  codecPlayers?: { total: number; warm: number };
+  /** Files this window plays on the platform player although WebCodecs was chosen, and why (file name -> reason). */
+  codecRefused?: Record<string, string>;
   /** Frames that took over 40 ms in the last second: how long, and what bus message arrived how long before. */
   stalls?: { ms: number; sinceBusMs: number; bus: string }[];
+  /** How long a seek of a playing video takes in this window (ms), learned: playing seeks aim ahead by it. */
+  seekLeadMs?: number;
 }
 
 /** A scene runtime on the wire: its scene travels separately, once per run (keyed by `key`). */

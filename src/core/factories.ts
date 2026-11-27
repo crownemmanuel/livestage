@@ -224,6 +224,7 @@ export function defaultOutput(): OutputSettings {
     testPattern: false,
     standby: { text: "LIVESTAGE", subtext: "", assetId: null, color: "#000000" },
     timerOverlay: defaultTimerOverlay(),
+    videoEngine: "auto",
   };
 }
 

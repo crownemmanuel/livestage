@@ -5,11 +5,12 @@ import { clamp, easeOut, lerp, smootherstep } from "@/core/clock";
 import { playableUrl } from "@/core/platform";
 import { hash2 } from "@/core/noise";
 import { mediaElapsed, mediaRate, videoAudioFade } from "@/core/runtime";
+import { driverOf, layerDrive } from "@/core/drive";
 import { mixLevel } from "@/store/show";
 import type { BackgroundComponent, EntranceKind, ImageLayerComponent, KenBurns, MediaSettings, VideoLayerComponent } from "@/core/types";
 import { useStage } from "../frame";
 import { applyBlend, applyMediaSettings, makeMediaMaterial, missingTexture, setMap } from "./mediaMaterial";
-import { isPackedTexture, mediaTime, syncVideo, useVideo, videoAlpha, videoDuration, type SyncWant, type VideoHandle } from "./video";
+import { isPackedTexture, mediaTime, syncVideo, useVideo, videoAlpha, videoDuration, type SyncWant, type VideoHandle, type VideoLike } from "./video";
 
 export function useImageTexture(url: string | null) {
   const [tex, setTex] = useState<THREE.Texture | null>(null);
@@ -43,15 +44,18 @@ export function useImageTexture(url: string | null) {
   return tex;
 }
 
-function texAspect(tex: THREE.Texture | null, video: HTMLVideoElement | null) {
+function texAspect(tex: THREE.Texture | null, video: VideoLike | null) {
   // An alpha-packed file is twice as tall as the picture it shows.
   if (video && video.videoWidth) return (video.videoWidth / video.videoHeight) * (isPackedTexture(tex) ? 2 : 1);
   const img = tex?.image as { width?: number; height?: number } | undefined;
   return img?.width && img.height ? img.width / img.height : 16 / 9;
 }
 
-/** Entrance/exit animation factor and offsets. Anything unknown (a text-only name like "burn" or "rise") fades. */
-function entrance(kind: EntranceKind, k: number) {
+/**
+ * Entrance/exit animation factor and offsets. Anything unknown (a text-only name like "burn" or "rise") fades.
+ * `off` = how far (canvas widths) the layer must travel to clear the left / right edge, for off-left / off-right.
+ */
+function entrance(kind: EntranceKind, k: number, off = { left: 1, right: 1 }) {
   const e = easeOut(k);
   switch (kind) {
     case "none":
@@ -67,6 +71,11 @@ function entrance(kind: EntranceKind, k: number) {
       return { opacity: Math.min(1, k * 3), dx: 0, dy: (1 - e) * 0.25, scale: 1 };
     case "scale":
       return { opacity: k, dx: 0, dy: 0, scale: 0.6 + 0.4 * e };
+    // A set piece moving on or off the wall: full opacity the whole way, gone only once it is past the edge.
+    case "off-left":
+      return { opacity: k > 0 ? 1 : 0, dx: -(1 - smootherstep(k)) * off.left, dy: 0, scale: 1 };
+    case "off-right":
+      return { opacity: k > 0 ? 1 : 0, dx: (1 - smootherstep(k)) * off.right, dy: 0, scale: 1 };
   }
 }
 
@@ -90,6 +99,13 @@ function nativeLoop(m: MediaSettings, video: VideoHandle): number | undefined {
   return m.loop && m.startTime === 0 && m.endTime == null ? videoDuration(video) || undefined : undefined;
 }
 
+/** An in/out-point loop's span (s), for the WebCodecs player (a whole-file loop is `nativeLoop`). */
+function loopSegment(m: MediaSettings, video: VideoHandle): { from: number; to: number } | undefined {
+  if (!m.loop || m.reverse || (m.startTime <= 0 && m.endTime == null)) return undefined;
+  const end = m.endTime ?? videoDuration(video);
+  return end > m.startTime + 0.05 ? { from: m.startTime, to: end } : undefined;
+}
+
 /** A video that is not on screen: silent, paused on `time` (the frame its next showing starts from). */
 function parkedAt(time: number, once: boolean): SyncWant {
   return { play: false, time: Math.max(0, time), rate: 1, muted: true, volume: 0, once };
@@ -104,6 +120,9 @@ interface InstanceState {
   /** seconds this instance's media has been playing */
   elapsed: number;
 }
+
+/** How long a hold-to-move walk cycle and its standing loop take to hand over (ms). */
+const DRIVE_SWAP_MS = 200;
 
 /** Deterministic walker instance placement (people crossing the frame). */
 function walkerInstance(c: LayerComp, i: number, elapsed: number, out: InstanceState) {
@@ -153,7 +172,7 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
   const assetId = comp.kind === "video" ? comp.media.assetId : comp.assetId;
   const asset = assetId ? assets.find((a) => a.id === assetId) : undefined;
   const isVideo = comp.kind === "video";
-  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, videoAlpha(asset));
+  const video = useVideo(isVideo && asset ? playableUrl(asset) : null, { ...videoAlpha(asset), sound: audio && isVideo && !(comp as VideoLayerComponent).media.muted });
   const image = useImageTexture(!isVideo && asset ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => {
@@ -181,7 +200,10 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
     const t = frame.t;
     const a = comp.anim ?? { enter: "fade", exit: "fade", duration: 0.5 };
     const k = clamp((t - lr.changedAt) / (a.duration * 1000 || 1), 0, 1);
-    const anim = lr.visible ? entrance(a.enter, k) : entrance(a.exit, 1 - k);
+    // off-left / off-right travel exactly far enough for this layer to clear the wall's edge (a little more).
+    const half = comp.placement === "world" ? 0 : comp.screen.width / 2;
+    const off = { left: comp.screen.x + half + 0.02, right: 1 - comp.screen.x + half + 0.02 };
+    const anim = lr.visible ? entrance(a.enter, k, off) : entrance(a.exit, 1 - k, off);
     const presence = anim.opacity;
     const elapsed = (t - lr.startAt) / 1000;
 
@@ -194,7 +216,20 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
       inst.flip = false;
       inst.elapsed = elapsed;
     }
-    const show = presence > 0.001 && inst.visible;
+    // Hold to move: carried along by the operator's arrow keys (its own drive or the one it follows).
+    const dv = comp.drive && comp.placement !== "world" ? layerDrive(rt, comp, t) : null;
+    let driveFade = 1;
+    if (dv) {
+      if (!comp.drive!.reveal) inst.x += dv.off;
+      const showWhen = comp.drive!.show ?? "always";
+      if (showWhen !== "always") {
+        // The walk cycle and the standing loop hand over in a fifth of a second, at the same place.
+        const k = clamp((t - dv.changedAt) / DRIVE_SWAP_MS, 0, 1);
+        const on = showWhen === "moving" ? dv.moving : !dv.moving;
+        driveFade = on ? k : 1 - k;
+      }
+    }
+    const show = presence * driveFade > 0.001 && inst.visible;
     mesh.visible = show;
 
     if (video) {
@@ -208,17 +243,19 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
         // nobody sees, in every canvas that has the scene.
         syncVideo(video, parkedAt(mediaTime(m, comp.walker.enabled ? index * 1.37 * m.playbackRate : 0, videoDuration(video)), !m.loop), frame.wall);
       } else {
-        // Walkers stagger their playback; a single layer follows the speed ramps.
-        const mediaSec = comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
+        // Walkers stagger their playback; a single layer follows the speed ramps; a walk cycle on a drive
+        // plays by the distance walked (its feet keep pace with the ground: no skating, still when stopped).
+        const walk = dv && comp.drive!.show === "moving" && dv.drive.speed > 0;
+        const mediaSec = walk ? (dv.trav / dv.drive.speed) * m.playbackRate : comp.walker.enabled ? (inst.elapsed + index * 1.37) * m.playbackRate : mediaElapsed(rt, comp.id, lr.startAt, t, m.playbackRate);
         const time = mediaTime(m, mediaSec, videoDuration(video));
-        const rate = comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
-        syncVideo(video, { play: rt.clock.pausedAt === null, time, rate: Math.abs(rate), muted: m.muted || !audio, local: role === "preview", volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video), once: !m.loop }, frame.wall);
+        const rate = walk ? m.playbackRate * Math.max(0.0625, Math.abs(rt.drives?.[driverOf(rt.scene, comp)!.id]?.v ?? 1)) : comp.walker.enabled ? m.playbackRate : mediaRate(rt, comp.id, t, m.playbackRate);
+        syncVideo(video, { play: rt.clock.pausedAt === null && (!walk || dv.moving), time, rate: Math.abs(rate), muted: m.muted || !audio, local: role === "preview", volume: m.volume * presence * mixLevel(comp.id) * videoAudioFade(rt, comp.id, t), reverse: m.reverse || rate < 0, loop: nativeLoop(m, video), once: !m.loop, segment: loopSegment(m, video) }, frame.wall);
       }
     }
     if (!show) return;
 
     setMap(mat, tex);
-    let opacity = comp.opacity * presence;
+    let opacity = comp.opacity * presence * driveFade;
     let rot = 0;
     let scale = inst.scale * anim.scale;
     let dy = anim.dy;
@@ -248,6 +285,12 @@ function MediaInstance({ comp, index }: { comp: LayerComp; index: number }) {
     } else {
       const wpx = comp.screen.width * canvasW * scale;
       mesh.scale.set(wpx, wpx / aspect, 1);
+      if (dv && comp.drive!.reveal) {
+        // Uncovered from the left up to the driven layer's centre + lead (in this layer's own u).
+        const edge = dv.driverX + dv.off + comp.drive!.reveal.lead;
+        mat.uniforms.maskShape.value = 3;
+        mat.uniforms.revealX.value = (edge - (inst.x - comp.screen.width / 2)) / Math.max(0.0001, comp.screen.width);
+      }
       // Front layers (closest to the audience) drift the most with the camera sway.
       const par = plateParallax(rt) * (comp.placement === "front" ? 1.6 : 0.6);
       mesh.position.set((inst.x + anim.dx - 0.5) * canvasW + frame.swayX * par * canvasW, (0.5 - inst.y - dy) * canvasH - frame.swayY * par * canvasH * 0.5, 0);
@@ -294,7 +337,7 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
   const { assets, getRt, frame, canvasW, canvasH, isOutput, audio, role } = useStage();
   const asset = comp.media.assetId ? assets.find((a) => a.id === comp.media.assetId) : undefined;
   const isVideo = asset?.type === "video";
-  const video = useVideo(isVideo ? playableUrl(asset) : null, videoAlpha(asset));
+  const video = useVideo(isVideo ? playableUrl(asset) : null, { ...videoAlpha(asset), sound: audio && !comp.media.muted });
   const image = useImageTexture(asset && !isVideo ? asset.url : null);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat), [mat]);
@@ -330,7 +373,7 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
         const time = mediaTime(comp.media, mediaSec, videoDuration(video));
         syncVideo(
           video,
-          { play: rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, local: role === "preview", volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video), once: !comp.media.loop },
+          { play: rt.clock.pausedAt === null, time: Math.max(0, time), rate: Math.abs(rate), muted: comp.media.muted || !audio || !isCur, local: role === "preview", volume: comp.media.volume * mixLevel(comp.id) * videoAudioFade(rt, comp.id, frame.t), reverse: comp.media.reverse || rate < 0, loop: nativeLoop(comp.media, video), once: !comp.media.loop, segment: loopSegment(comp.media, video) },
           frame.wall,
         );
       }
@@ -348,7 +391,7 @@ export function MediaBackground({ comp }: { comp: BackgroundComponent }) {
     const par = comp.parallax ?? 0;
     const s = kb.scale * (1 + 2 * par);
     mesh.scale.set(w * s, h * s, 1);
-    mesh.position.set(kb.x * canvasW + frame.swayX * par * canvasW, cy - kb.y * canvasH - frame.swayY * par * canvasH * 0.5, 0);
+    mesh.position.set(((comp.offsetX ?? 0) + kb.x) * canvasW + frame.swayX * par * canvasW, cy - kb.y * canvasH - frame.swayY * par * canvasH * 0.5, 0);
   });
   return <primitive object={mesh} />;
 }

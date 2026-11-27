@@ -15,6 +15,15 @@ export interface TransitionView {
   side: "in" | "out";
 }
 
+/**
+ * Program slots (by runtime key) this window need not draw this frame: a slot at opacity 0 (the scene under a
+ * video transition before it is uncovered, the outgoing one after), or every slot while an opaque transition
+ * video that has a picture covers the whole wall. A canvas not drawn keeps showing its last frame, so nothing
+ * changes on screen; its videos stay in sync (that is per-layer frame work) but nothing is uploaded or drawn.
+ * Written by the program slots on every animation frame, read by the compositor.
+ */
+export const unseenSlots = new Set<string>();
+
 /** Everything a scene renderer needs, shared via context across portals. */
 export interface StageCtx {
   role: SlotRole;

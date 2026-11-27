@@ -318,6 +318,7 @@ function BackgroundForm({ c, up }: { c: BackgroundComponent; up: Updater<Backgro
           />
           <CropFields crop={c.crop} set={(crop) => up((x) => (x.crop = crop))} />
           <SliderField label="Vertical framing" value={c.anchorY ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.anchorY = v))} />
+          <SliderField label="Horizontal position" value={c.offsetX ?? 0} min={-0.25} max={0.25} step={0.001} onChange={(v) => up((x) => (x.offsetX = Math.abs(v) < 0.0005 ? undefined : v))} />
           <SliderField label="Opacity" value={c.opacity} min={0} max={1} step={0.01} onChange={(v) => up((x) => (x.opacity = v))} />
           <SliderField label="Parallax" value={c.parallax ?? 0} min={0} max={0.08} step={0.001} onChange={(v) => up((x) => (x.parallax = v))} />
           <p className="-mt-1 pl-[104px] text-[10.5px] text-muted-foreground">2.5D depth with the scene's camera sway: the plate drifts a little, cut-out actors more.</p>
@@ -347,6 +348,8 @@ const ENTRANCES: { value: EntranceKind; label: string }[] = [
   { value: "slide-left", label: "Slide from right" },
   { value: "slide-right", label: "Slide from left" },
   { value: "slide-up", label: "Rise" },
+  { value: "off-left", label: "Slide fully off / in: left edge" },
+  { value: "off-right", label: "Slide fully off / in: right edge" },
   { value: "scale", label: "Scale" },
 ];
 
@@ -464,7 +467,76 @@ function LayerForm({ c, up }: { c: VideoLayerComponent | ImageLayerComponent; up
           </>
         )}
       </Section>
+      {c.placement !== "world" && <DriveFields c={c} up={up} />}
     </>
+  );
+}
+
+/** Hold to move: the operator walks this layer across the wall with the arrow keys (core/drive.ts). */
+function DriveFields({ c, up }: { c: VideoLayerComponent | ImageLayerComponent; up: Updater<VideoLayerComponent | ImageLayerComponent> }) {
+  const others = useProject((s) => s.project.scenes.find((x) => x.id === s.selectedSceneId)?.components ?? (NO_ITEMS as SceneComponent[])).filter(
+    (x): x is VideoLayerComponent | ImageLayerComponent => (x.kind === "video" || x.kind === "image") && x.id !== c.id && !!x.drive && !x.drive.follow,
+  );
+  const d = c.drive;
+  const mode = !d ? "off" : d.follow ? "follow" : "keys";
+  return (
+    <Section title="Hold to move">
+      <SelectField
+        label="Moved by"
+        value={mode}
+        onChange={(v) =>
+          up((x) => {
+            if (v === "off") delete x.drive;
+            else if (v === "keys") x.drive = { distance: x.drive?.distance ?? 0.4, speed: x.drive?.speed ?? 0.03, show: x.drive?.show };
+            else x.drive = { ...(x.drive ?? { distance: 0.4, speed: 0.03 }), follow: x.drive?.follow ?? others[0]?.id };
+          })
+        }
+        options={[
+          { value: "off", label: "Nothing (stays put)" },
+          { value: "keys", label: "Arrow keys: hold → / ←, ↑ / ↓ speed" },
+          ...(others.length ? [{ value: "follow", label: "Follows another layer" }] : []),
+        ]}
+      />
+      {d && mode === "follow" && (
+        <SelectField label="Follows" value={d.follow ?? ""} onChange={(v) => up((x) => (x.drive = { ...x.drive!, follow: v }))} options={others.map((o) => ({ value: o.id, label: o.name }))} />
+      )}
+      {d && mode === "keys" && (
+        <>
+          <SliderField label="Distance" value={d.distance} min={-1} max={1} step={0.005} unit="w" onChange={(v) => up((x) => (x.drive = { ...x.drive!, distance: v }))} />
+          <SliderField label="Speed" value={d.speed} min={0.002} max={0.2} step={0.001} unit="w/s" onChange={(v) => up((x) => (x.drive = { ...x.drive!, speed: v }))} />
+        </>
+      )}
+      {d && (
+        <>
+          <SelectField
+            label="Shows"
+            value={d.reveal ? "reveal" : (d.show ?? "always")}
+            onChange={(v) =>
+              up((x) => {
+                const n = { ...x.drive! };
+                if (v === "reveal") {
+                  n.reveal = { lead: n.reveal?.lead ?? 0.05 };
+                  delete n.show;
+                } else {
+                  delete n.reveal;
+                  n.show = v as "always" | "moving" | "stopped";
+                }
+                x.drive = n;
+              })
+            }
+            options={[
+              { value: "always", label: "Always" },
+              { value: "moving", label: "Only while moving (walk cycle, plays as it walks)" },
+              { value: "stopped", label: "Only while stopped (standing)" },
+              ...(mode === "follow" ? [{ value: "reveal", label: "Stays put, uncovered up to the mover (firelight)" }] : []),
+            ]}
+          />
+          {d.reveal && (
+            <SliderField label="Lead" value={d.reveal.lead} min={-0.3} max={0.3} step={0.005} unit="w" onChange={(v) => up((x) => (x.drive = { ...x.drive!, reveal: { lead: v } }))} />
+          )}
+        </>
+      )}
+    </Section>
   );
 }
 

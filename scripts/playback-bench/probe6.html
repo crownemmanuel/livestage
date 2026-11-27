@@ -1,0 +1,167 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<canvas id="c" width="3072" height="768" style="width:360px;height:90px"></canvas>
+<script type="module">
+// probe5's lion hand-offs (warm, start with sound, stop, cold), with the clips decoded by WebCodecs in a
+// worker instead of <video> players: no HTMLMediaElement anywhere on the page. Each clip's picture is the
+// frame for the page's clock, uploaded into WebGL from the VideoFrame; its sound is the clip's AAC track
+// decoded with decodeAudioData and played through Web Audio at the clip's start.
+// Holds are recorded as in probe5 ("beat" = main thread held, "frame" = no frame drawn for that long).
+// `via=asset` fetches through the bench's asset:// scheme (like Tauri), else the loopback server.
+// `hold=300&every=2000` blocks the main thread that long that often (the worker must keep decoding).
+const q = new URLSearchParams(location.search);
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(JSON.parse(JSON.stringify(o))); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const via = q.get("via") || "http";
+const u = (p) => (via === "asset" ? "asset://localhost" + encodeURI(p) : location.origin + "/f" + encodeURI(p));
+const t0 = performance.now();
+const absNow = () => performance.timeOrigin + performance.now();
+let lastEvent = "start";
+const holds = [];
+const events = [];
+const mark = (e) => { lastEvent = `${e}@${((performance.now() - t0) / 1000).toFixed(2)}`; events.push(lastEvent); };
+const beat = new Worker(URL.createObjectURL(new Blob(["setInterval(()=>postMessage(0),5)"], { type: "text/javascript" })));
+let lastBeat = performance.now();
+beat.onmessage = () => { const t = performance.now(); if (t - lastBeat > 50) holds.push(`beat ${Math.round(t - lastBeat)}ms after ${lastEvent}`); lastBeat = t; };
+
+if (typeof VideoDecoder === "undefined") { post({ error: "no VideoDecoder in this engine" }); post({ done: true }); throw new Error("no VideoDecoder"); }
+
+const gl = document.getElementById("c").getContext("webgl2");
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+// Draw the texture so the upload is really used (a fullscreen triangle).
+const prog = (() => {
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return o; };
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, "#version 300 es\nout vec2 uv;void main(){vec2 p=vec2(gl_VertexID==1?3.:-1.,gl_VertexID==2?3.:-1.);uv=p*.5+.5;uv.y=1.-uv.y;gl_Position=vec4(p,0,1);}"));
+  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, "#version 300 es\nprecision mediump float;in vec2 uv;uniform sampler2D t;out vec4 o;void main(){o=texture(t,uv);}"));
+  gl.linkProgram(p); return p;
+})();
+gl.useProgram(prog);
+
+const dec = new Worker("wc/worker.js", { type: "module" });
+const clips = {};
+const uploads = { n: 0, sum: 0, max: 0, errors: 0, err: "" };
+let shown = null; // the clip on the wall
+let uploadedFrame = null;
+const ctx = new AudioContext();
+const msgs = [];
+dec.onmessage = async ({ data: m }) => {
+  const c = clips[m.id];
+  if (m.op === "frame") {
+    if (!c || c.released) { m.frame.close(); return; }
+    c.frames.push({ ts: m.ts, f: m.frame });
+    c.maxFrames = Math.max(c.maxFrames, c.frames.length);
+  } else if (m.op === "info") {
+    c.info = m;
+    msgs.push({ info: m.id, ms: m.ms, codec: m.codec, frames: m.frames, duration: +m.duration.toFixed(3), supported: m.supported });
+    if (m.audio) {
+      const a0 = performance.now();
+      try {
+        c.buffer = await ctx.decodeAudioData(m.audio.adts.buffer);
+        msgs.push({ audioDecoded: m.id, ms: +(performance.now() - a0).toFixed(1), seconds: +c.buffer.duration.toFixed(3), rate: c.buffer.sampleRate });
+      } catch (e) { msgs.push({ audioError: m.id, error: String(e) }); }
+      c.priming = -m.audio.start; // AAC priming before the edit list's zero
+    }
+    c.ready?.();
+  } else if (m.op === "stats") {
+    msgs.push({ clipStats: m });
+  } else if (m.op === "error") {
+    msgs.push({ error: m.id, e: m.error });
+  }
+};
+
+const make = (name, path, loop) => {
+  const c = clips[name] = { name, loop, frames: [], maxFrames: 0, info: null, playing: false, startAbs: 0, shownN: 0, late: 0, lateMax: 0, released: false };
+  c.readyP = new Promise((r) => (c.ready = r));
+  dec.postMessage({ op: "open", id: name, url: u(path), loop, audio: q.get("sound") !== "0" });
+  return c;
+};
+const mediaT = (c, abs = absNow()) => (c.playing ? (abs - c.startAbs) / 1000 : 0);
+const warm = async (c) => { mark(`warm ${c.name}`); await c.readyP; dec.postMessage({ op: "warm", id: c.name, t: 0 }); };
+const start = (c) => {
+  c.playing = true; c.startAbs = absNow(); shown = c; mark(`start ${c.name}`);
+  dec.postMessage({ op: "want", id: c.name, t: 0, at: c.startAbs, rate: 1 });
+  if (c.buffer) {
+    const s = ctx.createBufferSource(); s.buffer = c.buffer; s.loop = c.loop;
+    if (c.loop) { s.loopStart = c.priming; s.loopEnd = c.priming + c.info.duration; }
+    const g = ctx.createGain(); g.gain.value = 0.001; s.connect(g).connect(ctx.destination);
+    s.start(ctx.currentTime, c.priming); c.src = s;
+  }
+};
+const stop = (c) => { c.playing = false; c.src?.stop(); c.src = null; dec.postMessage({ op: "want", id: c.name, t: 0, at: absNow(), rate: 0 }); };
+const cold = (c) => {
+  c.released = true;
+  dec.postMessage({ op: "release", id: c.name });
+  for (const x of c.frames) if (x.f !== uploadedFrame) x.f.close();
+  c.frames = [];
+};
+
+// Render loop: pick the clip's frame for now, upload it if it changed, draw.
+let lastFrame = performance.now();
+let lastWant = 0;
+const frame = () => {
+  const t = performance.now();
+  if (t - lastFrame > 50) holds.push(`frame ${Math.round(t - lastFrame)}ms after ${lastEvent}`);
+  lastFrame = t;
+  const c = shown;
+  if (c && !c.released) {
+    const T = mediaT(c);
+    if (t - lastWant > 250 && c.playing) { lastWant = t; dec.postMessage({ op: "want", id: c.name, t: T, at: absNow(), rate: 1 }); }
+    // Last frame at or before T; close the ones before it.
+    let k = -1;
+    for (let i = 0; i < c.frames.length; i++) if (c.frames[i].ts <= T + 0.004) k = i;
+    if (k >= 0) {
+      const pick = c.frames[k];
+      for (let i = 0; i < k; i++) if (c.frames[i].f !== uploadedFrame) c.frames[i].f.close();
+      c.frames.splice(0, k);
+      if (pick.f !== uploadedFrame) {
+        const u0 = performance.now();
+        try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pick.f); }
+        catch (e) { uploads.errors++; uploads.err = String(e); }
+        const d = performance.now() - u0; uploads.n++; uploads.sum += d; uploads.max = Math.max(uploads.max, d);
+        if (uploadedFrame && !c.frames.some((x) => x.f === uploadedFrame)) uploadedFrame.close();
+        uploadedFrame = pick.f;
+        c.shownN++;
+      }
+      // Late: the frame shown is older than the one due (a whole frame behind).
+      const dur = c.info?.duration || 1;
+      const due = c.loop ? T % dur : Math.min(T, dur - 1 / 24);
+      const shownT = c.loop ? pick.ts % dur : pick.ts;
+      const behind = due - shownT;
+      if (c.playing && behind > 1.5 / 24 && behind < dur / 2) { c.late++; c.lateMax = Math.max(c.lateMax, behind); }
+    } else if (c.playing) c.late++;
+  }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+
+const holdMs = +(q.get("hold") || 0), every = +(q.get("every") || 2000);
+if (holdMs) setInterval(() => { const e = performance.now() + holdMs; while (performance.now() < e); }, every);
+
+(async () => {
+  if (q.get("music") === "1") {
+    const o = ctx.createOscillator(); const g = ctx.createGain(); g.gain.value = 0.0005;
+    o.connect(g).connect(ctx.destination); o.start(); mark("music");
+  }
+  const climb = make("climb", q.get("climb"), false), pace = make("pace", q.get("pace"), true), lunge = make("lunge", q.get("lunge"), false);
+  await sleep(1000); warm(climb);
+  await sleep(2000); start(climb);
+  await sleep(4000); warm(pace);
+  await sleep(2040); stop(climb); start(pace);
+  await sleep(500); cold(climb);
+  await sleep(8500); warm(lunge);
+  await sleep(2000); stop(pace); start(lunge);
+  await sleep(500); cold(pace);
+  await sleep(5500); mark("end");
+  dec.postMessage({ op: "stats" });
+  await new Promise((r) => { const prev = dec.onmessage; dec.onmessage = (e) => { prev(e); if (e.data.op === "allStats") { msgs.push({ live: e.data.clips }); r(); } }; });
+  const per = Object.values(clips).map((c) => ({ clip: c.name, shown: c.shownN, late: c.late, lateMaxMs: Math.round(c.lateMax * 1000), maxFramesHeld: c.maxFrames }));
+  post({ engine: navigator.userAgent, via, hold: holdMs, holds, per, uploads: { n: uploads.n, avgMs: +(uploads.sum / Math.max(1, uploads.n)).toFixed(2), maxMs: +uploads.max.toFixed(1), errors: uploads.errors, err: uploads.err }, msgs, events });
+  post({ done: true });
+})();
+</script></body></html>

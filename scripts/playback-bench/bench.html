@@ -1,0 +1,112 @@
+<!doctype html>
+<html><body style="margin:0;background:#000;overflow:hidden">
+<canvas id="c" width="360" height="90" style="width:360px;height:90px"></canvas>
+<script>
+// Playback bench. Query: src (file path), via (asset|http), dur (s), block (ms busy main thread), every (ms),
+// seekAt (s, a hard seek of +2 s while playing), chase (1 = the transition video's rule: seek when |drift| > 0.25 s),
+// start (ms after load to call play), gl (1 = texImage2D each new frame, like three's VideoTexture).
+const q = new URLSearchParams(location.search);
+const view = +(q.get("view") || 0);
+const files = (q.get("src") || "").split(",");
+const file = files[view % files.length];
+const via = q.get("via") || "asset";
+const dur = +(q.get("dur") || 10) * 1000;
+const block = +(q.get("block") || 0), every = +(q.get("every") || 2000);
+const seekAt = q.has("seekAt") ? +q.get("seekAt") * 1000 : -1;
+const chase = q.get("chase") === "1";
+const useGl = q.get("gl") !== "0";
+const post = (o) => { o.view = view; if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(o); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const url = via === "http" ? "http://127.0.0.1:8765/f" + encodeURI(file) : "asset://localhost/" + encodeURIComponent(file);
+
+const v = document.createElement("video");
+v.crossOrigin = "anonymous"; v.muted = true; v.playsInline = true; v.preload = "auto"; v.loop = q.get("loop") === "1";
+const host = document.createElement("div");
+host.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-1";
+v.style.cssText = "width:2px;height:2px"; host.appendChild(v); document.body.appendChild(host);
+
+const c = document.getElementById("c");
+const gl = c.getContext("webgl2");
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const fb = gl.createFramebuffer();
+let uploadMs = 0, uploads = 0, uploadMax = 0;
+
+const t0 = performance.now();
+let tPlay = -1, firstMoving = -1;
+const frames = []; // [now, mediaTime, presentedFrames]
+let seeks = 0, seekLog = [];
+let rafGaps = [], lastRaf = 0;
+
+function onFrame(nowTs, md) {
+  frames.push([performance.now(), md.mediaTime, md.presentedFrames]);
+  if (firstMoving < 0 && tPlay >= 0 && md.mediaTime > 0.05) firstMoving = performance.now() - tPlay;
+  if (useGl) {
+    const a = performance.now();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.blitFramebuffer(0, 0, v.videoWidth, v.videoHeight, 0, 0, c.width, c.height, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+    const d = performance.now() - a; uploadMs += d; uploads++; uploadMax = Math.max(uploadMax, d);
+  }
+  v.requestVideoFrameCallback(onFrame);
+}
+v.requestVideoFrameCallback(onFrame);
+
+function raf(ts) {
+  if (lastRaf) rafGaps.push(ts - lastRaf);
+  lastRaf = ts;
+  if (chase && tPlay >= 0) {
+    const want = (performance.now() - tPlay) / 1000;
+    if (Math.abs(v.currentTime - want) > 0.25 && !v.seeking) { v.currentTime = want; seeks++; }
+  }
+  requestAnimationFrame(raf);
+}
+requestAnimationFrame(raf);
+
+if (block > 0) setInterval(() => { const e = performance.now() + block; while (performance.now() < e) {} }, every);
+
+v.addEventListener("seeked", () => { const s = seekLog[seekLog.length - 1]; if (s && s.seeked < 0) s.seeked = performance.now() - s.at; });
+
+let tLoaded = -1;
+v.addEventListener("canplaythrough", () => { if (tLoaded < 0) tLoaded = performance.now() - t0; }, { once: true });
+v.addEventListener("loadeddata", async () => {
+  const tl = performance.now() - t0;
+  await new Promise((r) => setTimeout(r, +(q.get("start") || 1500)));
+  tPlay = performance.now();
+  await v.play().catch((e) => post({ err: String(e) }));
+  if (seekAt >= 0) setTimeout(() => { seekLog.push({ at: performance.now(), from: v.currentTime, to: v.currentTime + 2, seeked: -1 }); v.currentTime = v.currentTime + 2; seeks++; }, seekAt);
+  setTimeout(() => finish(tl), dur);
+}, { once: true });
+v.addEventListener("error", () => post({ err: "video error " + (v.error && v.error.code), done: true }));
+v.src = url;
+
+function finish(tLoad) {
+  const play = frames.filter((f) => f[0] >= tPlay);
+  const gaps = [];
+  for (let i = 1; i < play.length; i++) gaps.push(play[i][0] - play[i - 1][0]);
+  // Media jumps: consecutive presented frames whose media time advanced by more than 2 frame periods (a skip).
+  let skips = 0, holdsMedia = 0;
+  for (let i = 1; i < play.length; i++) { const dm = play[i][1] - play[i - 1][1]; if (dm > 0.09) skips++; if (dm <= 0.0001) holdsMedia++; }
+  const el = (performance.now() - tPlay) / 1000;
+  const q2 = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+  const rg = rafGaps.slice(5);
+  for (const s of seekLog) { const f = play.find((x) => x[0] > s.at && Math.abs(x[1] - s.to) < 0.2); s.firstFrame = f ? +(f[0] - s.at).toFixed(1) : null; s.at = undefined; }
+  post({
+    file: file.split("/").pop(), via, chase, block, w: v.videoWidth, h: v.videoHeight,
+    loadedDataMs: +tLoad.toFixed(0), canPlayThroughMs: +tLoaded.toFixed(0),
+    startupMs: +firstMoving.toFixed(0),
+    framesShown: play.length, expected: Math.round(el * 24),
+    gapsOver60: gaps.filter((g) => g > 60).length, gapsOver100: gaps.filter((g) => g > 100).length, gapsOver200: gaps.filter((g) => g > 200).length,
+    maxGapMs: +Math.max(0, ...gaps).toFixed(0), skips, repeats: holdsMedia,
+    lagS: +(el - v.currentTime).toFixed(3), seeks, seekLog,
+    dropped: q2.droppedVideoFrames, total: q2.totalVideoFrames,
+    uploadAvgMs: uploads ? +(uploadMs / uploads).toFixed(2) : 0, uploadMaxMs: +uploadMax.toFixed(1),
+    rafOver40: rg.filter((g) => g > 40).length, rafMax: +Math.max(0, ...rg).toFixed(0),
+    done: true,
+  });
+}
+</script></body></html>

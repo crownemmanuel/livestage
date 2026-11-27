@@ -1,0 +1,47 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<script>
+// Main-thread cost of single player operations (play from a parked frame, seek while playing, seek while paused,
+// playbackRate change, pause), measured with a worker ping (4 ms) like probe.html. Each op repeated `n` times.
+const q = new URLSearchParams(location.search);
+const via = q.get("via") || "asset";
+const u = (p) => (via === "http" ? "http://127.0.0.1:8765/f" + encodeURI(p) : "asset://localhost/" + encodeURIComponent(p));
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(o); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const wsrc = `let maxLag=0, seq=0, pending=new Map();
+onmessage=(e)=>{ if(e.data==='reset'){maxLag=0;return;} if(e.data==='get'){postMessage({maxLag});return;} const t=pending.get(e.data); if(t!==undefined){ const lag=performance.now()-t; if(lag>maxLag)maxLag=lag; pending.delete(e.data);} };
+setInterval(()=>{ seq++; pending.set(seq, performance.now()); postMessage(seq); for(const [k,t] of pending) if(performance.now()-t>maxLag) maxLag=performance.now()-t; }, 4);`;
+const w = new Worker(URL.createObjectURL(new Blob([wsrc], { type: "text/javascript" })));
+let lagResolve = null;
+w.onmessage = (e) => { if (typeof e.data === "number") w.postMessage(e.data); else if (lagResolve) { lagResolve(e.data.maxLag); lagResolve = null; } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function block(fn, settle) {
+  w.postMessage("reset"); await sleep(30);
+  const a = performance.now(); const p = fn(); const sync = performance.now() - a; await p; await sleep(settle);
+  w.postMessage("get"); const lag = await new Promise((r) => (lagResolve = r));
+  return [sync, lag];
+}
+async function measure(name, fn, n = 5, settle = 250, between) {
+  const syncs = [], lags = [];
+  for (let i = 0; i < n; i++) { if (between) await between(); await sleep(250); const [s, l] = await block(fn, settle); syncs.push(s); lags.push(l); }
+  const f = (a) => a.map((x) => Math.round(x));
+  post({ name, syncMs: f(syncs), worstBlockMs: f(lags) });
+}
+const v = document.createElement("video");
+v.crossOrigin = "anonymous"; v.muted = q.get("sound") !== "1"; v.playsInline = true; v.preload = "auto"; v.loop = true;
+v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01";
+document.body.appendChild(v);
+v.src = u(q.get("v"));
+(async () => {
+  await new Promise((r) => v.addEventListener("canplaythrough", r, { once: true }));
+  await sleep(500);
+  await measure("idle (baseline)", () => sleep(0));
+  await measure("play() from paused", () => v.play(), 5, 300, async () => { v.pause(); await sleep(200); });
+  await measure("pause()", () => v.pause(), 5, 250, async () => { await v.play(); await sleep(300); });
+  await v.play(); await sleep(300);
+  await measure("seek while playing (+1.5 s)", () => { v.currentTime = (v.currentTime + 1.5) % (v.duration - 1); }, 5, 300);
+  await measure("playbackRate 1 -> 1.05 while playing", () => { v.playbackRate = 1.05; }, 5, 250, async () => { v.playbackRate = 1; await sleep(300); });
+  v.pause(); await sleep(300);
+  await measure("seek while paused", () => { v.currentTime = Math.random() * (v.duration - 1); }, 5, 300);
+  post({ done: true });
+})();
+</script></body></html>

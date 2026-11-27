@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { clipStateAt, type ClipState } from "@/core/clipActor";
@@ -96,7 +96,7 @@ function ClipQuad({ actor, clip, order, handles, shared }: { actor: ClipActorCom
   const asset = srcId ? assets.find((a) => a.id === srcId) : undefined;
   // Cold until the frame loop decides the clip can come next (see setWarm): an actor with ten
   // clips must not hold ten decoders in every window for the one clip that is on screen.
-  const video = useVideo(playableUrl(asset), { lazy: true, ...videoAlpha(asset) });
+  const video = useVideo(playableUrl(asset), { lazy: true, ...videoAlpha(asset), sound: audio && !actor.muted });
   useEffect(() => {
     if (!video) return;
     handles.set(clip.id, video);
@@ -104,6 +104,8 @@ function ClipQuad({ actor, clip, order, handles, shared }: { actor: ClipActorCom
       if (handles.get(clip.id) === video) handles.delete(clip.id);
     };
   }, [handles, clip.id, video]);
+  /** This clip has put a picture on screen since it last came up (see the hold below). */
+  const shownRef = useRef(false);
   const mat = useMemo(makeMediaMaterial, []);
   const mesh = useMemo(() => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
@@ -201,8 +203,14 @@ function ClipQuad({ actor, clip, order, handles, shared }: { actor: ClipActorCom
       // Park on frame 0 so the clip can cut in instantly when its turn comes.
       syncVideo(video, { play: false, time: 0, rate: 1, muted: true, volume: 0 }, frame.wall);
     }
-    // While a seek is in flight the texture still holds the last frame: keep showing it.
-    mesh.visible = (active || holding) && (video.video.readyState >= 2 || (video.video.seeking && video.video.readyState >= 1));
+    // While a seek is in flight the texture still holds the last frame: keep showing it. A clip that has
+    // finished and holds its end (the market shut up, a set piece in place) keeps its last picture even if
+    // the player drops the paused frame (WebKit can release a paused decoder): the texture still has it.
+    const ready = video.video.readyState >= 2 || (video.video.seeking && video.video.readyState >= 1);
+    if ((active || holding) && ready) shownRef.current = true;
+    else if (!active && !holding) shownRef.current = false;
+    const finished = active && !isOut && !cur.playing && !clip.loop;
+    mesh.visible = (active || holding) && (ready || (finished && shownRef.current));
     shadow.visible = mesh.visible && !!actor.matted && (actor.layout?.shadow ?? 0) > 0;
     if (!mesh.visible) return;
 

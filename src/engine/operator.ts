@@ -26,10 +26,31 @@ import { previewLightsAllowed } from "./wallVideoLink";
 import { chaseForCue, chaseForTake, chaseMusicOn, learnSoundLengths } from "./musicChase";
 import { armLiveState, flushLiveState, loadLiveState, setPendingSource, startLiveStatePersistence, type PendingRecord } from "./persist";
 import { warmSounds } from "./audio";
+import { mp4Duration } from "@/render/video/mp4";
+import { notePlayback, watchOperatorStalls } from "./playbackLog";
 
 // ---------------------------------------------------------------- take
 
-export function probeDuration(url: string): Promise<number | null> {
+/**
+ * Length (s) of a media file. An MP4 / MOV file's is read from its index (render/video/mp4.ts): on the Mac a
+ * <video> is an AVPlayer in the GPU process both windows share, and opening one just to read a length can hold
+ * that process (docs/PERFORMANCE.md). Anything else, or a file the index reader cannot read, opens a <video>.
+ */
+export async function probeDuration(url: string): Promise<number | null> {
+  let path = url.split(/[?#]/)[0];
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* keep it */
+  }
+  if (/\.(mp4|m4v|mov|m4a)$/i.test(path)) {
+    const d = await mp4Duration(url);
+    if (d) return d;
+  }
+  return probeWithElement(url);
+}
+
+function probeWithElement(url: string): Promise<number | null> {
   return new Promise((resolve) => {
     const v = document.createElement("video");
     let settled = false;
@@ -1084,6 +1105,7 @@ function throttle(fn: () => void, ms: number) {
 
 export function startOperatorServices(): () => void {
   const cleanups: (() => void)[] = [];
+  cleanups.push(watchOperatorStalls());
 
   // Authoritative actor simulation at 60 Hz; the same tick watches media markers and fires overdue
   // delayed actions. Driven from a worker, so a covered operator window cannot slow the show down.
@@ -1253,6 +1275,7 @@ export function startOperatorServices(): () => void {
         useShow.setState({ outputSeenAt: Date.now(), outputLostAt: null });
       } else if (msg.type === "output-status") {
         useShow.setState({ outputStatus: msg.status, outputSeenAt: Date.now(), outputLostAt: null });
+        notePlayback(msg.status);
       } else if (msg.type === "output-bye") {
         useShow.setState({ outputStatus: null, outputSeenAt: 0, outputLostAt: null });
       }

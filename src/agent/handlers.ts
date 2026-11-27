@@ -2,6 +2,9 @@
 // spec.ts (TypeScript enforces it), so a new command cannot ship without an implementation.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { clearPlaybackLog, playbackLog } from "@/engine/playbackLog";
+import { codecsAvailable } from "@/render/layers/video";
+import { codecPlayerCount, codecRefusals } from "@/render/video/codecVideo";
 import { clamp, now, sceneNow } from "@/core/clock";
 import { clipStateAt } from "@/core/clipActor";
 import { EFFECT_DEFS } from "@/core/effects";
@@ -26,6 +29,7 @@ import { soundAppReach, useSoundApp } from "@/engine/soundApp";
 import { normalizeSound } from "@/core/soundControl";
 import * as ops from "@/engine/operator";
 import * as transport from "@/engine/transport";
+import * as drive from "@/engine/drive";
 import { assetProblems, checkAsset, ingestAssets, mediaTools, optimiseAsset } from "@/engine/media";
 import { describeProbe, packAdvice } from "@/core/mediaCheck";
 import { audioRoleOf, liveAudioSources } from "@/engine/mixer";
@@ -275,7 +279,7 @@ function schemaDoc(topic: string) {
   const out: Record<string, unknown> = {};
   if (topic === "components" || topic === "all") {
     out.components = {
-      note: "component_add builds these defaults; pass `props` to override. Every component also has id, name, initiallyVisible (shown when the scene is taken). Backgrounds stack like layers: the scene opens on the first one in component order with initiallyVisible (none marked: the first background).",
+      note: "component_add builds these defaults; pass `props` to override. Every component also has id, name, initiallyVisible (shown when the scene is taken). Backgrounds stack like layers: the scene opens on the first one in component order with initiallyVisible (none marked: the first background). Image and video layers: anim.enter / anim.exit = none | fade | slide-left | slide-right | slide-up | scale | off-left | off-right (off-* move a set piece fully past that edge of the wall, or in from it, at full opacity: use them for set pieces, never a fade). Image and video layers can also be moved by the operator: drive = {distance (wall widths it travels from screen.x, negative = left), speed (wall widths per second at normal speed: the speed its feet walk, so they never skate), show?: always | moving | stopped (a walk cycle shown only while it moves, a standing loop only while it stops; a walk cycle plays by distance walked), follow?: another drive layer's id (moves with it), reveal?: {lead} (stays put and is uncovered from the left up to the driven layer's centre + lead, feathered by mask.feather: firelight travelling with a crowd)}; the drive command or holding → / ← moves it. Media backgrounds: anchorY = vertical framing (0 top .. 1 bottom), offsetX = horizontal position, slides the picture left (-) or right (+) by that share of the wall's width at the same size (0.02 = 61 px on a 3072 wall).",
       background: strip(factories.makeBackground("Background")),
       video: strip(factories.makeVideoLayer("Video")),
       image: strip(factories.makeImageLayer("Image")),
@@ -317,6 +321,15 @@ function schemaDoc(topic: string) {
       alphaPacked:
         "A transparent video as one ordinary H.264 file at twice the picture's height: the colour (premultiplied by the matte) in the top half, the matte (alpha as greyscale) in the bottom half. The shader puts them together, so it plays on the GPU path on Mac and Windows from one file (no HEVC-alpha / VP9 twins, no per-frame CPU copy). Make one with asset_optimise { pack: true } from a VP9 / VP8 alpha WebM or ProRes 4444 source; import one made elsewhere with asset_import { alphaPacked: true }. hasAlpha stays true.",
       rel: "Place in the workspace: <scene folder>/<images|audio|video|other>/<file>, relative to <workspace root>/<show>/ (workspace_get shows both). When that file exists on this computer it is played instead of file/url; otherwise the asset plays as before. Set with patch project/assets/<id>/rel. Nothing moves files into the workspace yet.",
+    };
+  }
+  if (topic === "output" || topic === "all") {
+    out.output = {
+      note: "output_settings merges a patch into these (project.output, show-wide).",
+      defaults: factories.defaultOutput(),
+      current: p.output,
+      videoEngine:
+        "What plays the wall's videos, in the output window and the operator's monitors. auto (default) and webcodecs: WebCodecs wherever the engine has it, Mac (WebKit) and Windows (WebView2). On the Mac every <video> is an AVPlayer in the GPU process both windows share, and loading, switching or releasing one could hold it for seconds. element: the platform <video> everywhere (the way back on the night). WebCodecs takes opaque MP4 / MOV files with H.264, closed GOPs and keyframes at most ~2 s apart (the import optimiser writes these); transparent cut-outs (HEVC-alpha .mov twins, VP9-alpha WebM) and any file it refuses play on the platform player whatever the setting (status lists refusals). A clip's sound on WebCodecs is its AAC track played through Web Audio (the show's outputs and speakers); at a speed other than 1 its pitch changes. Changing it reloads the videos on screen.",
     };
   }
   if (topic === "room" || topic === "all") {
@@ -514,7 +527,14 @@ export const handlers: Record<AgentCommand, Handler> = {
         mixerTrims: prog.mix ?? {},
       },
       preview: s.preview ? { scene: brief(s.preview.scene), cuePointer: s.preview.cuePointer, sceneTime: round(sceneNow(s.preview) / 1000), solo: s.solo, muted: s.muted, hidden: s.hidden } : null,
-      output: { open: outputUp, status: outputUp ? s.outputStatus : null, lost: !!s.outputLostAt },
+      output: {
+        open: outputUp,
+        status: outputUp ? s.outputStatus : null,
+        lost: !!s.outputLostAt,
+        // The setting, and the operator window's own players (its monitors decode the same clips).
+        videoEngine: p.project.output.videoEngine ?? "auto",
+        operatorVideo: { webcodecs: codecsAvailable, players: codecPlayerCount(), refused: codecRefusals() },
+      },
       timers: (p.project.timers ?? []).map((t) => {
         const r = prog.timers?.[t.id];
         const left = r ? (r.running ? Math.max(0, (r.endsAt - now()) / 1000) : r.remaining) : t.duration;
@@ -720,6 +740,24 @@ export const handlers: Record<AgentCommand, Handler> = {
     return useIo.getState().log.slice(-n).map((l) => ({ at: new Date(l.at).toLocaleTimeString(), dir: l.dir, text: l.text }));
   },
 
+  playback_log(a) {
+    const n = Math.max(1, Math.min(300, a.limit ?? 100));
+    const { since, events } = playbackLog();
+    const scenes = P().project.scenes;
+    const out = {
+      since: new Date(since).toLocaleTimeString(),
+      count: events.length,
+      outputSeekLeadMs: S().outputStatus?.seekLeadMs ?? null,
+      videoEngine: P().project.output.videoEngine ?? "auto",
+      events: events.slice(-n).map((e) => {
+        const sc = e.sceneId ? scenes.find((x) => x.id === e.sceneId) : undefined;
+        return { ...e, at: new Date(e.at).toLocaleTimeString(), sceneId: undefined, scene: sc ? brief(sc) : e.sceneId };
+      }),
+    };
+    if (a.clear) clearPlaybackLog();
+    return out;
+  },
+
   list_store_actions() {
     const fns = (o: object) => Object.entries(o).filter(([, v]) => typeof v === "function").map(([k]) => k);
     return { project: fns(P()), show: fns(S()) };
@@ -805,6 +843,24 @@ export const handlers: Record<AgentCommand, Handler> = {
     if (a.target === "program" && S().program.runtime?.clock.pausedAt == null) throw new Error('The live wall scrubs only while held: freeze {target: "program", op: "pause"} (or transport hold) first');
     ops.seekRun(a.target, Math.max(0, Number(a.seconds)));
     return runtimeSummary(a.target, rtFor(a.target)!);
+  },
+
+  drive(a) {
+    const target: Target = a.target;
+    const rt = rtFor(target)!;
+    const op = a.op ?? "status";
+    let layerId: string | undefined;
+    if (a.layer) {
+      const c = rt.scene.components.find((x) => x.id === a.layer || x.name === a.layer);
+      if (!c || (c.kind !== "video" && c.kind !== "image") || !c.drive || c.drive.follow) throw new Error(`No drive layer "${a.layer}" in ${rt.scene.name}`);
+      layerId = c.id;
+    }
+    if (op === "forward" || op === "back" || op === "stop") {
+      const moved = drive.drive(target, op === "forward" ? 1 : op === "back" ? -1 : 0, layerId);
+      if (!moved.length) throw new Error("No drive layer is on screen in this scene (show it first, or name one with layer)");
+    } else if (op === "faster" || op === "slower") drive.driveFaster(target, op === "faster" ? 1.25 : 0.8);
+    else if (op === "rate") S().dispatch(target, { type: "driveRate", rate: Number(a.rate) || 1 });
+    return drive.driveStatus(target);
   },
 
   freeze(a) {

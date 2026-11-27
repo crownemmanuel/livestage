@@ -36,16 +36,17 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | Tool | What it does |
 | --- | --- |
 | **Look** | |
-| `status` | Overview: mode, selection, the live scene (time, next cue, layers, effects, clips), wall state, preview, output window, timers, MIDI/OSC, errors, bridge |
+| `status` | Overview: mode, selection, the live scene (time, next cue, layers, effects, clips), wall state, preview, output window (each playing video's engine and decoder stats, WebCodecs players, files WebCodecs refused), the video engine setting and the operator's own WebCodecs players, timers, MIDI/OSC, errors, bridge |
 | `list_scenes` | Running order with codes, groups, counts, selected/live flags |
 | `get_scene` | One scene as stored |
 | `get_runtime` | Playback state of preview or program |
 | `timeline` | A scene as the Build timeline lays it out: cue start times (GO cues at planned holds) and every track's items in scene seconds |
 | `list_assets` | Media library |
 | `get` | Any value by path (`project/…`, `show/…`, `io/…`, `ui/…`) |
-| `schema` | Live reference: component defaults, cue action types, effect parameters, transitions, I/O messages (with every StageLight and StageMics shape, and the OSC each StageLight one becomes) |
+| `schema` | Live reference: component defaults, cue action types, effect parameters, transitions, I/O messages (with every StageLight and StageMics shape, and the OSC each StageLight one becomes), output settings (`topic: "output"`, with what `videoEngine` does) |
 | `screenshot` | Picture of the preview or program monitor (the window must be drawing) |
 | `io_log` | MIDI/OSC/agent log |
+| `playback_log` | Every hitch of the wall picture since it was cleared, with scene and scene time: output frames over 40 ms (`stall`), hard seeks of playing videos (`seek`, with the engine, drift and start-up lag; on WebCodecs a decoder restart), frames a WebCodecs clip drew late (`late`), operator-window hold-ups (`operator`, with the last cue fired). Also the video engine setting. Clear it before a run-through, read it after |
 | `stagemics_status` | StageMics (owns the dLive): link on, address, answering, its version and desk connection, active cue and mic states. Sends nothing |
 | `stagelight_status` | StageLight link: on, address, mirror, reach (answering / sent / error / off), its hello (version, output armed, running page and cue), last GO announcement, last refusal, catalog state and size. Sends nothing |
 | `stagelight_catalog` | StageLight's pages with cue lists (entry IDs, names, auto-follow), named triggers and library cues, as last read (kept in the show file); `refresh` re-reads it. StageLight messages given to any tool may use names or numbers: they are stored as these IDs with a `label` |
@@ -61,6 +62,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `run_action` | Run any cue action now. Existing `effect` actions control Day / Night, rain and fog; `effect.param` adjusts their live settings. Unlit photographic/baked GLB surfaces follow the same night/storm grade as media. |
 | `transport` [LIVE] | Hold, resume, seek or nudge the scene's video in its own seconds, or the whole scene (source `scene`); a seek replays the run to that moment; the live wall scrubs only while held ([VIDEO_TRANSPORT.md](VIDEO_TRANSPORT.md)) |
 | `seek`, `freeze` [LIVE] | Scene clock: put the scene at any moment as the run played to there (program only while held), freeze / resume |
+| `drive` [LIVE] | Hold to move: walk a scene's drive layers (a torch crowd) forward / back / stop, faster / slower, or read where they are; the operator does the same by holding → / ← (↑ / ↓ speed). Set a layer up with its `drive` field |
 | `cancel_pending`, `restart_preview` | Pending actions, restart the preview |
 | `blackout`, `standby` [LIVE] | Wall-wide controls |
 | `timer`, `timer_overlay`, `announce` [LIVE] | Show timers, on-screen clock, front-of-house announcements |
@@ -90,7 +92,7 @@ Scene, component, cue, group, timer and asset arguments accept ids or names; sce
 | `asset_optimise` | Re-encode a library video into the wall format (H.264, fitted to the wall, keyframe every ½ s, fast start); `force` when no problem was found. `pack: true` turns a transparent video (VP9 / VP8 alpha WebM, ProRes 4444) into an alpha-packed one: one H.264 file, colour over matte, that plays on the GPU path on Mac and Windows (`alphaPacked` on the asset, `<name>.packed.mp4` beside the source). The files the asset no longer plays stay on disk and come back in `kept`, to be archived |
 | `asset_reveal` | Open the operator's Finder / Explorer with an asset's file selected (desktop app only) |
 | `workspace_get`, `workspace_set` | This computer's workspace folder (default `~/Documents/LiveStage`): where each show's media finals live as `<root>/<show>/<scene folder>/<images\|audio\|video\|other>/<file>`. `workspace_get` reports the root, the show folder and how many assets have a `rel`; `workspace_set {path}` changes the root (moves nothing). `list_assets` shows each asset's `rel` and `playsFrom`; `schema` topic `assets` explains `rel` |
-| `output_settings` | Wall size, scaling, standby card, timer style |
+| `output_settings` | Wall size, scaling, standby card, timer style, `videoEngine` (auto / webcodecs / element: what plays the wall's videos) |
 | `project` | Save, export/import a show file, reset to the demo, rename. Import needs `levels` (`local` or `incoming`) when the file's sound levels differ from this computer's |
 | `package_export` | Write a show package (show file, versioned manifest, every media file) for another computer; desktop app ([SHOW_PACKAGE.md](SHOW_PACKAGE.md)) |
 | `package_import` | Take in a show package: `dryRun` for the plan, per-conflict `choices` (`incoming`, `local`, `media`, `both`) or `resolve`; the `mix` conflict (sound levels set here that differ from the package's) needs a choice in replace mode too; refuses while live unless `allowLive` |

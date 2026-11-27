@@ -18,6 +18,11 @@ function audio(): AudioContext {
   return ctx;
 }
 
+/** The preview's audio context (this computer's own default output): preview clip sound on the WebCodecs player. */
+export function previewAudioContext(): AudioContext {
+  return audio();
+}
+
 const buffers = new Map<string, AudioBuffer>();
 const loading = new Map<string, Promise<AudioBuffer | null>>();
 function load(url: string): Promise<AudioBuffer | null> {

@@ -1,0 +1,57 @@
+<!doctype html>
+<html><body>
+<script type="module">
+// How long does the engine's VideoDecoder hold frames? Feeds `v` one chunk every 20 ms for three GOPs and
+// records how many frames had come out after each chunk; then whether a keyframe (IDR) pushes out the frames
+// held from the GOP before it, and what one GOP costs when fed at once and flushed (the seek cost).
+import { openMp4 } from "./wc/mp4.js";
+const q = new URLSearchParams(location.search);
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(JSON.parse(JSON.stringify(o))); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const url = location.origin + "/f" + encodeURI(q.get("v"));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const out = { ua: navigator.userAgent, hasAD: typeof AudioDecoder };
+try {
+  const mp4 = await openMp4(url);
+  const v = mp4.video, s = v.samples;
+  const buf = await mp4.read(0, mp4.size);
+  const chunk = (i, off = 0) => new EncodedVideoChunk({ type: s[i].key ? "key" : "delta", timestamp: Math.round((s[i].pts + off) * 1e6), duration: Math.round(s[i].dur * 1e6), data: buf.subarray(s[i].offset, s[i].offset + s[i].size) });
+  const config = { codec: v.codec, codedWidth: v.width, codedHeight: v.height, description: v.description };
+  // 1. Output latency, one chunk at a time.
+  {
+    let n = 0;
+    const d = new VideoDecoder({ output: (f) => { n++; f.close(); }, error: (e) => (out.err1 = String(e)) });
+    d.configure(config);
+    const trace = [];
+    for (let i = 0; i < 36; i++) { d.decode(chunk(i)); await sleep(25); trace.push(n); }
+    out.outAfterEachChunk = trace.join(" ");
+    await d.flush();
+    out.afterFlush = n;
+    d.close();
+  }
+  // 2. One GOP fed at once then flushed (a seek), five times from different GOPs; and a whole-file decode.
+  {
+    const times = [];
+    let n = 0;
+    const d = new VideoDecoder({ output: (f) => { n++; f.close(); }, error: (e) => (out.err2 = String(e)) });
+    d.configure(config);
+    const keys = s.filter((x) => x.key).map((x) => x.i);
+    for (const k of [keys[3], keys[7], keys[1], keys[9], keys[5]]) {
+      const t0 = performance.now();
+      let j = k; do { d.decode(chunk(j)); j++; } while (j < s.length && !s[j].key);
+      await d.flush();
+      times.push(+(performance.now() - t0).toFixed(1));
+    }
+    out.gopFlushMs = times;
+    // Whole file as fast as it goes (flush only at the end), frames closed on output.
+    n = 0;
+    const t0 = performance.now();
+    for (let i = 0; i < s.length; i++) { d.decode(chunk(i)); if (d.decodeQueueSize > 8) await new Promise((r) => d.addEventListener("dequeue", r, { once: true })); }
+    await d.flush();
+    const ms = performance.now() - t0;
+    out.wholeFile = { frames: n, ms: +ms.toFixed(0), fps: +((n / ms) * 1000).toFixed(0) };
+    d.close();
+  }
+} catch (e) { out.error = String(e) + " " + e.stack; }
+post(out);
+post({ done: true });
+</script></body></html>

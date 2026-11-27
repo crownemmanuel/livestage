@@ -364,6 +364,9 @@ function build(scene: Scene, starts: (number | null)[], env: TimelineEnv): Built
       case "media.speed":
         if (comp.has(a.layerId)) point(comp.get(a.layerId)!.kind === "background" ? "bg" : `c:${a.layerId}`, t, `speed ${a.rate}×`, "picture", e, a.layerId);
         break;
+      case "drive":
+        if (comp.has(a.layerId)) point(`c:${a.layerId}`, t, `walk to ${Math.round(a.to * 100)}%`, "picture", e, a.layerId);
+        break;
       case "camera": {
         const shot = scene.cameraShots.find((s) => s.id === a.shotId);
         if (shot) items.push({ id: "", track: "camera", lane: 0, start: t, end: t + Math.max(0, shot.duration), label: shot.name, tone: "camera", cue: e.cue, action: e.action });

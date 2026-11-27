@@ -1,0 +1,42 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<script>
+// Start latency of a parked video: play() until currentTime moves, sampled on worker pings (works in a hidden page).
+// Runs muted and with sound; first play after load, then restarts from a parked frame 0.
+const q = new URLSearchParams(location.search);
+const via = q.get("via") || "asset";
+const u = (p) => (via === "http" ? "http://127.0.0.1:8765/f" + encodeURI(p) : "asset://localhost/" + encodeURIComponent(p));
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(o); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const w = new Worker(URL.createObjectURL(new Blob(["setInterval(()=>postMessage(0),3)"], { type: "text/javascript" })));
+let onTick = null;
+w.onmessage = () => onTick && onTick();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function startLag(v, label) {
+  v.pause(); v.currentTime = 0;
+  await new Promise((r) => v.addEventListener("seeked", r, { once: true }));
+  await sleep(400);
+  const t0 = performance.now();
+  const c0 = v.currentTime;
+  v.play().catch((e) => post({ err: String(e) }));
+  const lag = await new Promise((r) => { onTick = () => { if (v.currentTime > c0 + 0.001) { onTick = null; r(performance.now() - t0); } else if (performance.now() - t0 > 3000) { onTick = null; r(-1); } }; });
+  // Where it is 1 s after the call, against where the clock says it should be.
+  await sleep(1000);
+  const behind = (performance.now() - t0) / 1000 - (v.currentTime - c0);
+  return { label, startLagMs: Math.round(lag), behindAfter1sMs: Math.round(behind * 1000) };
+}
+(async () => {
+  for (const muted of [true, false]) {
+    const v = document.createElement("video");
+    v.crossOrigin = "anonymous"; v.muted = muted; v.volume = 0.001; v.playsInline = true; v.preload = "auto";
+    v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01";
+    document.body.appendChild(v);
+    v.src = u(q.get("v"));
+    await new Promise((r) => v.addEventListener("canplaythrough", r, { once: true }));
+    const runs = [];
+    for (let i = 0; i < 4; i++) runs.push(await startLag(v, i === 0 ? "first play" : "restart from parked frame 0"));
+    post({ muted, file: q.get("v").split("/").pop(), runs });
+    v.pause(); v.removeAttribute("src"); v.load(); v.remove();
+  }
+  post({ done: true });
+})();
+</script></body></html>

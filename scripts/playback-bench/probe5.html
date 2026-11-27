@@ -1,0 +1,67 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<canvas id="c" width="3072" height="768" style="width:360px;height:90px"></canvas>
+<script>
+// The lion's clip hand-offs as the wall does them (ClipActor + syncVideo): every clip's <video> starts muted
+// and parked; it is loaded ("warmed") a few seconds before its turn; at its turn the sync turns its sound on
+// and plays it, while the clip before it is paused and muted. Each is drawn into WebGL every frame.
+// Records every hold over 50 ms: "beat" = the page's main thread was held (a 5 ms worker beat came late),
+// "frame" = no frame was drawn for that long. `music=1` keeps a Web Audio tone going underneath (the show's
+// cue sounds), `mutedAll=1` never turns any video's sound on.
+const q = new URLSearchParams(location.search);
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(o); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const u = (p) => location.origin + "/f" + encodeURI(p);
+const t0 = performance.now();
+let lastEvent = "start";
+const holds = [];
+const mark = (e) => { lastEvent = `${e}@${((performance.now() - t0) / 1000).toFixed(2)}`; };
+const w = new Worker(URL.createObjectURL(new Blob(["setInterval(()=>postMessage(0),5)"], { type: "text/javascript" })));
+let lastBeat = performance.now();
+w.onmessage = () => { const t = performance.now(); if (t - lastBeat > 50) holds.push(`beat ${Math.round(t - lastBeat)}ms after ${lastEvent}`); lastBeat = t; };
+const gl = document.getElementById("c").getContext("webgl2");
+gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+let shown = null, lastFrame = performance.now();
+const frame = () => {
+  const t = performance.now();
+  if (t - lastFrame > 50) holds.push(`frame ${Math.round(t - lastFrame)}ms after ${lastEvent}`);
+  lastFrame = t;
+  if (shown && shown.readyState >= 2) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, shown);
+  requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+
+const mutedAll = q.get("mutedAll") === "1";
+const make = (path, loop) => {
+  const v = document.createElement("video");
+  v.crossOrigin = "anonymous"; v.playsInline = true; v.preload = "auto"; v.muted = true; v.volume = 0.001; v.loop = loop;
+  v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01";
+  document.body.appendChild(v);
+  return { v, url: u(path) };
+};
+const warm = (c, name) => { c.v.src = c.url; c.v.load(); mark(`warm ${name}`); };
+const start = (c, name) => { if (!mutedAll) c.v.muted = false; c.v.play(); shown = c.v; mark(`start ${name}`); };
+const stop = (c) => { c.v.pause(); c.v.muted = true; };
+const cold = (c) => { c.v.removeAttribute("src"); c.v.load(); };
+
+(async () => {
+  if (q.get("music") === "1") {
+    const ctx = new AudioContext();
+    const o = ctx.createOscillator(); const g = ctx.createGain(); g.gain.value = 0.0005;
+    o.connect(g).connect(ctx.destination); o.start(); mark("music");
+  }
+  const climb = make(q.get("climb"), false), pace = make(q.get("pace"), true), lunge = make(q.get("lunge"), false);
+  await sleep(1000); warm(climb, "climb");
+  await sleep(2000); start(climb, "climb");
+  await sleep(4000); warm(pace, "pace");
+  await sleep(2040); stop(climb); start(pace, "pace");
+  await sleep(500); cold(climb);
+  await sleep(8500); warm(lunge, "lunge");
+  await sleep(2000); stop(pace); start(lunge, "lunge");
+  await sleep(500); cold(pace);
+  await sleep(5500); mark("end");
+  post({ music: q.get("music") === "1", mutedAll, holds });
+  post({ done: true });
+})();
+</script></body></html>

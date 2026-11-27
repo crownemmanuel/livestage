@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Grid3x3, Monitor, MonitorCog, Power, RectangleHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { listMonitors, isTauri, openOutputWindow, type MonitorInfo } from "@/core/platform";
-import type { ScalingMode } from "@/core/types";
+import type { ScalingMode, VideoEngine } from "@/core/types";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
 import { AssetField, ColorField, Field, NumberInput, SelectBox, SelectField, SliderField, SwitchField, TextField } from "./fields";
@@ -87,6 +87,21 @@ export function OutputSettingsDialog({ open, onOpenChange }: { open: boolean; on
             </p>
           )}
           <SliderField label="Target frame rate" value={o.targetFps} min={24} max={60} step={1} unit="fps" onChange={(targetFps) => set({ targetFps })} />
+          <SelectField<VideoEngine>
+            label="Video playback"
+            value={o.videoEngine ?? "auto"}
+            onChange={(videoEngine) => set({ videoEngine })}
+            options={[
+              { value: "auto", label: "Automatic (WebCodecs)" },
+              { value: "webcodecs", label: "WebCodecs wherever it works" },
+              { value: "element", label: "Platform player (<video>) everywhere" },
+            ]}
+          />
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            WebCodecs decodes the wall's videos itself, off the page, frame for frame with the show clock; on the Mac it avoids the platform player's
+            multi-second stalls. Transparent cut-outs, and any file it cannot play, use the platform player either way. Changing this reloads the videos
+            on screen.
+          </p>
           <ColorField label="Background" value={o.backgroundColor} onChange={(backgroundColor) => set({ backgroundColor })} />
           </>
         )}

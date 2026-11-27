@@ -42,6 +42,85 @@ The app is three renderers of one state: the PREVIEW and PROGRAM monitors in the
 13. **Operator window renders.** Show-mode panels that selected the whole live state (`Monitors`, `TakeBar`, `CueList`, `TopBar`, `FramingBar`) re-rendered on every fader step; they now select the fields they read. The top bar's clock, the audio-host check and the transport's 120 ms tick no longer re-render their parents while nothing moves. The asset picker scanned the show once per mounted picker on every edit (about 50 ms per slider step on a ten-clip actor) and now does it once; the Media tab shows cached thumbnails instead of a `<video>` per card.
 14. **Effects.** Lightning kept no bolt material between strikes, so every strike compiled its shader and built its geometry on the flash frame (now a pool, same bolt shapes). Fog shades only where fog can be. Per-frame colour parsing and small allocations in the frame state, lights, overlays and the stone throw are gone. A text canvas that changed size after its first upload could never update its texture (a blank or stale title): the texture is now freed on resize.
 
+## Freeze, then jump (2026-11-26)
+
+Reported in the Prologue: the picture stops for a moment and carries on further along, as the lion comes out and in the opening Book. Measured with `scripts/playback-bench` (a `WKWebView` serving the files like Tauri's `asset://` protocol, and headless Chrome) on the dev Mac, with the Prologue's own files (H.264 High 3072 × 768, 24 fps, 10-25 Mbit/s).
+
+**What it is.** A video on the wall is decoded by the platform player (in hardware) and drawn by WebGL: the page's main thread uploads each new frame to a texture and draws. When the main thread is busy, nothing is drawn, the player plays on underneath, and the next frame drawn is further along. With the main thread held 300 ms every 2 s, WebKit showed 167 of 192 frames with four 326 ms gaps and four media jumps, Chromium 158 of 192 with 347 ms gaps: the same picture in both engines. One video alone plays clean in both (191 of 192 frames, worst gap 66-68 ms, `asset://` and HTTP alike), so the decoder, the files and the asset protocol are not the cause. Whatever holds the main thread is.
+
+**What held it.**
+
+| What | WebKit (Mac app) | Chromium (Electron, WebView2) |
+| --- | --- | --- |
+| Compile + link 30 programs, then read their status (what the first draw after `gl.compile` did) | 145-150 ms; 1.6 s on a first run | 1.47 s on a first run |
+| The same 30 programs again in a **new context** (every TAKE is one) | 140-145 ms again: no program cache across contexts | 45 ms (program cache) |
+| The same with `KHR_parallel_shader_compile`, not waited on | ~1 ms on the main thread (linking 320-620 ms in the background) | 0 ms (717 ms in the background) |
+| A TAKE in the app, beyond the shaders (dev build, profiled) | | React mounting the scene 60-110 ms, info-log reads 15 ms, first texture uploads 25 ms, context 14 ms |
+| Starting a parked clip (play to moving), visible page | ~20-50 ms behind after the start | 2-22 ms |
+| Seek of a playing clip (keyframe every ½ s) | 21-31 ms to `seeked` | |
+| Decoding a 40 MB WAV, tearing down three players, losing a context, uploading a 3072 × 768 image | each under 15 ms | each under 15 ms |
+
+So at every TAKE the window that shows the scene stood still for a few hundred milliseconds (the new scene's tree, then every shader compiled and waited for on the first frame), and with it every other canvas of that window, the scene going out included, while their videos ran on: a freeze and a jump on the outgoing picture during a crossfade, in the operator's monitors and on the wall. In headless Chrome with the show loaded, the TAKE of Prologue 0 then Prologue 2 gave frame gaps of 233, 67 and 217 ms.
+
+**Changed.**
+
+1. **Shaders compile off the main thread** (`compileAsync`, `KHR_parallel_shader_compile`), and a new canvas draws nothing until they are linked (it is clear, so the slot under it shows; 2.5 s at most). three's first-use info-log reads are off outside development (`checkShaderErrors`). See the compositor in `src/render/SceneCanvas.tsx`.
+2. **A new scene is built in slices** (`Sliced`: the content mounts in a React transition, a few milliseconds per frame), not in one task.
+   With 1 and 2, the same two TAKEs in headless Chrome: **no frame over 40 ms**. The scene draws as before (checked on the Lion Rock plate and the lion on the rock).
+3. **Scenes nobody can see are not drawn**: a program slot at opacity 0, and every slot while an opaque video transition with a picture covers the wall (`unseenSlots` in `src/render/frame.ts`). In the 10 s transition into the lion scene that is about 300 frames of two whole scenes the window no longer draws behind the video. A canvas not drawn keeps its last frame; its videos stay in sync.
+4. **A clip that starts is left to get going** for a second before its drift is judged (`START_GRACE` in `src/render/layers/video.ts`). A clip with sound (the lion has sound on the wall) was hard-seeked as soon as it was 0.25 s off the clock, with no grace after a start, so any start-up lag or stall past that seeked it within frames of coming on. The sound limit is now 0.45 s, and a seek of a playing video aims ahead by what seeks take in that window (`seekLead`, learned from `seeked`), so it lands on the clock instead of behind it and is not followed by another. Measured in headless Chrome over the Prologue: no hard seek of the lion clips (they start 37-56 ms behind and settle).
+5. **The transition video is no longer chased.** It was seeked whenever it was a quarter second off the clock, which it is at its start (opened at the TAKE, it needs a moment to load). It is drawn by the browser itself, so it plays through any stall of the page: now it is caught up only when half a second off, at most every 1.5 s.
+6. **The playback log** (`src/engine/playbackLog.ts`, MCP `playback_log`): every output frame over 40 ms, every hard seek of a playing video (file, drift, start-up lag) and every hold-up of the operator window over 100 ms, with the live scene and scene time, kept in the operator. Clear it before a run-through, read it after: the next hitch names its scene, its second and its cause. The output heartbeat also reports `startLagMs`, `playingSeeks` per video and `seekLeadMs`.
+
+**Measured in the Mac app (release build), and what is left.** The TAKE holds are gone, but the lion scene still froze for 3-5 s at its clip hand-offs. `sample` of the app's processes during the scene shows the WebKit GPU process's main thread stuck 4-5 s in `MediaPlayerPrivateAVFoundation::rateChanged` → `-[AVPlayerItem currentTime]` (waiting on a MediaToolbox lock), while the operator page waits on it in `HTMLMediaElement::play` → `AudioSession::tryToSetActive` and in WebGL's `prepareForDisplay`. The holds start when a clip's player is loaded (`src` + `load`), switched (one clip paused, the next played) or released. The clips use the same codec as clips that play clean (H.264 High 5.0, 3072 × 768, 24 fps), and muting the lion changed nothing (`probe4.html`, `probe5.html`). While the operator is held, its cues reach the output late, so the output starts the next clip late and seeks: the visible skip. Every `<video>` on the Mac is an AVPlayer in the one GPU process both windows share, so this is inside WebKit, not in the app. Chromium (WebView2 on Windows, Electron) has its own media pipeline and no AVPlayer. Fix under way: decode wall clips with WebCodecs in a worker instead of `<video>`.
+
+**WebCodecs, measured in the bench.** `probe6.html` does `probe5.html`'s lion hand-offs (warm, start with sound, stop, release) with the 1.2 clips decoded by `VideoDecoder` in a worker: an MP4 demuxer reads the file with range requests, each frame is the one for the page's clock, uploaded to WebGL from its `VideoFrame`, and the clip's sound is its AAC track decoded with `decodeAudioData` and played through Web Audio. No `<video>` on the page. macOS 26.3, WebKit 21623; headless Chrome 158.
+
+| | `<video>` (`probe5`) | WebCodecs (`probe6`) |
+| --- | --- | --- |
+| Holds over 50 ms, three webviews in one GPU process (operator + output) | 55-76 ms at each hand-off | none; 553 of 553 frames on time in each view |
+| GPU process main thread in `MediaPlayerPrivateAVFoundation::rateChanged` → `-[AVPlayerItem currentTime]` (`sample`, 27 s) | 148 ms | 0 (idle the whole run; decoding is VideoToolbox through `LibWebRTCCodecsProxy`) |
+| Page waits in `HTMLMediaElement::play` / `AudioSession::tryToSetActive` | yes | none |
+| Main thread held 300 ms every 2 s | (freeze and jump, above) | the worker decodes on; after each hold the right frame, no seek, no late frame |
+| Memory, one window, median / peak footprint | GPU 256 / 412 MB, page 136 / 179 MB | GPU 326 / 457 MB, page 195 / 238 MB |
+
+The bench reproduces the AVPlayer wait in milliseconds, not the app's seconds; what matters is that WebCodecs never enters that code. `asset://` (answers of at most 1000 KiB, like Tauri) and HTTP measure the same. Chromium plays the same run with no clip hold.
+
+What the decoders do with these files (`wcdebug.html`; H.264 High 5.0, 3072 × 768, 24 fps, B-frames, closed GOPs with a keyframe every 0.5 s, `moov` first):
+
+| | WebKit | Chromium |
+| --- | --- | --- |
+| Frames taken in before the first comes out | 11 (it holds a full reorder buffer) | 2 |
+| One GOP (12 frames) fed and flushed: the cost of a seek | 17-24 ms (27 ms average, 44 ms worst with three windows decoding) | 11-16 ms |
+| Whole file decoded as fast as it goes | 787 fps (33 × real time) | 1166 fps |
+| Upload of a `VideoFrame` to a texture | 0.24 ms average, 5 ms worst | 0.08 ms |
+| `decodeAudioData` of a 12 s AAC track (as ADTS) | 7-9 ms | 17-18 ms |
+
+So the decoder is fed one whole GOP at a time and flushed: the timing is the same in both engines, and a seek is the same operation as playing on. This needs closed GOPs: x264, which the import optimiser uses where it can, writes them by default, and the 1.2 clips have them; a file with open GOPs (pictures shown before their keyframe) has to be found when it is opened and played another way. Two things shaped the worker: WebKit's 11-frame hold (a feeder that waits for frames before feeding more never gets one), and WebKit's worker `fetch` going through the page's main thread (reads waited up to 250 ms while the page was held), so the worker reads two GOPs ahead. It holds at most 15 decoded frames per clip (about 3.5 MB each), the page at most 4.
+
+**WebCodecs in the app** (`output.videoEngine`, ARCHITECTURE.md "Wall video on WebCodecs"). Measured 2026-11-26 in a release build of the Mac app on a copy of the show (its own data folder, lights and sound links off), 1.2 taken on program and left to run its cues (climb at 9 s, pace loop, lunge at the loop's end, then 1.3), with `sample` of that app's WebKit GPU process and both pages for 46 s. The same run on the platform player, same build, for comparison:
+
+| Lion on the rock (1.2), release build | `<video>` (`videoEngine: element`) | WebCodecs (`auto` on the Mac) |
+| --- | --- | --- |
+| Operator holds (`playback_log`) | 4.8 s and 4.2 s, at the lunge | none |
+| Output | a 4.1 s stall; the lunge hard-seeked 4.8 s off the clock | 60 fps throughout; one 80 ms frame at the TAKE; no seeks |
+| Frames shown | climb 100 in 6 s, gaps of whole seconds | every frame: climb 145/145, pace 289 (one loop, seamless wrap), lunge 143/143, transition 238/241 |
+| Worst lag of the frame on screen | 159-183 ms | one frame (≤ 38 ms) |
+| GPU process in `MediaPlayerPrivateAVFoundation::rateChanged` → `-[AVPlayerItem currentTime]` | ~8 s of samples | 0 (no AVFoundation player frame at all) |
+| Pages in `HTMLMediaElement::play` / `AudioSession` | (as before) | none; WebGL's per-frame `prepareForDisplay` only |
+| Peak footprint, GPU / operator / output | 731 / 671 / 1067 MB | 1021 / 741 / 970 MB |
+
+The clip's sound played through Web Audio throughout. The GPU process holds more with WebCodecs: each warm clip keeps its first GOP decoded (12 frames at 3072 × 768) in every window that shows the scene, and the operator's monitors decode the same clips again at full size. The rest of the Prologue (1.1, 1.3, 1.4 with its GO cues) played at 60 fps with no seek beyond one decoder restart at the start of 1.1 (one frame, 38 ms, right after a 101 ms frame at the TAKE). Headless Chrome (Chromium, `webcodecs`) ran 1.1-1.7 the same way. Two things found on the way: a parked looping clip that came up threw away the GOP it had decoded ahead (its loop span arrives only when it plays), and a clip that came up a little after its stamped start counted as a seek; both now keep their frames.
+
+**Still in the way of a perfect picture.**
+
+- Anything else that holds the page's main thread still freezes WebGL video: the design has one thread for React, the operator's messages and drawing. In a development build React is several times slower than in a release: rehearse on a release build.
+- First texture uploads (15 ms per 3072 × 768 image in Chromium, 4-5 ms in WebKit) still land on the frame a scene first draws; `createImageBitmap` uploads would take most of that off.
+- Every TAKE is a new WebGL context, so programs and textures are made again each time (WebKit keeps no program cache). One long-lived context per window would make them once per show.
+- The operator window decodes the live scene again for its program monitor (and the previewed scene) at full size, in the same GPU process as the output, for monitors 563 px wide: low-resolution proxies for the monitors would take most of that load off.
+
+**Native app or Electron?** Electron is Chromium, and on Windows Tauri already runs on Chromium (WebView2): it would change only the Mac side. There Chromium starts clips faster and keeps compiled programs between contexts, but it freezes and jumps on a busy main thread exactly as WebKit does, so it is not the fix. Moving more into Rust does not help either while the picture is drawn in the webview. What OBS, mpv and media servers do differently is draw the output on a thread of its own, fed by decoders on their own threads, so nothing the interface does can hold a frame. The web equivalent is to draw the wall in a Worker (`OffscreenCanvas`, with WebCodecs decoding the files off the main thread); the native one is a Rust output (wgpu, VideoToolbox / Media Foundation) with the webview kept for the operator interface, which means rewriting the renderer. Either is a project of its own; measure the release build with the changes above first.
+
 ## Checked and already right
 
 - Video decodes in hardware through the platform player (AVFoundation / Media Foundation); frames reach WebGL on the GPU path; a texture is uploaded only when the player has a new frame.
@@ -56,7 +135,7 @@ The app is three renderers of one state: the PREVIEW and PROGRAM monitors in the
 
 - **Transparent video that is not alpha-packed.** On the Mac a cut-out (HEVC with alpha) reaches WebGL through a `VideoFrame` taken on the main thread, 3-4 ms per frame for a 3072 × 768 clip, in each canvas that shows it (three for the live scene); an opaque video costs ~0.1 ms. Packing the clip (`asset_optimise { pack: true }`, "Alpha-packed video" below) puts it on the opaque path. The show's cut-outs are not converted yet.
 - **Three decodes per playing video** (preview when it shows the live scene, program monitor, output) is the price of "one state, many views" without pixel mirroring. Hardware decode on Apple silicon and on a show PC with a dGPU handles several 3072 × 768 streams; the limit is warm decoder count. Keep scenes to a few plates and let clip actors stay cold; split a scene when it needs many videos at once (the Scene 1 day cycle was split for this reason).
-- **Shader compilation at TAKE** (about 1–2 s cold for the photoreal environment, less for plates) blocks the output's frame loop, so the outgoing picture freezes for that long on a cut. Use a crossfade or fade into heavy scenes. A possible next step is to pre-mount the preview's scene hidden in the output (costs a WebGL context and warm decoders there) or to compile its programs with `KHR_parallel_shader_compile` before first use.
+- **Shader compilation at TAKE** (about 1–2 s cold for the photoreal environment, less for plates) now runs in the background (`KHR_parallel_shader_compile`, since 2026-11-26) and the new canvas draws once it is done, so it no longer holds the window; a heavy scene simply appears that much later on a cut. Use a crossfade or fade into heavy scenes.
 - **Text layers** redraw with Canvas 2D glow passes (`shadowBlur`), which is slow when it runs; it now runs only when the text or its style really changes. Names and route layers redraw their canvas each frame while animating, bounded at 3072 px wide.
 - **Fullscreen overlay effects** (fog, haze, heat, glow, stars, lightning) each cost a fullscreen fragment pass at the output's pixel size; the LED processor takes 1920 × 720, so that is the size that matters.
 - **Operator UI** panels that subscribe to the whole `program` (top bar, show mode, preview tools) re-render up to 30 times a second during a scrub. Operator-only cost; the wall is unaffected.
@@ -87,7 +166,8 @@ Picture check, same build: the demo cut-out played packed and unpacked in the sa
 
 ## How to measure
 
-- **Output heartbeat** (Settings → Screens shows fps and worst frame; the agent's `status` → `output.status` has everything): `fps`, `frameMs`, `stalls` (frames over 40 ms with the bus message that preceded them), `upload` (ms spent handing video frames to WebGL and how many), `videoElements` (loaded / total), and per playing video `seeks`, `rateChanges`, `driftAvgMs`, `driftMaxMs`, `dropped`.
+- **Output heartbeat** (Settings → Screens shows fps and worst frame; the agent's `status` → `output.status` has everything): `fps`, `frameMs`, `stalls` (frames over 40 ms with the bus message that preceded them), `upload` (ms spent handing video frames to WebGL and how many), `videoElements` (loaded / total), per playing video `seeks`, `playingSeeks`, `startLagMs`, `rateChanges`, `driftAvgMs`, `driftMaxMs`, `dropped`, and `seekLeadMs`.
+- **Playback log** (MCP `playback_log`): every stall of the output, hard seek of a playing video and hold-up of the operator window since it was cleared, with scene and scene time. Clear it before a run-through, read it after.
 - In development the operator window has `window.__slsVideoStats()` and `window.__slsUploadStats()`.
 - Expected after the 2026-10-27 changes: no stall on the five-second resend; stalls only at a TAKE (shader compile) or when a plate switches; one video → `videoElements.warm` of 1–4 per canvas.
 - Measuring on the Mac has traps: a covered operator window reports `document.hidden` and stops rendering (not the heartbeat any more), and a fullscreen output lives on its own Space. Measure with the app in front or in the browser at the dev port.

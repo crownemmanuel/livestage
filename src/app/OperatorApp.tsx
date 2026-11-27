@@ -7,6 +7,7 @@ import { cancelPending, cueControl, restoreLiveState, startOperatorServices, tak
 import { toggleHoldFor } from "@/engine/transport";
 import { useProject } from "@/store/project";
 import { useShow } from "@/store/show";
+import { driveKey, driveRelease } from "@/engine/drive";
 import { TopBar } from "@/ui/TopBar";
 import { ShowMode } from "@/ui/show/ShowMode";
 import { BuilderMode } from "@/ui/builder/BuilderMode";
@@ -23,6 +24,13 @@ function syncPreview() {
   const { project, selectedSceneId } = useProject.getState();
   const scene = project.scenes.find((s) => s.id === selectedSceneId) ?? null;
   useShow.getState().setPreview(scene, { keepState: true });
+}
+
+/** What G, P and the arrow keys act on: the live scene when it is the selected one, otherwise the preview. */
+function keyTarget(): "program" | "preview" {
+  const s = useShow.getState();
+  const live = s.program.runtime;
+  return live && !s.program.standby && live.scene.id === useProject.getState().selectedSceneId ? "program" : "preview";
 }
 
 function isTyping(e: KeyboardEvent) {
@@ -97,6 +105,8 @@ export function OperatorApp() {
       if (isTyping(e)) return;
       const proj = useProject.getState();
       const show = useShow.getState();
+      // A crowd on a hold-to-move drive is on screen: the arrow keys walk it (→ / ←, ↑ / ↓ speed).
+      if (driveKey(e, keyTarget())) return;
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         // A held key repeats: one press, one take.
@@ -124,8 +134,13 @@ export function OperatorApp() {
         if (n) proj.selectScene(n.id);
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!isTyping(e)) driveKey(e, keyTarget());
+    };
     window.addEventListener("keydown", onKeyCapture, true);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", driveRelease);
     window.addEventListener("pointerdown", unlockAudio, { once: true });
     const stopDropGuard = guardWindowDrops();
 
@@ -139,6 +154,8 @@ export function OperatorApp() {
       unsub();
       window.removeEventListener("keydown", onKeyCapture, true);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", driveRelease);
     };
   }, []);
 

@@ -47,7 +47,7 @@ export function SceneSettings({ scene }: { scene: Scene }) {
               <AssetField label="Travel video" type="video" value={scene.transition.videoAssetId} onChange={(v) => up((s) => (s.transition.videoAssetId = v))} />
               <SliderField
                 label="Fade into the scene (0 = cut)"
-                value={scene.transition.fadeOut ?? Math.round(scene.transition.duration * 10) / 100}
+                value={scene.transition.fadeOut ?? 0}
                 min={0}
                 max={5}
                 step={0.1}

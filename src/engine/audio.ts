@@ -20,6 +20,11 @@ function audio(): AudioContext {
   return ctx;
 }
 
+/** The program audio context (the show's outputs and speakers): clip sound on the WebCodecs player plays through it. */
+export function programAudioContext(): AudioContext {
+  return audio();
+}
+
 function noiseBuffer(ac: AudioContext, seconds: number) {
   const len = Math.floor(ac.sampleRate * seconds);
   const buf = ac.createBuffer(2, len, ac.sampleRate);

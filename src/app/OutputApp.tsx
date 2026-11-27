@@ -7,7 +7,8 @@ import type { Scene } from "@/core/types";
 import { heldCueSounds, playingCueSounds, startProgramAudio, unlockAudio, warmSoundCount, warmSounds } from "@/engine/audio";
 import { startAudioRouting } from "@/engine/audioOutput";
 import { StageView } from "@/render/StageView";
-import { takeVideoSyncStats } from "@/render/layers/video";
+import { takeVideoSyncStats, videoSeekLead } from "@/render/layers/video";
+import { codecPlayerCount, codecRefusals } from "@/render/video/codecVideo";
 import { takeUploadStats } from "@/render/uploadStats";
 import { useShow } from "@/store/show";
 import { preloadPhotoAssets } from "@/render/env/photoreal/shared";
@@ -65,18 +66,34 @@ export function OutputApp() {
     let stalls: { ms: number; sinceBusMs: number; bus: string }[] = [];
     let last = performance.now();
     let raf = 0;
+    // Set while the window is not being drawn at all (hidden, minimised, or covered by another window: the
+    // browser stops its frames), so the first frame back is not counted as a stall of that whole time.
+    let undrawn = document.hidden;
+    const onVisibility = () => {
+      if (document.hidden) undrawn = true;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     const loop = () => {
       const t = performance.now();
       const gap = t - last;
-      worst = Math.max(worst, gap);
-      if (gap > 40 && stalls.length < 8) stalls.push({ ms: Math.round(gap), sinceBusMs: Math.round(t - lastBusAt), bus: lastBusType });
+      if (!undrawn) {
+        worst = Math.max(worst, gap);
+        if (gap > 40 && stalls.length < 8) stalls.push({ ms: Math.round(gap), sinceBusMs: Math.round(t - lastBusAt), bus: lastBusType });
+      }
+      undrawn = false;
       last = t;
       frames++;
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
+    let lastBeat = performance.now();
     // From a worker, so the heartbeat keeps its second even if this window is ever hidden or covered.
     const stopHeartbeat = steadyInterval(() => {
+      const beat = performance.now();
+      // A whole second without a frame while this beat still came on time: the page was free, the browser
+      // just was not drawing it (covered). A held page delays the beat too, and that stays a stall.
+      if (frames === 0 && beat - lastBeat < 1300) undrawn = true;
+      lastBeat = beat;
       void send({
         type: "output-status",
         status: {
@@ -92,7 +109,10 @@ export function OutputApp() {
           soundsReady: warmSoundCount(),
           upload: takeUploadStats(),
           videoElements: countVideos(),
+          codecPlayers: codecPlayerCount(),
+          codecRefused: codecRefusals(),
           stalls,
+          seekLeadMs: Math.round(videoSeekLead() * 1000),
         },
       });
       stalls = [];
@@ -119,6 +139,7 @@ export function OutputApp() {
       stopAudio();
       stopRouting();
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
       stopHeartbeat();
       bye();
       window.removeEventListener("beforeunload", bye);

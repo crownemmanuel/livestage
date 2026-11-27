@@ -22,6 +22,7 @@ uniform float smoothness;
 uniform float spill;
 uniform float maskShape;
 uniform float feather;
+uniform float revealX;  // mask 3 (hold-to-move reveal): uncovered left of this u, feathered by feather
 uniform float blendMode; // 0 normal, 1 add, 2 screen, 3 multiply
 uniform vec3 grade;
 uniform float decodeSrgb;
@@ -73,6 +74,8 @@ void main() {
   if (maskShape > 0.5 && maskShape < 1.5) {
     float e = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
     m = smoothstep(0.0, max(feather, 0.0001), e);
+  } else if (maskShape > 2.5) {
+    m = 1.0 - smoothstep(revealX - max(feather, 0.0001), revealX, vUv.x);
   } else if (maskShape > 1.5) {
     float r = length((vUv - 0.5) * 2.0);
     m = 1.0 - smoothstep(1.0 - max(feather * 2.0, 0.0001), 1.0, r);
@@ -107,6 +110,7 @@ export function makeMediaMaterial() {
       spill: { value: 0.3 },
       maskShape: { value: 0 },
       feather: { value: 0.05 },
+      revealX: { value: 1 },
       blendMode: { value: 0 },
       grade: { value: new THREE.Color(1, 1, 1) },
       decodeSrgb: { value: 0 },

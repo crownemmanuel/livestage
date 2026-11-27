@@ -197,9 +197,10 @@ export function startWallVideo(initial: WallVideoSettings): { stop(): void; reco
       const canvas = slot.querySelector("canvas");
       if (a > VISIBLE && canvas) ops.push(wrap(grab(canvas), (img) => ({ k: "img", img, a, fit: "fill" })));
     }
-    const video = root.querySelector<HTMLVideoElement>('[data-wall-layer="video"]');
+    // A <video>, or on the WebCodecs player a canvas it draws its frames into (render/StageView.tsx).
+    const video = root.querySelector<HTMLVideoElement | HTMLCanvasElement>('[data-wall-layer="video"]');
     const va = opacityOf(video);
-    if (video && va > VISIBLE && video.readyState >= 2) {
+    if (video && va > VISIBLE && (video instanceof HTMLCanvasElement ? video.dataset.ready === "1" : video.readyState >= 2)) {
       const posY = parseFloat(video.style.objectPosition.split(" ")[1] ?? "50") / 100;
       ops.push(wrap(grab(video), (img) => ({ k: "img", img, a: va, fit: "cover", posY: Number.isFinite(posY) ? posY : 0.5 })));
     }

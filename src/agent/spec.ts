@@ -8,7 +8,7 @@
 // directly with type stripping. When a feature is added to the app, add or extend a command here
 // and its handler, then bump AGENT_SPEC_VERSION (see AGENTS.md).
 
-export const AGENT_SPEC_VERSION = 33;
+export const AGENT_SPEC_VERSION = 36;
 
 /** Default local port of the bridge between the MCP server and the operator window. */
 export const AGENT_PORT = 1431;
@@ -51,7 +51,7 @@ const sceneRef = str('A scene: its id, running-order code ("1.2"), number ("7") 
 const componentRef = str("A component of the scene: its id or exact name.");
 const cueRef = str('A cue of the scene: its id, exact name, or 1-based position like "#3".');
 const transition = obj(
-  'A TransitionSpec: {kind: "cut"|"crossfade"|"fadeblack"|"dissolve"|"video"|"travel"|"wipe"|"burn", duration (s), videoAssetId, audioAssetId, travelDistance, direction?, softness?, fadeOut? (video: seconds it fades into the scene at its end, 0 = cut; unset = the last tenth)}. Missing fields take defaults.',
+  'A TransitionSpec: {kind: "cut"|"crossfade"|"fadeblack"|"dissolve"|"video"|"travel"|"wipe"|"burn", duration (s), videoAssetId, audioAssetId, travelDistance, direction?, softness?, fadeOut? (video: seconds it fades into the scene at its end; unset or 0 = a cut)}. Missing fields take defaults.',
 );
 const path = str(
   'Slash path into app state. Roots: project (the show file), show (live/preview runtime), io (MIDI/OSC status and log), ui (mode, selection). Array elements are addressed by id, then by index; "-" appends. E.g. "project/scenes/scene_ab12/components/rain_x9/params/intensity", "project/output/canvasWidth", "show/program/runtime/cuePointer".',
@@ -64,7 +64,7 @@ export const AGENT_COMMANDS = {
   status: {
     readOnly: true,
     description:
-      "Overview of the running app: mode, selected scene, what is on the LIVE wall (scene, next cue, standby, blackout, freeze, transition), the preview, output window health, show timers, MIDI/OSC status, StageMics reach, StageLight link, save state. Start here.",
+      "Overview of the running app: mode, selected scene, what is on the LIVE wall (scene, next cue, standby, blackout, freeze, transition), the preview, output window health (with each playing video's engine and decoder stats, the WebCodecs players and the files refused by WebCodecs), the video engine setting, show timers, MIDI/OSC status, StageMics reach, StageLight link, save state. Start here.",
     params: args({}),
   },
   list_scenes: {
@@ -102,8 +102,8 @@ export const AGENT_COMMANDS = {
   schema: {
     readOnly: true,
     description:
-      "Reference for building show content, generated from the running app so it is always current: component kinds with their default fields, cue action types with defaults, effect types with parameter ranges, transition kinds, I/O message shapes, path syntax.",
-    params: args({ topic: oneOf(["components", "cueActions", "effects", "transitions", "io", "assets", "room", "all"], "What to describe (default all).") }),
+      "Reference for building show content, generated from the running app so it is always current: component kinds with their default fields, cue action types with defaults, effect types with parameter ranges, transition kinds, I/O message shapes, output settings (output_settings), path syntax.",
+    params: args({ topic: oneOf(["components", "cueActions", "effects", "transitions", "io", "assets", "room", "output", "all"], "What to describe (default all).") }),
   },
   screenshot: {
     readOnly: true,
@@ -115,6 +115,11 @@ export const AGENT_COMMANDS = {
     readOnly: true,
     description: "Recent MIDI/OSC/show-control log lines (in, out, info, errors), newest last.",
     params: args({ limit: int("How many lines (default 40).") }),
+  },
+  playback_log: {
+    description:
+      "Every hitch of the wall picture since the log was last cleared (kept in the operator, last 300), oldest first, each with the live scene (code, name) and its scene time: stall = an output frame over 40 ms (the wall stood still while its videos played on, then jumped), with the bus message before it; seek = a hard seek of a video playing on the wall (a visible jump), with the file, its engine (element = the platform <video>; webcodecs = a decoder restart), its worst drift and its start-up lag; late = a clip on the WebCodecs player drew older frames than the clock's in that second (frames, skipped, worst lag in driftMaxMs: its decoder fell behind); operator = the operator window was busy that long (cues and delayed actions fired that late, and the output heard of them that late), with the live scene's last fired cue. Also the output's learned seek time and which engine plays the wall's videos. Clear it before a run-through, read it after. clear = empty it after reading.",
+    params: args({ limit: int("How many events, newest (default 100)."), clear: bool("Empty the log after reading it.") }),
   },
   stagelight_status: {
     readOnly: true,
@@ -177,6 +182,20 @@ export const AGENT_COMMANDS = {
     live: true,
     description: "Freeze every moving thing in the scene, or resume exactly where it stopped. Same as transport hold/resume.",
     params: args({ target, op: oneOf(["pause", "resume", "toggle"], "pause = freeze.") }, ["target", "op"]),
+  },
+  drive: {
+    live: true,
+    description:
+      "Hold to move: walk the scene's drive layers (a torch crowd, a procession) across the wall, as the operator does by holding → / ← (↑ / ↓ = faster / slower). forward / back start them going, stop stops them, faster / slower change the speed by 25 %, rate sets it (1 = each layer's own speed), status reads where each is (progress 0..1 of its distance). Moves the drive layers on screen, or just `layer`. A layer only moves while it is shown, between where it stands and its drive distance. Set a layer up with patch on its `drive` field (schema topic components).",
+    params: args(
+      {
+        target,
+        op: oneOf(["status", "forward", "back", "stop", "faster", "slower", "rate"], "What to do. Default status."),
+        layer: str("A drive layer's id or name (default: every drive layer on screen)."),
+        rate: num("rate: the speed, 1 = normal (0.2 .. 4)."),
+      },
+      ["target"],
+    ),
   },
   transport: {
     live: true,
@@ -537,7 +556,7 @@ export const AGENT_COMMANDS = {
     params: args({ asset: str("Asset id or exact name.") }, ["asset"]),
   },
   output_settings: {
-    description: "Change output settings by deep merge: canvasWidth/Height (LED canvas pixels), scaling (fit | fill | stretch | native; stretch fills a display of another shape, e.g. 1920×720 that the LED processor rescales onto a 3072×768 wall), targetFps, backgroundColor, safeArea, testPattern, standby card, timerOverlay style, monitorName, fullscreen.",
+    description: "Change output settings by deep merge: canvasWidth/Height (LED canvas pixels), scaling (fit | fill | stretch | native; stretch fills a display of another shape, e.g. 1920×720 that the LED processor rescales onto a 3072×768 wall), targetFps, backgroundColor, safeArea, testPattern, standby card, timerOverlay style, monitorName, fullscreen, videoEngine (auto | webcodecs | element: what plays the wall's videos; auto = WebCodecs on Mac and Windows (same as webcodecs); element is the way back if WebCodecs misbehaves; videos on screen reload when it changes; see schema topic output).",
     params: args({ patch: obj("Fields to merge.") }, ["patch"]),
   },
   project: {

@@ -26,6 +26,7 @@ import type {
   Vec2,
   Vec3,
 } from "./types";
+import { driverLayers, driveTo, setDrive } from "./drive";
 
 /** Immediate operator commands. Cue actions are commands with a delay. */
 export type Command =
@@ -44,7 +45,11 @@ export type Command =
    */
   | { type: "cueFired"; index: number; rewind?: boolean }
   /** Add sound events as they are (the music chase: `at` may be in the past, see SoundEvent.chase). */
-  | { type: "sounds"; events: SoundEvent[] };
+  | { type: "sounds"; events: SoundEvent[] }
+  /** Hold to move (the arrow keys): a drive layer goes at `v` × its speed from now (+ forward, − back, 0 stop). */
+  | { type: "drive"; layerId: string; v: number; to?: undefined; delay?: number }
+  /** Hold to move: the operator's speed (1 = each layer's own); a moving layer keeps going at the new speed. */
+  | { type: "driveRate"; rate: number };
 
 const LONG_AGO = -1e9;
 
@@ -633,6 +638,33 @@ export function applyCommand(rt: SceneRuntime, poses: ActorPoses, cmd: Command, 
     }
     case "sounds":
       return cmd.events.length ? { rt: { ...rt, sounds: trimSounds([...(rt.sounds ?? []), ...cmd.events]) }, poses } : { rt, poses };
+    case "drive": {
+      const comp = scene.components.find((c) => c.id === cmd.layerId);
+      if (!comp || (comp.kind !== "video" && comp.kind !== "image") || !comp.drive || comp.drive.follow) return { rt, poses };
+      const cur = rt.drives?.[comp.id];
+      if (cmd.to !== undefined) {
+        // A cue: walk there at the operator's speed and stop (showing the layer if it is not up yet).
+        const layers = rt.layers[comp.id] && !rt.layers[comp.id].visible ? { ...rt.layers, [comp.id]: { visible: true, changedAt: t, startAt: t } } : rt.layers;
+        return { rt: { ...rt, layers, drives: { ...(rt.drives ?? {}), [comp.id]: driveTo(comp.drive, cur, cmd.to, rt.driveRate ?? 1, t) } }, poses };
+      }
+      if (cur && cur.v === cmd.v && cur.to === undefined) return { rt, poses };
+      return { rt: { ...rt, drives: { ...(rt.drives ?? {}), [comp.id]: setDrive(comp.drive, cur, cmd.v, t) } }, poses };
+    }
+    case "driveRate": {
+      const rate = Math.min(4, Math.max(0.2, cmd.rate));
+      const old = rt.driveRate ?? 1;
+      // Layers moving now carry on at the new speed, from where they are.
+      let drives = rt.drives;
+      for (const c of driverLayers(scene)) {
+        const cur = drives?.[c.id];
+        if (cur && cur.v !== 0 && c.drive) {
+          const next = setDrive(c.drive, cur, (cur.v / old) * rate, t);
+          if (cur.to !== undefined) next.to = cur.to;
+          drives = { ...(drives ?? {}), [c.id]: next };
+        }
+      }
+      return { rt: { ...rt, driveRate: rate, drives }, poses };
+    }
   }
 }
 

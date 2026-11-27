@@ -1,0 +1,111 @@
+<!doctype html>
+<html><body style="margin:0;background:#000">
+<script>
+// Main-thread cost of what a TAKE / scene change does, measured with a worker that pings the page every 4 ms
+// (worker timers are not throttled in a hidden page; the page answers as soon as its main thread is free).
+// Query: via (asset|http), files: v1,v2,v3 (videos), img, wav, mp3.
+const q = new URLSearchParams(location.search);
+const via = q.get("via") || "asset";
+const u = (p) => (via === "http" ? "http://127.0.0.1:8765/f" + encodeURI(p) : "asset://localhost/" + encodeURIComponent(p));
+const post = (o) => { if (window.webkit?.messageHandlers?.log) window.webkit.messageHandlers.log.postMessage(o); else fetch("/log", { method: "POST", body: JSON.stringify(o) }); };
+
+const wsrc = `let last=0, maxLag=0, seq=0, pending=new Map();
+onmessage=(e)=>{ if(e.data==='reset'){maxLag=0;return;} if(e.data==='get'){postMessage({maxLag});return;} const t=pending.get(e.data); if(t!==undefined){ const lag=performance.now()-t; if(lag>maxLag)maxLag=lag; pending.delete(e.data);} };
+setInterval(()=>{ seq++; pending.set(seq, performance.now()); postMessage(seq); for(const [k,t] of pending) if(performance.now()-t>maxLag) maxLag=performance.now()-t; }, 4);`;
+const w = new Worker(URL.createObjectURL(new Blob([wsrc], { type: "text/javascript" })));
+let lagResolve = null;
+w.onmessage = (e) => { if (typeof e.data === "number") w.postMessage(e.data); else if (lagResolve) { lagResolve(e.data.maxLag); lagResolve = null; } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function measure(name, fn, settle = 400) {
+  await sleep(300);
+  w.postMessage("reset");
+  await sleep(50);
+  const t = performance.now();
+  let sync = 0;
+  try { const a = performance.now(); const p = fn(); sync = performance.now() - a; await p; } catch (e) { post({ name, err: String(e) }); }
+  const total = performance.now() - t;
+  await sleep(settle);
+  w.postMessage("get");
+  const lag = await new Promise((r) => (lagResolve = r));
+  post({ name, syncMs: +sync.toFixed(1), totalMs: +total.toFixed(0), worstMainThreadBlockMs: +lag.toFixed(0) });
+}
+
+function videoEl(src) {
+  const v = document.createElement("video");
+  v.crossOrigin = "anonymous"; v.muted = true; v.playsInline = true; v.preload = "auto"; v.loop = true;
+  v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01";
+  document.body.appendChild(v);
+  v.src = src;
+  return v;
+}
+const loaded = (v) => new Promise((r) => (v.readyState >= 2 ? r() : v.addEventListener("loadeddata", r, { once: true })));
+
+const VS = `#version 300 es
+in vec3 p; uniform mat4 m; out vec2 uv; void main(){ uv=p.xy; gl_Position=m*vec4(p,1.0); }`;
+function fs(i) { // a three-like lit fragment shader, a different one each time so nothing is cached
+  let body = ""; for (let k = 0; k < 40; k++) body += `c += sin(uv.x*${k + i}.0+t)*cos(uv.y*${k}.3)*0.01*texture(s, uv*${k + 1}.0).rgb;\n`;
+  return `#version 300 es
+precision highp float; uniform sampler2D s; uniform float t; in vec2 uv; out vec4 o; void main(){ vec3 c=vec3(0.0); ${body} o=vec4(c,1.0); }`;
+}
+
+(async () => {
+  await sleep(500);
+  const vids = ["v1", "v2", "v3"].map((k) => q.get(k)).filter(Boolean);
+  let els = [];
+  await measure("load 3 videos (src set until loadeddata)", async () => { els = vids.map((p) => videoEl(u(p))); await Promise.all(els.map(loaded)); });
+  await measure("play 3 videos", async () => { await Promise.all(els.map((v) => v.play())); }, 800);
+  const c = document.createElement("canvas"); c.width = 3072; c.height = 768; document.body.appendChild(c);
+  let gl;
+  await measure("WebGL2 context, 3072x768, antialias", () => { gl = c.getContext("webgl2", { antialias: true, powerPreference: "high-performance" }); gl.clear(gl.COLOR_BUFFER_BIT); gl.finish(); });
+  await measure("compile+link 30 programs, status read (three checkShaderErrors)", () => {
+    for (let i = 0; i < 30; i++) {
+      const p = gl.createProgram();
+      for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs(i)]]) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s); }
+      gl.linkProgram(p);
+      gl.getProgramParameter(p, gl.LINK_STATUS);
+    }
+  });
+  const ext = gl.getExtension("KHR_parallel_shader_compile");
+  await measure("compile+link 30 programs, KHR_parallel_shader_compile, no status read " + (ext ? "(ext on)" : "(no ext)"), async () => {
+    const ps = [];
+    for (let i = 0; i < 30; i++) {
+      const p = gl.createProgram();
+      for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs(i + 100)]]) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s); }
+      gl.linkProgram(p); ps.push(p);
+    }
+    if (ext) while (!ps.every((p) => gl.getProgramParameter(p, ext.COMPLETION_STATUS_KHR))) await sleep(5);
+  });
+  const tex = gl.createTexture();
+  await measure("texImage2D first upload of a just-loaded video", () => { gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, els[0]); gl.finish(); });
+  await measure("texImage2D of a playing video (x10)", () => { for (let i = 0; i < 10; i++) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, els[1]); gl.finish(); });
+  if (q.get("img")) {
+    let img;
+    await measure("image decode() off thread (" + q.get("img").split("/").pop() + ")", async () => { img = new Image(); img.crossOrigin = "anonymous"; img.src = u(q.get("img")); await img.decode(); });
+    await measure("texImage2D of the decoded image", () => { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img); gl.finish(); });
+    let img2;
+    await measure("texImage2D of an image never decoded (load event only)", async () => { img2 = new Image(); img2.crossOrigin = "anonymous"; img2.src = u(q.get("img")) + "#2"; await new Promise((r) => (img2.onload = r)); const a = performance.now(); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img2); gl.finish(); post({ name: "  (upload alone)", ms: +(performance.now() - a).toFixed(1) }); });
+  }
+  const ac = new AudioContext();
+  for (const k of ["wav", "mp3"]) {
+    if (!q.get(k)) continue;
+    await measure(`fetch + decodeAudioData ${q.get(k).split("/").pop()}`, async () => { const r = await fetch(u(q.get(k))); const b = await r.arrayBuffer(); post({ name: "  bytes", n: b.byteLength }); await ac.decodeAudioData(b); }, 600);
+  }
+  await measure("tear down 3 videos (pause, remove src, load())", () => { for (const v of els) { v.pause(); v.removeAttribute("src"); v.load(); v.remove(); } }, 600);
+  await measure("forceContextLoss of the 3072x768 context", () => { gl.getExtension("WEBGL_lose_context").loseContext(); }, 600);
+  // What every TAKE does: a new context compiles the very same shader sources again.
+  for (let round = 1; round <= 2; round++) {
+    const c2 = document.createElement("canvas"); c2.width = 3072; c2.height = 768; document.body.appendChild(c2);
+    const g2 = c2.getContext("webgl2", { antialias: true, powerPreference: "high-performance" });
+    await measure(`new context #${round}: compile+link the same 30 programs again, status read`, () => {
+      for (let i = 0; i < 30; i++) {
+        const p = g2.createProgram();
+        for (const [type, src] of [[g2.VERTEX_SHADER, VS], [g2.FRAGMENT_SHADER, fs(i)]]) { const s = g2.createShader(type); g2.shaderSource(s, src); g2.compileShader(s); g2.attachShader(p, s); }
+        g2.linkProgram(p);
+        g2.getProgramParameter(p, g2.LINK_STATUS);
+      }
+    });
+    g2.getExtension("WEBGL_lose_context").loseContext(); c2.remove();
+  }
+  post({ done: true });
+})();
+</script></body></html>

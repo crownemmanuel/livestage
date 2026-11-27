@@ -1,18 +1,36 @@
 import { useEffect, useState } from "react";
 import * as THREE from "three";
-import { clamp } from "@/core/clock";
+import { clamp, now } from "@/core/clock";
 import { isWebKit } from "@/core/platform";
-import type { Asset, MediaSettings } from "@/core/types";
+import type { Asset, MediaSettings, VideoEngine } from "@/core/types";
+import { useShow } from "@/store/show";
 import { addUploadTime } from "../uploadStats";
+import { CodecPlayer, codecFileName, codecRefused, takeCodecStats, type VideoLike } from "../video/codecVideo";
+import type { LoopSpan } from "../video/protocol";
+
+export type { VideoLike };
 
 export interface VideoHandle {
-  video: HTMLVideoElement;
+  /** What the layers read (readyState, currentTime, ...): the <video> itself, or the WebCodecs player's stand-in. */
+  video: VideoLike;
+  /** Which engine plays it: the platform's <video>, or WebCodecs in the window's decoder worker (render/video). */
+  engine: "element" | "webcodecs";
+  /** The <video> (element engine only). */
+  el: HTMLVideoElement | null;
+  /** The WebCodecs player (webcodecs engine only). */
+  codec: CodecPlayer | null;
   texture: THREE.VideoTexture;
   /** The file this element plays (set as `src` only while warm). */
   url: string;
   /** Warm: the file is loaded and a decoder is held, ready to show a frame at once. Cold: no src, no decoder. */
   warm: boolean;
   lastSeek: number;
+  /** The last seek was made while playing (its landing time trains `seekLead`). */
+  seekPlaying: boolean;
+  /** Wall time (ms) it last started playing from a parked frame: drift is not judged until it has settled. */
+  startedAt: number;
+  /** Its start-up lag is still to be recorded (see `startLagMs` in the sync stats). */
+  startPending: boolean;
   /** currentTime of the last frame uploaded while paused. */
   shownTime: number;
   /** Drift correction in progress while playing: -1 slowing down, +1 catching up, 0 none. */
@@ -46,6 +64,8 @@ export function videoAspect(h: VideoHandle): number {
 /** What one playing video did in the last report interval (the output heartbeat reads it once a second). */
 export interface VideoSyncStat {
   file: string;
+  /** Which engine plays it (absent = element, from an older build). */
+  engine?: "element" | "webcodecs";
   time: number;
   rate: number;
   seeks: number;
@@ -56,10 +76,29 @@ export interface VideoSyncStat {
   frames: number;
   /** Paused (parked or held) but seeked in this interval. */
   paused?: boolean;
+  /** Hard seeks made while it was playing (each one a visible jump): the ones that matter. */
+  playingSeeks?: number;
+  /** How far behind the clock (ms) it was once it had settled after its last start in this interval. */
+  startLagMs?: number;
+  /**
+   * WebCodecs only. late = frames drawn showing an older frame than the clock's (the decoder behind); skipped =
+   * frames that arrived after their time; stale = decoded frames closed unseen in the worker; held = most frames
+   * held decoded; gopMs = slowest GOP decode (feed to flush); readMs = slowest read of a GOP's bytes.
+   */
+  late?: number;
+  skipped?: number;
+  stale?: number;
+  held?: number;
+  gopMs?: number;
+  readMs?: number;
+  /** WebCodecs only: its sound is playing through Web Audio ("on") or being decoded. */
+  sound?: "on" | "decoding";
 }
 
 interface SyncCounters {
   seeks: number;
+  playingSeeks: number;
+  startLag: number | null;
   rateChanges: number;
   driftSum: number;
   driftMax: number;
@@ -73,39 +112,89 @@ const counters = new Map<VideoHandle, SyncCounters>();
 function countersFor(h: VideoHandle): SyncCounters {
   let c = counters.get(h);
   if (!c) {
-    c = { seeks: 0, rateChanges: 0, driftSum: 0, driftMax: 0, n: 0, dropped: 0, total: 0 };
+    c = { seeks: 0, playingSeeks: 0, startLag: null, rateChanges: 0, driftSum: 0, driftMax: 0, n: 0, dropped: 0, total: 0 };
     counters.set(h, c);
   }
   return c;
 }
 
 function setRate(h: VideoHandle, rate: number) {
-  if (h.video.playbackRate === rate) return;
-  h.video.playbackRate = rate;
+  const v = h.el!;
+  if (v.playbackRate === rate) return;
+  v.playbackRate = rate;
   countersFor(h).rateChanges++;
 }
 
-function seekTo(h: VideoHandle, time: number, wallMs: number) {
-  h.video.currentTime = time;
+/**
+ * How long (s) a seek on a playing video takes to land and play on, learned in this window. A playing video
+ * seeked to where the clock is *now* lands that much behind it, which on a slow seek is past the drift limit
+ * again: seek, land behind, seek again, a freeze and a jump each time. So a playing seek aims ahead by this.
+ */
+let seekLead = 0.06;
+const SEEK_LEAD_MAX = 0.3;
+
+function seekTo(h: VideoHandle, time: number, wallMs: number, playing = false, rate = 1) {
+  const v = h.el!;
+  const end = v.duration > 0 ? v.duration - 0.05 : Infinity;
+  v.currentTime = playing ? Math.min(end, time + seekLead * rate) : time;
   h.lastSeek = wallMs;
-  countersFor(h).seeks++;
+  h.seekPlaying = playing;
+  const c = countersFor(h);
+  c.seeks++;
+  if (playing) c.playingSeeks++;
+}
+
+/** A playing seek landed: learn how long it took (called from the element's `seeked` event). */
+function learnSeek(h: VideoHandle, wallMs: number) {
+  if (!h.seekPlaying || h.el!.paused) return;
+  h.seekPlaying = false;
+  const took = (wallMs - h.lastSeek) / 1000;
+  if (took > 0 && took < 2) seekLead = clamp(seekLead * 0.7 + took * 0.3, 0, SEEK_LEAD_MAX);
 }
 
 /** Sync counters of every playing video since the last call, then reset them. */
 export function takeVideoSyncStats(): VideoSyncStat[] {
   const out: VideoSyncStat[] = [];
+  for (const { player, c } of takeCodecStats()) {
+    const w = c.worker;
+    out.push({
+      engine: "webcodecs",
+      paused: !player.isPlaying || undefined,
+      file: codecFileName(player.url),
+      time: Math.round(player.video.currentTime * 100) / 100,
+      rate: 1,
+      // A restart of the decoder while playing is the WebCodecs player's hard seek: a visible jump.
+      seeks: w?.restarts ?? 0,
+      playingSeeks: w?.playingRestarts || undefined,
+      rateChanges: 0,
+      driftAvgMs: 0,
+      driftMaxMs: Math.round(Math.max(0, c.lagMax) * 1000),
+      dropped: c.skipped + (w?.stale ?? 0),
+      frames: c.shown,
+      late: c.late || undefined,
+      skipped: c.skipped || undefined,
+      stale: w?.stale || undefined,
+      held: w?.held,
+      gopMs: w?.gopMsMax,
+      readMs: w?.readMsMax,
+      sound: player.sound.state,
+    });
+  }
   for (const [h, c] of counters) {
-    const v = h.video;
+    const v = h.el!;
     const q = typeof v.getVideoPlaybackQuality === "function" ? v.getVideoPlaybackQuality() : null;
     // A paused video belongs in the report only when it was seeked: parked on a frame it costs nothing,
     // and one seeked again and again while hidden is a fault that used to be invisible here.
     if (!v.paused || c.seeks > 0) {
       out.push({
+        engine: "element",
         paused: v.paused || undefined,
         file: decodeURIComponent((v.currentSrc || v.src).split("/").pop() ?? ""),
         time: Math.round(v.currentTime * 100) / 100,
         rate: Math.round(v.playbackRate * 1000) / 1000,
         seeks: c.seeks,
+        playingSeeks: c.playingSeeks || undefined,
+        startLagMs: c.startLag ?? undefined,
         rateChanges: c.rateChanges,
         driftAvgMs: c.n ? Math.round((c.driftSum / c.n) * 1000) : 0,
         driftMaxMs: Math.round(c.driftMax * 1000),
@@ -113,7 +202,7 @@ export function takeVideoSyncStats(): VideoSyncStat[] {
         frames: q ? q.totalVideoFrames - c.total : 0,
       });
     }
-    Object.assign(c, { seeks: 0, rateChanges: 0, driftSum: 0, driftMax: 0, n: 0, dropped: q?.droppedVideoFrames ?? 0, total: q?.totalVideoFrames ?? 0 });
+    Object.assign(c, { seeks: 0, playingSeeks: 0, startLag: null, rateChanges: 0, driftSum: 0, driftMax: 0, n: 0, dropped: q?.droppedVideoFrames ?? 0, total: q?.totalVideoFrames ?? 0 });
   }
   return out;
 }
@@ -145,7 +234,11 @@ function hostVideo(v: HTMLVideoElement) {
 export function setWarm(h: VideoHandle, warm: boolean) {
   if (h.warm === warm) return;
   h.warm = warm;
-  const v = h.video;
+  if (h.codec) {
+    h.codec.setWarm(warm);
+    return;
+  }
+  const v = h.el!;
   if (warm) {
     v.src = h.url;
     v.load();
@@ -155,6 +248,7 @@ export function setWarm(h: VideoHandle, warm: boolean) {
     v.load();
     h.shownTime = -1;
     h.correcting = 0;
+    h.startPending = false;
   }
 }
 
@@ -195,26 +289,71 @@ function uploadAsVideoFrame(v: HTMLVideoElement, texture: THREE.VideoTexture): (
   };
 }
 
+/** WebCodecs exists here (in the page; the worker has it wherever the page does). */
+export const codecsAvailable = typeof VideoDecoder !== "undefined" && typeof EncodedVideoChunk !== "undefined" && typeof Worker !== "undefined";
+
 /**
- * One <video> per use; playback is slaved to the shared scene clock.
- * `lazy`: create the element cold; the owner decides each frame whether it should be warm (`setWarm`).
+ * Does this file play with WebCodecs in this window? `engine` is the show's setting (output.videoEngine):
+ * - "auto" (or unset) and "webcodecs": WebCodecs wherever the engine has it, Mac (WebKit) and Windows (WebView2).
+ *   On the Mac every <video> is an AVPlayer that can hold the GPU process for seconds; on Windows it keeps both
+ *   machines on the same, clock-driven path;
+ * - "element": the platform player everywhere (the way back, on the night).
+ * Either way only opaque MP4 / MOV files (H.264, closed GOPs, checked when opened): transparent cut-outs (HEVC-alpha
+ * .mov twins, VP9-alpha WebM) and anything the worker refuses stay on the platform player.
+ */
+export function playsWithCodecs(engine: VideoEngine | undefined, url: string | null, opts: { alpha?: boolean; packed?: boolean } = {}): boolean {
+  if (!url || engine === "element" || !codecsAvailable) return false;
+  if (opts.alpha && !opts.packed) return false;
+  let path = url.split(/[?#]/)[0];
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* keep it as it is */
+  }
+  if (!/\.(mp4|m4v|mov)$/i.test(path)) return false;
+  if (codecRefused(url)) return false;
+  return true;
+}
+
+/**
+ * One video per use, slaved to the shared scene clock: a <video>, or a WebCodecs player (see playsWithCodecs).
+ * `lazy`: create it cold; the owner decides each frame whether it should be warm (`setWarm`).
  * `alpha`: the file has an alpha channel (see uploadAsVideoFrame).
  * `packed`: the file is alpha-packed (opaque H.264, colour over matte): uploaded like any opaque video,
  * never as a VideoFrame, and the media shader reads the matte from the bottom half.
+ * `sound`: this use may play the file's sound (a WebCodecs player decodes it when it warms, not on its cue).
  */
-export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean; packed?: boolean } = {}): VideoHandle | null {
+export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boolean; packed?: boolean; sound?: boolean } = {}): VideoHandle | null {
   // Created in an effect, never in render: React (StrictMode, concurrent rendering) may run a
   // render twice and keep one result, and a <video> made in the discarded render would stay in
   // the page, buffering and holding a decoder, with nothing left to remove it (seen: two decoders
   // per layer, 26 elements alive for a two-scene show).
   const [h, setH] = useState<VideoHandle | null>(null);
+  // Bumped when a WebCodecs player gives up on its file: the next render picks the platform player.
+  const [, setRefusals] = useState(0);
+  const engine = useShow((s) => s.output.videoEngine);
   const lazy = !!opts.lazy;
   const packed = !!opts.packed;
   const alpha = !!opts.alpha && !packed && isWebKit && typeof VideoFrame !== "undefined";
+  const codec = playsWithCodecs(engine, url, opts);
+  const sound = !!opts.sound;
+  useEffect(() => {
+    if (h?.codec) h.codec.soundWanted = sound;
+  }, [h, sound]);
   useEffect(() => {
     if (!url) {
       setH(null);
       return;
+    }
+    if (codec) {
+      const player = new CodecPlayer(url, { lazy, packed });
+      player.onFail = () => setRefusals((n) => n + 1);
+      const handle: VideoHandle = { video: player.video, engine: "webcodecs", el: null, codec: player, texture: player.texture, url, warm: !lazy, lastSeek: 0, seekPlaying: false, startedAt: -1e12, startPending: false, shownTime: -1, correcting: 0, parked: true, framed: true, packed };
+      setH(handle);
+      return () => {
+        player.dispose();
+        setH((cur) => (cur === handle ? null : cur));
+      };
     }
     const v = document.createElement("video");
     v.crossOrigin = "anonymous";
@@ -248,12 +387,15 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
     const refresh = () => {
       if (handle.framed) texture.needsUpdate = true;
     };
-    v.addEventListener("seeked", refresh);
+    v.addEventListener("seeked", () => {
+      learnSeek(handle, now());
+      refresh();
+    });
     v.addEventListener("loadeddata", refresh);
     // A new file (a cold clip warmed) has no frame until it shows one.
     v.addEventListener("loadstart", arm);
     hostVideo(v);
-    const handle: VideoHandle = { video: v, texture, url, warm: !lazy, lastSeek: 0, shownTime: -1, correcting: 0, parked: true, framed: false, packed };
+    const handle: VideoHandle = { video: v, engine: "element", el: v, codec: null, texture, url, warm: !lazy, lastSeek: 0, seekPlaying: false, startedAt: -1e12, startPending: false, shownTime: -1, correcting: 0, parked: true, framed: false, packed };
     arm();
     setH(handle);
     return () => {
@@ -266,7 +408,7 @@ export function useVideo(url: string | null, opts: { lazy?: boolean; alpha?: boo
       counters.delete(handle);
       setH((cur) => (cur === handle ? null : cur));
     };
-  }, [url, lazy, alpha, packed]);
+  }, [url, lazy, alpha, packed, codec]); // eslint-disable-line react-hooks/exhaustive-deps
   return h;
 }
 
@@ -313,6 +455,11 @@ export interface SyncWant {
    * first frame ghosting through its fade-out).
    */
   once?: boolean;
+  /**
+   * The media loops over [from, to) s of the file (an in/out-point loop; `loop` covers a whole-file one). Only the
+   * WebCodecs player uses it: it decodes the loop's head ahead of the wrap, so the loop needs no seek.
+   */
+  segment?: LoopSpan;
 }
 
 /**
@@ -331,17 +478,29 @@ export interface SyncWant {
  * Bluetooth headset is a link renegotiation heard as stutter (measured on AirPods: ~8 rate changes in 6 s,
  * ~100 CoreAudio overloads in 13 s). It plays at its own rate and is re-seated with a seek past SOUND_SEEK_DRIFT.
  * Paused and reverse playback park on the wanted frame as before (that is what scrubbing needs).
+ *
+ * A video that starts from a parked frame (a clip on its cue, a layer shown) is left alone for START_GRACE ms:
+ * a player needs a moment to get going (WebKit more than Chromium, and more with sound or with other players
+ * starting at the same TAKE), and judging it during that moment read its start-up lag as drift. A clip with
+ * sound past the old 0.25 s limit was hard-seeked within a few frames of its start, a freeze and a jump right
+ * as it came on (the lion climbing onto the rock). A seek on a playing video aims ahead by the time seeks take
+ * here (`seekLead`), so it lands on the clock and is not followed by another one.
  */
 const DEAD_BAND = { sound: 0.12, muted: 0.05 };
 const SETTLED = { sound: 0.04, muted: 0.02 };
 const NUDGE = 0.05;
 const SEEK_DRIFT = 0.6;
-const SOUND_SEEK_DRIFT = 0.25;
+const SOUND_SEEK_DRIFT = 0.45;
 const SEEK_GAP = 1500;
 const SEEK_GRACE = 1000;
+const START_GRACE = 1000;
 
 export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
-  const v = h.video;
+  if (h.codec) {
+    h.codec.sync(want, wallMs);
+    return;
+  }
+  const v = h.el!;
   if (want.local && !v.dataset.localSound) {
     v.dataset.localSound = "1";
     void (v as { setSinkId?: (id: string) => Promise<void> }).setSinkId?.("").catch(() => {});
@@ -384,23 +543,30 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
   const sinceSeek = wallMs - h.lastSeek;
   const starting = h.parked;
   h.parked = false;
+  if (starting) {
+    h.startedAt = wallMs;
+    h.startPending = true;
+  }
   if (starting && (Math.abs(drift) > DEAD_BAND.sound || wrapped)) {
     // Starting from a parked frame away from the clock (a hidden layer shown and restarted): land first, whatever
     // the grace, or the old position plays (and is heard) until the next hard seek, ~1.5 s later. Once per start:
     // a 4K seek outlasts several frames, and seeking again each frame would keep it at the first frame.
-    seekTo(h, want.time, wallMs);
+    seekTo(h, want.time, wallMs, true, rate);
     h.correcting = 0;
     setRate(h, rate);
-  } else if (v.seeking || sinceSeek < SEEK_GRACE) {
-    // Let the player land and settle before judging drift again.
+  } else if (v.seeking || sinceSeek < SEEK_GRACE || wallMs - h.startedAt < START_GRACE) {
+    // Let the player get going (or land after a seek) and settle before judging drift.
   } else if ((Math.abs(drift) > (v.muted ? SEEK_DRIFT : SOUND_SEEK_DRIFT) || wrapped) && sinceSeek > SEEK_GAP) {
-    seekTo(h, want.time, wallMs);
+    noteStart(h, drift);
+    seekTo(h, want.time, wallMs, true, rate);
     h.correcting = 0;
     setRate(h, rate);
   } else if (!v.muted) {
+    noteStart(h, drift);
     h.correcting = 0;
     setRate(h, rate);
   } else {
+    noteStart(h, drift);
     const mode = v.muted ? "muted" : "sound";
     if (h.correcting === 0 && Math.abs(drift) > DEAD_BAND[mode]) h.correcting = drift < 0 ? 1 : -1;
     else if (h.correcting !== 0 && (Math.abs(drift) < SETTLED[mode] || Math.sign(drift) === h.correcting)) h.correcting = 0;
@@ -413,6 +579,18 @@ export function syncVideo(h: VideoHandle, want: SyncWant, wallMs: number) {
       void v.play().catch(() => {});
     });
   }
+}
+
+/** Record how far behind the clock a started video still was once its start grace was over (sync stats). */
+function noteStart(h: VideoHandle, drift: number) {
+  if (!h.startPending) return;
+  h.startPending = false;
+  countersFor(h).startLag = Math.round(-drift * 1000);
+}
+
+/** How long a playing seek takes in this window (s): diagnostics. */
+export function videoSeekLead(): number {
+  return Math.round(seekLead * 1000) / 1000;
 }
 
 // Dev-only: read the sync counters of this window from the console / agent eval (window.__slsVideoStats()).

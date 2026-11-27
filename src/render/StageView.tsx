@@ -7,7 +7,10 @@ import { ErrorBoundary } from "@/ui/ErrorBoundary";
 import { SceneCanvas } from "./SceneCanvas";
 import { usePreviewHeard } from "@/engine/previewAudio";
 import { TimerOverlay } from "./TimerOverlay";
-import type { SlotRole, TransitionView } from "./frame";
+import { unseenSlots, type SlotRole, type TransitionView } from "./frame";
+import { playsWithCodecs, videoSeekLead } from "./layers/video";
+import { CodecPlayer } from "./video/codecVideo";
+import { drawFrame } from "./video/frameCanvas";
 
 interface StageViewProps {
   source: "program" | "preview";
@@ -195,6 +198,15 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
   const blackoutRef = useRef<HTMLDivElement>(null);
   const standbyRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  /** The transition video on the WebCodecs player: its canvas, the player, the frame last drawn. */
+  const trCanvasRef = useRef<HTMLCanvasElement>(null);
+  const trCodecRef = useRef<CodecPlayer | null>(null);
+  const trDrawn = useRef<VideoFrame | null>(null);
+  /** Read by the frame loop below (it is set up once). */
+  const audioOn = useRef(audio);
+  audioOn.current = audio;
+  /** Wall time (ms) the transition video was last seeked. */
+  const trSeekAt = useRef(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const slots: SlotInfo[] = [];
@@ -204,6 +216,23 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
 
   const videoAsset = tr?.spec.kind === "video" ? assets.find((a) => a.id === tr.spec.videoAssetId) : undefined;
   const audioAsset = tr?.spec.audioAssetId ? assets.find((a) => a.id === tr.spec.audioAssetId) : undefined;
+  // The transition video plays on the same engine as the wall's clips (render/layers/video.ts playsWithCodecs).
+  const [, setTrRefused] = useState(0);
+  const trUrl = videoAsset?.url ?? null;
+  const trCodec = playsWithCodecs(output.videoEngine, trUrl, { alpha: !!videoAsset?.hasAlpha && !videoAsset.alphaPacked, packed: !!videoAsset?.alphaPacked });
+  useEffect(() => {
+    if (!trCodec || !trUrl) return;
+    // A new player per take, like the <video> it replaces (keyed by takeCount): it opens at the TAKE.
+    const p = new CodecPlayer(trUrl);
+    p.soundWanted = audio;
+    p.onFail = () => setTrRefused((n) => n + 1);
+    trCodecRef.current = p;
+    trDrawn.current = null;
+    return () => {
+      p.dispose();
+      if (trCodecRef.current === p) trCodecRef.current = null;
+    };
+  }, [trCodec, trUrl, program.takeCount, audio]);
 
   // Per-frame transition compositing via direct style writes (no React re-render).
   useEffect(() => {
@@ -216,6 +245,15 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
       const p = tr ? clamp((t - tr.startedAt) / Math.max(1, tr.spec.duration * 1000), 0, 1) : 1;
       const kind = tr?.spec.kind;
       let black = 0;
+      // The transition video covers the whole wall once it has a picture and is fully up (see unseenSlots).
+      const tv = videoRef.current;
+      const tc = trCanvasRef.current;
+      const tp = trCodecRef.current;
+      const covering =
+        !!tr &&
+        kind === "video" &&
+        (tv ? tv.readyState >= 2 && !tv.seeking && tv.style.opacity === "1" : !!tc && !!tp && tc.dataset.ready === "1" && !tp.video.seeking && tc.style.opacity === "1");
+      unseenSlots.clear();
       for (const [key, el] of slotEls.current) {
         const isOut = !!tr && tr.from?.key === key;
         const isIn = s.runtime?.key === key;
@@ -227,12 +265,13 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
           else if (kind === "travel") o = isIn ? smoothstep(0.38, 0.62, p) : 1;
           // The scene is up underneath before the video's end fade starts (or before its last frame, on a cut).
           else if (kind === "video") {
-            const fo = tr.spec.fadeOut;
-            const end = fo == null ? 0.9 : Math.max(0, 1 - fo / Math.max(0.001, tr.spec.duration));
+            const fo = tr.spec.fadeOut ?? 0;
+            const end = Math.max(0, 1 - fo / Math.max(0.001, tr.spec.duration));
             o = isIn ? (p > Math.min(0.85, end - 0.05) ? 1 : 0) : p > Math.min(0.9, end) ? 0 : 1;
           }
           if (isOut && tr.fromStandby) o = 0;
         }
+        if (o === 0 || covering) unseenSlots.add(key);
         el.style.opacity = String(o);
         el.style.zIndex = isIn ? "2" : "1";
       }
@@ -253,23 +292,47 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
       }
 
       const v = videoRef.current;
+      // On the WebCodecs player: the frame for the clock, drawn into the layer's canvas when it changes.
+      const layer: HTMLElement | null = v ?? (tp && tc ? tc : null);
+      if (tp && tc && !v && tr && kind === "video") {
+        const want = (t - tr.startedAt) / 1000;
+        tp.sync({ play: want >= 0, time: Math.max(0, want), rate: 1, muted: !audioOn.current, volume: 1, once: true }, t);
+        const f = tp.frame;
+        if (f && f !== trDrawn.current) {
+          drawFrame(tc, f);
+          trDrawn.current = f;
+          tc.dataset.ready = "1";
+        }
+      }
       if (v && tr && kind === "video") {
         const want = (t - tr.startedAt) / 1000;
         if (want >= 0) {
-          if (Math.abs(v.currentTime - want) > 0.25 && !v.seeking) v.currentTime = want;
+          // The video is drawn by the browser itself, so it plays on through any stall of this window: leave it to
+          // play. It used to be seeked whenever it was a quarter second off the clock, which it is at its start
+          // (it is opened at the TAKE and takes a moment to load and get going): a seek, a freeze and a jump, and
+          // landing behind again could repeat it. Now only a real loss (half a second) is caught up, at most every
+          // 1.5 s, aiming ahead by what a seek takes here.
+          if (v.readyState >= 1 && !v.seeking && Math.abs(v.currentTime - want) > 0.5 && t - trSeekAt.current > 1500 && want < (v.duration || 1e9) - 0.5) {
+            v.currentTime = want + (v.paused ? 0 : videoSeekLead());
+            trSeekAt.current = t;
+          }
           if (v.paused) void v.play().catch(() => {});
         }
+      }
+      if (layer && tr && kind === "video") {
+        const want = (t - tr.startedAt) / 1000;
         const fadeIn = clamp(want / 0.15, 0, 1);
-        // Its end: a fade over the last tenth, or over `fadeOut` seconds (0 = a cut to the scene).
-        const fo = tr.spec.fadeOut;
-        const from = fo == null ? 0.9 : 1 - Math.min(1, fo / Math.max(0.001, tr.spec.duration));
+        // Its end: a cut to the scene, or a fade over `fadeOut` seconds when the scene asks for one (we do not
+        // fade between clips: a transition video ends on the scene's own picture).
+        const fo = tr.spec.fadeOut ?? 0;
+        const from = 1 - Math.min(1, fo / Math.max(0.001, tr.spec.duration));
         const fadeOut = from >= 1 ? (p >= 1 ? 0 : 1) : 1 - smoothstep(from, 1, p);
-        v.style.opacity = String(fadeIn * fadeOut);
+        layer.style.opacity = String(fadeIn * fadeOut);
         // A travel video starts on the outgoing plate and ends on the incoming one:
         // glide its vertical framing between the two plates' framings so both ends line up.
         const a0 = tr.from ? plateAnchorY(tr.from) : 0.5;
         const a1 = s.runtime ? plateAnchorY(s.runtime) : 0.5;
-        v.style.objectPosition = `50% ${((a0 + (a1 - a0) * smoothstep(0, 1, p)) * 100).toFixed(2)}%`;
+        layer.style.objectPosition = `50% ${((a0 + (a1 - a0) * smoothstep(0, 1, p)) * 100).toFixed(2)}%`;
       }
       const a = audioRef.current;
       if (a && tr) {
@@ -281,7 +344,10 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
       }
     };
     tick();
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      unseenSlots.clear();
+    };
   }, []);
 
   const st = output.standby;
@@ -305,7 +371,16 @@ const ProgramSlots = memo(function ProgramSlots({ W, H, dpr, sx, isOutput, audio
       ))}
       {/* Above the program slots (1–2); the stacking inside matches the old z-indexes 5–8. */}
       <WallBox sx={sx} z={5}>
-      {videoAsset && (
+      {videoAsset && trCodec && (
+        <canvas
+          key={`${program.takeCount}`}
+          ref={trCanvasRef}
+          className="absolute inset-0 h-full w-full object-cover"
+          style={{ zIndex: 5, opacity: 0 }}
+          data-wall-layer="video"
+        />
+      )}
+      {videoAsset && !trCodec && (
         <video
           key={`${program.takeCount}`}
           ref={videoRef}

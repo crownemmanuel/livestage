@@ -1,11 +1,11 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, createPortal, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { clamp, easeIn, easeOut, now } from "@/core/clock";
 import { evalCamera, followPose } from "@/core/runtime";
 import type { ActorPoses, Asset, LookSettings, SceneRuntime } from "@/core/types";
 import { PostFX } from "./post";
-import { makeFrameState, StageContext, updateFrame, useStage, type SlotRole, type StageCtx, type TransitionView } from "./frame";
+import { makeFrameState, StageContext, unseenSlots, updateFrame, useStage, type SlotRole, type StageCtx, type TransitionView } from "./frame";
 import { Sky } from "./env/Sky";
 import { Rocks, Terrain, Trees } from "./env/Terrain";
 import { Grass } from "./env/Grass";
@@ -97,6 +97,9 @@ export function SceneCanvas(p: SceneCanvasProps) {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.05;
         gl.outputColorSpace = THREE.SRGBColorSpace;
+        // three reads every program's info logs on its first use to report shader errors: a round trip to the GPU
+        // process per program, on the main thread, the frame a new scene first draws. Only while developing.
+        gl.debug.checkShaderErrors = import.meta.env.DEV;
         glRef.current = gl;
         instrumentUploads(gl.getContext());
         const el = gl.domElement;
@@ -129,10 +132,26 @@ export function SceneCanvas(p: SceneCanvasProps) {
         {limited && <FrameLimiter fps={p.targetFps} />}
         <FrameDriver />
         <CameraRig />
-        <SceneContent runtime={p.runtime} background={p.background} onCapture={p.onCapture} />
+        <Sliced>
+          <SceneContent runtime={p.runtime} background={p.background} onCapture={p.onCapture} />
+        </Sliced>
       </StageContext.Provider>
     </Canvas>
   );
+}
+
+/**
+ * Builds the scene's content as a transition, so React renders it in slices of a few milliseconds between frames
+ * instead of in one task. A TAKE mounts a whole scene tree in every window that shows it (hundreds of components
+ * and three objects): measured 60-110 ms of main thread in one go in a development build, during which every
+ * other canvas of the window, the scene going out included, stood still while its videos played on, then jumped.
+ * The canvas draws nothing until its content is there and its shaders are compiled (see the compositor), and a
+ * new scene comes in under a transition, so building it over a few frames shows nowhere.
+ */
+function Sliced({ children }: { children: ReactNode }) {
+  const [on, setOn] = useState(false);
+  useEffect(() => startTransition(() => setOn(true)), []);
+  return on ? <>{children}</> : null;
 }
 
 /**
@@ -294,7 +313,7 @@ function CameraRig() {
 
 /** Renders back layers, the 3D world, front layers and overlays in order. */
 function Compositor({ back, front, fx, children, background, onCapture, look }: { back: ReactNode; front: ReactNode; fx: ReactNode; children: ReactNode; background: string; onCapture?: (d: string) => void; look?: LookSettings }) {
-  const { canvasW, canvasH, frame, role } = useStage();
+  const { canvasW, canvasH, frame, role, getRt } = useStage();
   const post = useMemo(() => new PostFX(), []);
   useEffect(() => () => post.dispose(), [post]);
   const bufSize = useMemo(() => new THREE.Vector2(), []);
@@ -305,6 +324,8 @@ function Compositor({ back, front, fx, children, background, onCapture, look }: 
   const mountedAt = useMemo(() => performance.now(), []);
   /** Shader warm-ups done: one on the first frame, one a little later for layers that mount late. */
   const warmed = useRef(0);
+  /** The first warm-up's programs are linked: only then is anything drawn (see below). */
+  const ready = useRef(false);
 
   useFrame(({ gl, scene, camera }) => {
     gl.autoClear = false;
@@ -313,22 +334,40 @@ function Compositor({ back, front, fx, children, background, onCapture, look }: 
     // a dropped frame (or several) exactly on the beat, again in every run because each TAKE is a new GL
     // context. So everything in the scene is compiled once up front, hidden or not, while the TAKE's
     // transition covers it, against the same targets it will be drawn to.
+    //
+    // And off the main thread: compileAsync hands the programs to the driver (KHR_parallel_shader_compile) and
+    // polls until they are linked. The first draw used to come straight after a plain compile and waited for
+    // every program on the main thread, which is the window's only thread: measured in WebKit, 140-150 ms for
+    // 30 programs at every TAKE (WebKit keeps no compiled programs between contexts; Chromium does, ~45 ms),
+    // over a second on a machine that has never compiled them. For that long every canvas in the window stood
+    // still while its videos played on underneath, so the picture froze and then jumped. Now nothing is drawn
+    // until the programs are ready (the new canvas is clear, so the slot under it shows), and the window keeps
+    // drawing everything else meanwhile. A lost context never reports ready: draw after 2.5 s regardless.
     if (warmed.current === 0 || (warmed.current === 1 && performance.now() - mountedAt > 1500)) {
       warmed.current++;
+      const first = warmed.current === 1;
       try {
         if (look?.enabled) {
           gl.getDrawingBufferSize(bufSize);
           post.setSize(bufSize.x, bufSize.y);
           gl.setRenderTarget(post.scene);
         } else gl.setRenderTarget(null);
-        gl.compile(scenes.back, ortho);
-        gl.compile(scene, camera);
+        // compileAsync compiles at the call (against the render target set now) and resolves when linked.
+        const jobs = [gl.compileAsync(scenes.back, ortho), gl.compileAsync(scene, camera)];
         gl.setRenderTarget(null);
-        gl.compile(scenes.front, ortho);
-        gl.compile(scenes.fx, ortho);
+        jobs.push(gl.compileAsync(scenes.front, ortho), gl.compileAsync(scenes.fx, ortho));
+        if (first) void Promise.all(jobs).then(() => (ready.current = true));
       } catch (e) {
         console.warn("shader warm-up failed", e);
+        ready.current = true;
       }
+      if (first) setTimeout(() => (ready.current = true), 2500);
+    }
+    if (!ready.current) return;
+    // A program slot nobody can see (opacity 0, or under an opaque transition video) keeps its last frame.
+    if (role !== "preview") {
+      const rt = getRt();
+      if (rt && unseenSlots.has(rt.key)) return;
     }
     // The flat layers share the framing with the 3D camera.
     if (ortho.zoom !== frame.frameZoom || ortho.position.x !== (frame.frameX - 0.5) * canvasW || ortho.position.y !== (0.5 - frame.frameY) * canvasH) {

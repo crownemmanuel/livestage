@@ -412,6 +412,7 @@ const ACTION_ICON: Record<CueAction["type"], typeof Play> = {
   names: TreeDeciduous,
   route: Route,
   "media.speed": Gauge,
+  drive: Footprints,
 };
 
 /** One small icon per action, each explaining itself on hover. */
@@ -682,6 +683,8 @@ export function describeAction(a: import("@/core/types").CueAction): string {
       return `route: ${a.op}${d}`;
     case "media.speed":
       return `speed → ${a.rate}× over ${a.duration}s${d}`;
+    case "drive":
+      return `walk to ${Math.round(a.to * 100)}%${d}`;
     case "effect.param":
       return `${a.key} = ${String(a.value)}${d}`;
     case "framing":

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { create } from "zustand";
 import { ArrowDown, ArrowRightLeft, ArrowUp, Clapperboard, Copy, CornerDownRight, Megaphone, Timer as TimerIcon, Crop, Eye, Footprints, Gauge, Image, LampCeiling, Layers, Lightbulb, ListOrdered, MapPin, MessageSquareText, PawPrint, Play, Plus, Power, Radio, Route, SlidersHorizontal, SlidersVertical, Snowflake, Sparkles, Sun, Timer, Trash2, Users, Video, Volume2, VolumeX, X } from "lucide-react";
+import { driverLayers } from "@/core/drive";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,7 @@ export const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> =
   effect: { label: "Effect", icon: <Sparkles /> },
   "effect.param": { label: "Effect setting", icon: <SlidersHorizontal /> },
   "media.speed": { label: "Video speed", icon: <Gauge /> },
+  drive: { label: "Walk to (hold to move)", icon: <Footprints /> },
   timeOfDay: { label: "Time of day", icon: <Sun /> },
   names: { label: "Family tree", icon: <Users /> },
   route: { label: "Map route", icon: <Route /> },
@@ -75,7 +77,7 @@ export const ACTION_INFO: Record<MenuType, { label: string; icon: ReactNode }> =
 
 export const MENU: { group: string; types: MenuType[] }[] = [
   { group: "Lighting & sound", types: ["hog", "stagelight", "soundApp", "blackout", "sound", "audio.fade", "announce", "send"] },
-  { group: "Picture", types: ["clip", "layer", "background", "effect", "effect.param", "media.speed", "timeOfDay", "names", "route"] },
+  { group: "Picture", types: ["clip", "layer", "background", "effect", "effect.param", "media.speed", "drive", "timeOfDay", "names", "route"] },
   { group: "Camera", types: ["camera", "framing"] },
   { group: "Show", types: ["takeScene", "timer", "clock"] },
   { group: "Lion", types: ["lion", "lion.moveTo", "lion.place", "actor.visible"] },
@@ -161,6 +163,8 @@ export function defaultAction(type: CueActionType, scene: Scene, scenes: Scene[]
       return { type, layerId: scene.components.find((c) => c.kind === "route")?.id ?? "", op: "play", delay: 0 };
     case "media.speed":
       return { type, layerId: scene.components.find((c) => c.kind === "video" || (c.kind === "background" && c.source === "media"))?.id ?? "", rate: 4, duration: 2, delay: 0 };
+    case "drive":
+      return { type, layerId: driverLayers(scene)[0]?.id ?? "", to: 0.5, delay: 0 };
     case "framing": {
       const f = currentPreviewFraming();
       return { type, ...f, duration: 4, delay: 0 };
@@ -657,6 +661,16 @@ export function ActionRow({ a, scene, scenes, onChange, onRemove }: { a: CueActi
           {lbl("× over")}
           <NumberInput className="h-6 w-14" value={a.duration} min={0} step={0.5} onChange={(v) => onChange({ ...a, duration: v })} />
           {lbl("s")}
+        </>
+      );
+      break;
+    case "drive":
+      body = (
+        <>
+          {sel(a.layerId, driverLayers(scene).map((c) => ({ value: c.id, label: c.name })), (v) => onChange({ ...a, layerId: v }), "w-[160px]")}
+          {lbl("walks to")}
+          <NumberInput className="h-6 w-14" value={Math.round(a.to * 100)} min={0} max={100} step={5} onChange={(v) => onChange({ ...a, to: Math.min(1, Math.max(0, v / 100)) })} />
+          {lbl("% of its way, then stops")}
         </>
       );
       break;
